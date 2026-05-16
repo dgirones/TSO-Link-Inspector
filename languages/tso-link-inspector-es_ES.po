@@ -16,6 +16,9 @@ msgstr ""
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 "X-Generator: Poedit 3.9\n"
 
+msgid "Find and fix broken links across your entire WordPress site without opening each post."
+msgstr "Encuentra y corrige enlaces rotos en todo tu sitio WordPress sin abrir cada entrada."
+
 msgid "Comprova tots els enllaços trencats del lloc web i permet editar-los sense obrir l'article."
 msgstr "Comprueba todos los enlaces rotos del sitio web y permite editarlos sin abrir el artículo."
 
@@ -1241,3 +1244,33 @@ msgstr "Correo destinatario"
 
 msgid "Address used for broken link notifications. Leave empty to use the WordPress admin email."
 msgstr "Dirección usada para notificaciones de enlaces rotos. Déjalo vacío para usar el correo de administración de WordPress."
+
+msgid "www / non-www variant (HTTPS)"
+msgstr "Variante con/sin www (HTTPS)"
+
+msgid ""
+"No HTTPS upgrade or other useful alternative was found. The site may only offer HTTP, so there is nothing helpful to apply—"
+"changing www alone would not fix the insecure HTTP link."
+msgstr ""
+"No se encontró mejora a HTTPS ni otra alternativa útil. El sitio puede ofrecer solo HTTP; por tanto no hay nada útil que "
+"aplicar: cambiar solo la www no solucionaría el enlace HTTP inseguro."
+
+msgid "Broken links report"
+msgstr "Informe de enlaces rotos"
+
+msgid "Open broken links in inspector"
+msgstr "Abrir enlaces rotos en el inspector"
+
+msgid "This notification was sent by %1$s on %2$s."
+msgstr "Esta notificación la ha enviado %1$s en %2$s."
+
+msgid "Article:"
+msgstr "Artículo:"
+
+msgid "Post #%d"
+msgstr "Entrada #%d"
+
+msgid "%1$d new broken link was detected on %2$s."
+msgid_plural "%1$d new broken links were detected on %2$s."
+msgstr[0] "Se ha detectado %1$d enlace roto nuevo en %2$s."
+msgstr[1] "Se han detectado %1$d enlaces rotos nuevos en %2$s."

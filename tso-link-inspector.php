@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       TSO Link Inspector
  * Description:       Find and fix broken links across your entire WordPress site without opening each post.
- * Version:           1.9.1
+ * Version:           1.9.3
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Tested up to:       6.9
@@ -20,7 +20,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'TSOLIIN_VERSION',    '1.9.1' );
+define( 'TSOLIIN_VERSION',    '1.9.3' );
 define( 'TSOLIIN_PLUGIN_FILE', __FILE__ );
 define( 'TSOLIIN_PLUGIN_DIR',  plugin_dir_path( __FILE__ ) );
 define( 'TSOLIIN_PLUGIN_URL',  plugin_dir_url( __FILE__ ) );
@@ -74,6 +74,8 @@ final class TSOLIIN_Link_Inspector {
 		$this->load_files();
 		$this->init_objects();
 		$this->init_hooks();
+		// Plugins screen: always use the site locale, not the plugin language setting.
+		$this->load_textdomain( 'metadata' );
 	}
 
 	/**
@@ -82,6 +84,7 @@ final class TSOLIIN_Link_Inspector {
 	private function load_files() {
 		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-db.php';
 		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-http.php';
+		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-email.php';
 		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-scanner.php';
 		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-cron.php';
 		if ( is_admin() ) {
@@ -129,9 +132,18 @@ final class TSOLIIN_Link_Inspector {
 
 	/**
 	 * Load plugin translations.
+	 *
+	 * @param string $context `metadata` = plugin row on Plugins screen (site locale only).
+	 *                        `admin`    = plugin screens and AJAX (may use language setting).
 	 */
-	public function load_textdomain() {
+	public function load_textdomain( $context = 'admin' ) {
 		$language = $this->get_selected_language();
+
+		if ( 'metadata' === $context || ! $this->should_use_plugin_language_override() ) {
+			// Follow WordPress site/user locale (e.g. es_ES on a Spanish install).
+			$language = '';
+		}
+
 		$this->runtime_translations = array();
 
 		// Unload any auto-loaded translation first.
@@ -143,7 +155,7 @@ final class TSOLIIN_Link_Inspector {
 		}
 
 		if ( '' !== $language ) {
-			// Explicit plugin language selected in settings.
+			// Explicit plugin language selected in settings (plugin admin only).
 			$this->load_locale_translations( $language );
 			return;
 		}
@@ -165,6 +177,32 @@ final class TSOLIIN_Link_Inspector {
 				break;
 			}
 		}
+	}
+
+	/**
+	 * Whether the language chosen in plugin settings should override the site locale.
+	 *
+	 * @return bool
+	 */
+	private function should_use_plugin_language_override() {
+		if ( ! is_admin() ) {
+			return false;
+		}
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only routing to load translations on plugin screens; not processing form submissions.
+		if ( defined( 'DOING_AJAX' ) && DOING_AJAX && isset( $_REQUEST['action'] ) ) {
+			$action = sanitize_key( wp_unslash( $_REQUEST['action'] ) );
+			if ( 0 === strpos( $action, 'tsoliin_' ) ) {
+				return true;
+			}
+		}
+		if ( isset( $_GET['page'] ) ) {
+			$page = sanitize_key( wp_unslash( $_GET['page'] ) );
+			if ( 0 === strpos( $page, 'tso-link-inspector' ) ) {
+				return true;
+			}
+		}
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+		return false;
 	}
 
 	/**
@@ -236,6 +274,9 @@ final class TSOLIIN_Link_Inspector {
 	 */
 	public function force_plugin_locale( $locale, $domain ) {
 		if ( TSOLIIN_TEXT_DOMAIN !== $domain ) {
+			return $locale;
+		}
+		if ( ! $this->should_use_plugin_language_override() ) {
 			return $locale;
 		}
 		$language = $this->get_selected_language();

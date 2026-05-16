@@ -4,7 +4,7 @@ Tags: broken links, link checker, seo, maintenance, links
 Requires at least: 6.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.9.1
+Stable tag: 1.9.3
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -86,6 +86,25 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 2. Filter tabs: All, Broken, Redirect, OK, HTTP insecure, Manual locks, Not checked.
 
 == Changelog ==
+
+= 1.9.3 =
+* Security: Block SSRF targets in the HTTP checker (private/reserved IPs, unsafe hosts, redirect chains) using `wp_http_validate_url`, DNS resolution checks, and `reject_unsafe_urls`.
+* Security: Validate edited URLs with `esc_url_raw()` and the same safety rules (public `http`/`https` only).
+* Security: Escape admin JavaScript output for smart suggestions and diagnostics (XSS hardening).
+* Fix: Apply the ignore list during scans and HTTP checks (domains/prefixes in Settings are now honored).
+* Improvement: Relative and root-relative internal links (e.g. `/other-post/`) are resolved to the full site URL before HTTP checks, so links between articles on the same WordPress site are verified correctly (including deleted targets returning 404).
+* Improvement: Edit/Unlink and stale-link cleanup recognise the same URL whether it is stored or written as a relative or absolute href.
+* Fix: Redirect chains that end on an error page (for example 301 to www then 404) are stored as broken with the final status; they are no longer treated as a successful redirect with a misleading suggestion target.
+* Improvement: Smart suggestions skip instant redirect targets that only toggle www/non-www on HTTPS (or HTTP) when the row is already broken—no “Apply” for a URL that remains a 404.
+* Improvement: Smart suggestions no longer offer meaningless HTTP-only www/non-www swaps when no HTTPS exists (avoids a green-looking “fix” that does not improve security).
+* Improvement: When there is no useful alternative for an HTTP-only link, the suggestion panel shows a clear warning notice instead of implying a positive change.
+* Improvement: The suggestion list only shows a green “OK” style and an Apply button when the suggested URL is considered actionable (not a hard error such as 404).
+* Improvement: Broken-link notification emails are sent as HTML with a TSO Link Inspector header, clickable broken URLs, article edit links, and a button to open the inspector.
+
+= 1.9.2 =
+* Fix: Plugin **Description** on the Plugins screen now translates to Catalan and Spanish when the site (or bundled language files) uses those locales.
+* Fix: Translation files include the English plugin header string as `msgid` (matches the plugin header text).
+* Improvement: Load translations when the plugin boots so metadata strings are available before the Plugins list is built.
 
 = 1.9.1 =
 * New: Optional email notifications for **hard-broken** links only (broken with **no** redirect destination): immediate mode sends **one summary email** per automated check batch (full background check or hourly cron), never after manual row/bulk rechecks; digest modes send every **7, 15, or 30 days** only when there is something to report.
@@ -194,6 +213,12 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 * Initial release.
 
 == Upgrade Notice ==
+
+= 1.9.3 =
+Recommended security and reliability update: SSRF/XSS hardening, ignore list on scans, correct internal link checks, redirect-to-404 handling, and smarter URL suggestions (no misleading “Apply” for dead www/HTTP-only variants).
+
+= 1.9.2 =
+Recommended update. Fixes the plugin description not appearing in Catalan or Spanish on the Plugins screen; updates bundled translations.
 
 = 1.9.1 =
 Recommended update. Adds optional broken-link email alerts (summary/digest), a Manual locks tab with clearer tab counts, full-recheck behavior for locked rows, several admin UI fixes (search tabs, CSV encoding, empty lists), and a submenu registration fix for newer PHP versions.

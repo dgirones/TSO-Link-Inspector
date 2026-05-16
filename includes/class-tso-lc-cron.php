@@ -106,7 +106,7 @@ class TSOLIIN_Cron {
 		$checked        = 0;
 		$newly_detected = array();
 		foreach ( $links as $link ) {
-			$r = $this->http->check( $link->link_url );
+			$r = $this->http->check( $link->link_url, (int) $link->post_id );
 			$this->db->update_check_result( (int) $link->id, $r['status_code'], $r['redirect_url'], $r['is_broken'] );
 			$item = $this->build_new_hard_broken_item( $link, $r );
 			if ( ! empty( $item ) ) {
@@ -184,7 +184,7 @@ class TSOLIIN_Cron {
 			return;
 		}
 		foreach ( $links as $link ) {
-			$r = $this->http->check( $link->link_url );
+			$r = $this->http->check( $link->link_url, (int) $link->post_id );
 			$this->db->update_check_result( (int) $link->id, $r['status_code'], $r['redirect_url'], $r['is_broken'] );
 			$item = $this->build_new_hard_broken_item( $link, $r );
 			if ( ! empty( $item ) ) {
@@ -293,42 +293,21 @@ class TSOLIIN_Cron {
 			$total_broken
 		);
 
-		$message = array(
-			sprintf(
-				/* translators: 1: count, 2: site name */
-				__( 'There are currently %1$d broken links without redirection on %2$s.', 'tso-link-inspector' ),
-				$total_broken,
-				$site_name
-			),
-			'',
+		$intro = sprintf(
+			/* translators: 1: count, 2: site name */
+			__( 'There are currently %1$d broken links without redirection on %2$s.', 'tso-link-inspector' ),
+			$total_broken,
+			$site_name
 		);
 
+		$items = array();
 		foreach ( $rows as $row ) {
-			$post_id    = isset( $row->post_id ) ? absint( $row->post_id ) : 0;
-			$post_title = isset( $row->post_title ) ? (string) $row->post_title : '';
-			$line       = '- ' . (string) $row->link_url . ' (HTTP ' . (int) $row->status_code . ')';
-			if ( $post_id > 0 ) {
-				$line .= ' | ' . __( 'Post ID:', 'tso-link-inspector' ) . ' ' . $post_id;
-			}
-			if ( '' !== $post_title ) {
-				$line .= ' | ' . $post_title;
-			}
-			$message[] = $line;
+			$items[] = TSOLIIN_Email::normalize_broken_item( $row );
 		}
 
-		if ( $total_broken > count( $rows ) ) {
-			$message[] = '';
-			$message[] = sprintf(
-				/* translators: %d: extra rows not listed */
-				__( '...and %d more broken links.', 'tso-link-inspector' ),
-				$total_broken - count( $rows )
-			);
-		}
+		$more = $total_broken > count( $rows ) ? $total_broken - count( $rows ) : 0;
 
-		$message[] = '';
-		$message[] = __( 'Inspector:', 'tso-link-inspector' ) . ' ' . admin_url( 'tools.php?page=tso-link-inspector&filter=broken' );
-
-		$sent = wp_mail( $to, $subject, implode( "\n", $message ) );
+		$sent = TSOLIIN_Email::send_broken_links_report( $to, $subject, $intro, $items, $more );
 		if ( $sent ) {
 			update_option( 'tsoliin_broken_digest_last_sent', current_time( 'mysql', true ), false );
 		}
@@ -448,33 +427,24 @@ class TSOLIIN_Cron {
 			$items_count
 		);
 
-		$message = array(
-			sprintf(
-				/* translators: 1: number of newly detected broken links, 2: site name */
-				_n(
-					'%1$d new broken link was detected on %2$s:',
-					'%1$d new broken links were detected on %2$s:',
-					$items_count,
-					'tso-link-inspector'
-				),
+		$intro = sprintf(
+			/* translators: 1: number of newly detected broken links, 2: site name */
+			_n(
+				'%1$d new broken link was detected on %2$s.',
+				'%1$d new broken links were detected on %2$s.',
 				$items_count,
-				$site_name
+				'tso-link-inspector'
 			),
-			'',
+			$items_count,
+			$site_name
 		);
+
+		$normalized = array();
 		foreach ( $items as $item ) {
-			$line = '- ' . (string) $item['link_url'] . ' (HTTP ' . (int) $item['status_code'] . ')';
-			if ( ! empty( $item['post_id'] ) ) {
-				$line .= ' | ' . __( 'Post ID:', 'tso-link-inspector' ) . ' ' . (int) $item['post_id'];
-			}
-			if ( ! empty( $item['post_title'] ) ) {
-				$line .= ' | ' . (string) $item['post_title'];
-			}
-			$message[] = $line;
+			$normalized[] = TSOLIIN_Email::normalize_broken_item( $item );
 		}
-		$message[] = '';
-		$message[] = __( 'Inspector:', 'tso-link-inspector' ) . ' ' . admin_url( 'tools.php?page=tso-link-inspector&filter=broken' );
-		wp_mail( $to, $subject, implode( "\n", $message ) );
+
+		TSOLIIN_Email::send_broken_links_report( $to, $subject, $intro, $normalized, 0 );
 	}
 
 	/**

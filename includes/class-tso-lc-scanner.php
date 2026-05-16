@@ -182,6 +182,141 @@ class TSOLIIN_Scanner {
 	}
 
 	/**
+	 * Convert root-relative or post-relative hrefs to an absolute URL for HTTP checks.
+	 * The original href is kept in the database and in post content.
+	 *
+	 * @param string $url     URL as stored (may be /path/, ../path, or full https://…).
+	 * @param int    $post_id Post the link belongs to (for path-relative resolution).
+	 * @return string Absolute http(s) URL, or the original string if it cannot be resolved.
+	 */
+	public static function resolve_to_absolute_url( $url, $post_id = 0 ) {
+		$url = trim( str_replace( array( "\0", "\r", "\n" ), '', (string) $url ) );
+		if ( '' === $url ) {
+			return '';
+		}
+		if ( preg_match( '#^https?://#i', $url ) ) {
+			return $url;
+		}
+		if ( 0 === strpos( $url, '//' ) ) {
+			$home   = wp_parse_url( home_url( '/' ) );
+			$scheme = ! empty( $home['scheme'] ) ? $home['scheme'] : ( is_ssl() ? 'https' : 'http' );
+			return $scheme . ':' . $url;
+		}
+		if ( '/' === $url[0] ) {
+			$absolute = home_url( $url );
+			return is_string( $absolute ) ? $absolute : $url;
+		}
+		$post_id = absint( $post_id );
+		if ( $post_id > 0 ) {
+			$permalink = get_permalink( $post_id );
+			if ( $permalink ) {
+				return self::join_relative_to_base( $permalink, $url );
+			}
+		}
+		$absolute = home_url( '/' . ltrim( $url, '/' ) );
+		return is_string( $absolute ) ? $absolute : $url;
+	}
+
+	/**
+	 * Resolve a relative reference against a base URL (RFC 3986 style, path only).
+	 *
+	 * @param string $base_url Absolute base URL (usually post permalink).
+	 * @param string $relative Relative path (e.g. other-page/, ../sibling/).
+	 * @return string
+	 */
+	private static function join_relative_to_base( $base_url, $relative ) {
+		$parts = wp_parse_url( $base_url );
+		if ( empty( $parts['host'] ) ) {
+			return home_url( '/' . ltrim( $relative, '/' ) );
+		}
+		$scheme = isset( $parts['scheme'] ) ? $parts['scheme'] : 'https';
+		$host   = $parts['host'];
+		$port   = ! empty( $parts['port'] ) ? ':' . (int) $parts['port'] : '';
+		$path   = isset( $parts['path'] ) ? $parts['path'] : '/';
+		if ( '/' !== substr( $path, -1 ) ) {
+			$path = dirname( $path ) . '/';
+		}
+		$path = self::normalize_path( $path . ltrim( $relative, '/' ) );
+		$query = ! empty( $parts['query'] ) ? '?' . $parts['query'] : '';
+		return $scheme . '://' . $host . $port . $path . $query;
+	}
+
+	/**
+	 * Collapse /./ and /../ in a URL path.
+	 *
+	 * @param string $path URL path starting with /.
+	 * @return string
+	 */
+	private static function normalize_path( $path ) {
+		$segments = explode( '/', (string) $path );
+		$stack    = array();
+		foreach ( $segments as $segment ) {
+			if ( '' === $segment || '.' === $segment ) {
+				continue;
+			}
+			if ( '..' === $segment ) {
+				array_pop( $stack );
+				continue;
+			}
+			$stack[] = $segment;
+		}
+		return '/' . implode( '/', $stack );
+	}
+
+	/**
+	 * Possible href spellings in post_content for the same logical link.
+	 *
+	 * @param string $url     Stored link URL.
+	 * @param int    $post_id Post ID.
+	 * @return string[]
+	 */
+	private function url_content_variants( $url, $post_id = 0 ) {
+		$url = (string) $url;
+		$post_id = absint( $post_id );
+		$variants = array( $url );
+		$resolved = self::resolve_to_absolute_url( $url, $post_id );
+		if ( '' !== $resolved && $resolved !== $url ) {
+			$variants[] = $resolved;
+		}
+		if ( function_exists( 'wp_make_link_relative' ) ) {
+			foreach ( array( $url, $resolved ) as $candidate ) {
+				if ( '' === $candidate ) {
+					continue;
+				}
+				$rel = wp_make_link_relative( $candidate );
+				if ( is_string( $rel ) && '' !== $rel && ! in_array( $rel, $variants, true ) ) {
+					$variants[] = $rel;
+				}
+			}
+		}
+		return array_values( array_unique( array_filter( $variants ) ) );
+	}
+
+	/**
+	 * Whether a stored URL still matches one of the URLs found in the latest scan.
+	 *
+	 * @param string   $stored_url Stored link_url.
+	 * @param string[] $found_urls URLs from current scan.
+	 * @param int      $post_id    Post ID.
+	 * @return bool
+	 */
+	private function url_still_found( $stored_url, $found_urls, $post_id ) {
+		if ( in_array( $stored_url, $found_urls, true ) ) {
+			return true;
+		}
+		$stored_abs = self::resolve_to_absolute_url( $stored_url, $post_id );
+		foreach ( $found_urls as $found ) {
+			if ( $found === $stored_url ) {
+				return true;
+			}
+			if ( self::resolve_to_absolute_url( $found, $post_id ) === $stored_abs ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * @param string $url Raw URL.
 	 * @return bool True if should be skipped.
 	 */
@@ -216,28 +351,7 @@ class TSOLIIN_Scanner {
 	 * @return bool
 	 */
 	public function is_ignored( $url ) {
-		$s       = get_option( 'tsoliin_settings', array() );
-		$ignored = isset( $s['ignore_list'] ) && is_array( $s['ignore_list'] ) ? $s['ignore_list'] : array();
-		if ( empty( $ignored ) ) {
-			return false;
-		}
-		$url_lower = strtolower( (string) $url );
-		$host      = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
-		foreach ( $ignored as $pattern ) {
-			$p = trim( strtolower( (string) $pattern ) );
-			if ( '' === $p ) {
-				continue;
-			}
-			// Prefix match (handles https://domain.com/path patterns).
-			if ( 0 === strpos( $url_lower, $p ) ) {
-				return true;
-			}
-			// Domain match: "amazon.com" matches www.amazon.com, es.amazon.com, etc.
-			if ( $host === $p || ( '' !== $host && false !== strpos( '.' . $host, '.' . $p ) ) ) {
-				return true;
-			}
-		}
-		return false;
+		return TSOLIIN_HTTP::is_ignored_url( $url );
 	}
 
 	private function dedup( $items ) {
@@ -334,6 +448,9 @@ class TSOLIIN_Scanner {
 
 		$found_urls = array();
 		foreach ( $items as $item ) {
+			if ( $this->is_ignored( $item['url'] ) ) {
+				continue;
+			}
 			$this->db->upsert_link( $post_id, $item['url'], $item['anchor'], isset( $item['type'] ) ? $item['type'] : 'link' );
 			$found_urls[] = $item['url'];
 		}
@@ -388,7 +505,7 @@ class TSOLIIN_Scanner {
 			return;
 		}
 		foreach ( $existing as $row ) {
-			if ( ! in_array( $row->link_url, $found_urls, true ) ) {
+			if ( ! $this->url_still_found( (string) $row->link_url, $found_urls, $post_id ) ) {
 				$this->db->delete_link( (int) $row->id );
 			}
 		}
@@ -517,7 +634,7 @@ class TSOLIIN_Scanner {
 
 			foreach ( $this->extract_links( (string) $comment->comment_content ) as $item ) {
 				$url = isset( $item['url'] ) ? (string) $item['url'] : '';
-				if ( '' === $url || $this->skip_url( $url ) ) {
+				if ( '' === $url || $this->skip_url( $url ) || $this->is_ignored( $url ) ) {
 					continue;
 				}
 				/* translators: %d: comment ID */
@@ -529,7 +646,7 @@ class TSOLIIN_Scanner {
 			}
 
 			$author_url = trim( (string) $comment->comment_author_url );
-			if ( $author_url && ! $this->skip_url( $author_url ) ) {
+			if ( $author_url && ! $this->skip_url( $author_url ) && ! $this->is_ignored( $author_url ) ) {
 				$clean = $this->clean_url( $author_url );
 				/* translators: %d: comment ID */
 				$anchor         = sprintf( __( 'Comment author #%d', 'tso-link-inspector' ), $cid );
@@ -573,16 +690,18 @@ class TSOLIIN_Scanner {
 		// WordPress stores href attributes with & encoded as &amp;, which is the most
 		// common cause of "URL not found in post" errors with long Amazon/affiliate URLs.
 		$decoded = urldecode( $old_url );
-		$candidates = array_unique( array_filter( array(
-			$old_url,                                                // 1. exact as stored in DB
-			$decoded,                                                // 2. fully URL-decoded
-			rawurldecode( $old_url ),                                // 3. rawurl decoded
-			esc_url_raw( $old_url ),                                 // 4. WP-sanitized
-			esc_url_raw( $decoded ),                                 // 5. decode then WP-sanitize
-			html_entity_decode( $old_url, ENT_QUOTES, 'UTF-8' ),    // 6. HTML entities
-			str_replace( '&', '&amp;', $old_url ),                  // 7. & -> &amp; (WordPress HTML)
-			str_replace( '&', '&amp;', $decoded ),                  // 8. decoded + &amp;
-			str_replace( '&amp;', '&', $old_url ),                  // 9. &amp; -> & (reverse)
+		$candidates = array_unique( array_filter( array_merge(
+			$this->url_content_variants( $old_url, $post_id ),
+			array(
+				$decoded,                                                // fully URL-decoded
+				rawurldecode( $old_url ),                                // rawurl decoded
+				esc_url_raw( $old_url ),                                 // WP-sanitized
+				esc_url_raw( $decoded ),                                 // decode then WP-sanitize
+				html_entity_decode( $old_url, ENT_QUOTES, 'UTF-8' ),    // HTML entities
+				str_replace( '&', '&amp;', $old_url ),                  // & -> &amp; (WordPress HTML)
+				str_replace( '&', '&amp;', $decoded ),                  // decoded + &amp;
+				str_replace( '&amp;', '&', $old_url ),                  // &amp; -> & (reverse)
+			)
 		) ) );
 
 		$found = null;
@@ -619,7 +738,10 @@ class TSOLIIN_Scanner {
 			return false;
 		}
 		$url      = (string) $url;
-		$variants = array_unique( array_filter( array( $url, urldecode( $url ), rawurldecode( $url ) ) ) );
+		$variants = array_unique( array_filter( array_merge(
+			$this->url_content_variants( $url, $post_id ),
+			array( urldecode( $url ), rawurldecode( $url ) )
+		) ) );
 		$content  = $post->post_content;
 		$changed  = false;
 		foreach ( $variants as $v ) {

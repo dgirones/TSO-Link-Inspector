@@ -22,6 +22,16 @@
 		editOldUrl  : '',
 		editPostId  : 0,
 
+		/**
+		 * Escape text for safe HTML insertion.
+		 *
+		 * @param {string} text Raw text.
+		 * @return {string}
+		 */
+		escapeHtml: function ( text ) {
+			return $( '<div/>' ).text( text == null ? '' : String( text ) ).html();
+		},
+
 		// ---------------------------------------------------------------
 		// Init
 		// ---------------------------------------------------------------
@@ -448,7 +458,7 @@
 						return $( this ).find( '.tsoliin-edit-link[data-id="' + self.editLinkId + '"]' ).length > 0;
 					} );
 					if ( $row.length ) {
-						$row.find( '.column-status_code' ).html( '<span class="tsoliin-status ' + d.css_class + '">' + d.status_code + ' ' + d.label + '</span>' );
+						$row.find( '.column-status_code' ).html( '<span class="tsoliin-status ' + d.css_class + '">' + parseInt( d.status_code, 10 ) + ' ' + self.escapeHtml( d.label ) + '</span>' );
 						$row.find( '.tsoliin-url a' ).attr( 'href', d.new_url ).text( d.new_url.substring( 0, 57 ) );
 						$row.find( '.tsoliin-edit-link' ).attr( 'data-url', d.new_url );
 						$row.toggleClass( 'tsoliin-row--broken', 1 === d.is_broken );
@@ -620,7 +630,7 @@
 								return $( this ).find( 'input[value="' + d.link_id + '"]' ).length > 0;
 							} );
 							if ( $tr.length ) {
-								$tr.find( '.column-status_code' ).html( '<span class="tsoliin-status ' + d.css_class + '">' + d.status_code + ' ' + d.label + '</span>' );
+								$tr.find( '.column-status_code' ).html( '<span class="tsoliin-status ' + d.css_class + '">' + parseInt( d.status_code, 10 ) + ' ' + self.escapeHtml( d.label ) + '</span>' );
 								$tr.find( '.column-last_checked' ).text( d.last_checked );
 								$tr.toggleClass( 'tsoliin-row--broken', 1 === parseInt( d.is_broken, 10 ) );
 							}
@@ -664,19 +674,40 @@
 					var cols = $row.find( 'td' ).length;
 					var html = '<tr class="tsoliin-suggest-row"><td colspan="' + cols + '" class="tsoliin-suggest-panel">';
 
-					if ( ! r.success || ! r.data.suggestions || ! r.data.suggestions.length ) {
-						html += '<span style="color:#646970;font-style:italic;">💡 ' + tsoliinData.i18n.noSuggestions + '</span>';
+					if ( ! r.success ) {
+						html += '<span style="color:#b32d2e;">' + self.escapeHtml( ( r.data && r.data.message ) ? r.data.message : tsoliinData.i18n.error ) + '</span>';
+					} else if ( ! r.data.suggestions || ! r.data.suggestions.length ) {
+						if ( r.data.note ) {
+							html += '<div class="notice notice-warning inline" style="margin:0;"><p style="margin:0.5em 0;">' + self.escapeHtml( r.data.note ) + '</p></div>';
+						} else {
+							html += '<span style="color:#646970;font-style:italic;">💡 ' + tsoliinData.i18n.noSuggestions + '</span>';
+						}
 					} else {
 						html += '<strong>💡 ' + tsoliinData.i18n.smartSuggest + ':</strong><ul class="tsoliin-suggest-list">';
 						$.each( r.data.suggestions, function ( i, s ) {
+							var actionable = ( false !== s.actionable );
 							var conf = 'high' === s.confidence ? '🟢' : '🟡';
+							var isHttps = /^https:\/\//i.test( s.url || '' );
+							if ( ! actionable ) {
+								conf = '⚠️';
+							} else if ( ! isHttps ) {
+								conf = '⚠️';
+							}
+							var urlAttr  = String( s.url ).replace( /"/g, '&quot;' );
+							var urlLabel = self.escapeHtml( s.url );
+							var statusCls = 'tsoliin-status--broken';
+							if ( actionable ) {
+								statusCls = isHttps ? 'tsoliin-status--ok' : 'tsoliin-status--warning';
+							}
 							html += '<li>';
-							html += conf + ' <a href="' + s.url + '" target="_blank" rel="noopener">' + s.url + '</a>';
-							html += ' <span class="tsoliin-status tsoliin-status--ok" style="font-size:11px;">' + s.status_code + ' ' + s.label + '</span>';
-							html += ' <em style="color:#646970;font-size:12px;">— ' + s.reason + '</em>';
-							html += ' <button type="button" class="button button-small tsoliin-apply-suggest" style="margin-left:8px;"'
-								+ ' data-id="' + linkId + '" data-url="' + s.url + '">'
-								+ tsoliinData.i18n.applyUrl + '</button>';
+							html += conf + ' <a href="' + urlAttr + '" target="_blank" rel="noopener">' + urlLabel + '</a>';
+							html += ' <span class="tsoliin-status ' + statusCls + '" style="font-size:11px;">' + parseInt( s.status_code, 10 ) + ' ' + self.escapeHtml( s.label ) + '</span>';
+							html += ' <em style="color:#646970;font-size:12px;">— ' + self.escapeHtml( s.reason ) + '</em>';
+							if ( actionable ) {
+								html += ' <button type="button" class="button button-small tsoliin-apply-suggest" style="margin-left:8px;"'
+									+ ' data-id="' + linkId + '" data-url="' + urlAttr + '">'
+									+ self.escapeHtml( tsoliinData.i18n.applyUrl ) + '</button>';
+							}
 							html += '</li>';
 						} );
 						html += '</ul>';
@@ -717,7 +748,7 @@
 				success: function ( r ) {
 					if ( r.success ) {
 						var d = r.data;
-						$row.find( '.column-status_code' ).html( '<span class="tsoliin-status ' + d.css_class + '">' + d.status_code + ' ' + d.label + '</span>' );
+						$row.find( '.column-status_code' ).html( '<span class="tsoliin-status ' + d.css_class + '">' + parseInt( d.status_code, 10 ) + ' ' + self.escapeHtml( d.label ) + '</span>' );
 						$row.find( '.tsoliin-url a' ).attr( 'href', d.new_url ).text( d.new_url.substring( 0, 57 ) );
 						$row.find( '.tsoliin-edit-link' ).attr( 'data-url', d.new_url );
 						$row.toggleClass( 'tsoliin-row--broken', 1 === d.is_broken );
@@ -753,7 +784,7 @@
 				success: function ( r ) {
 					$btn.prop( 'disabled', false ).html( '<span class="dashicons dashicons-info"></span> ' + tsoliinData.i18n.diagnosi );
 					if ( r.success ) {
-						$panel.html( '<strong>' + tsoliinData.i18n.diagResult + '</strong><br><code style="display:block;white-space:pre-wrap;margin-top:8px;">' + r.data.lines.join( '\n' ) + '</code>' );
+						$panel.html( '<strong>' + self.escapeHtml( tsoliinData.i18n.diagResult ) + '</strong><br><code style="display:block;white-space:pre-wrap;margin-top:8px;">' + self.escapeHtml( r.data.lines.join( '\n' ) ) + '</code>' );
 					} else {
 						$panel.html( '<p style="color:red;">' + ( r.data ? r.data.message : 'Error' ) + '</p>' );
 					}

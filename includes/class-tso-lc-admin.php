@@ -729,7 +729,7 @@ class TSOLIIN_Admin {
 			wp_send_json_error( array( 'message' => __( 'Link not found.', 'tso-link-inspector' ) ) );
 		}
 		// Keep user_verified: update_check_result() still runs HTTP and will override if the link is actually broken.
-		$r = $this->http->check( $link->link_url );
+		$r = $this->http->check( $link->link_url, (int) $link->post_id );
 		$this->db->update_check_result( $link_id, $r['status_code'], $r['redirect_url'], $r['is_broken'] );
 		wp_send_json_success( array(
 			'status_code'  => $r['status_code'],
@@ -744,8 +744,9 @@ class TSOLIIN_Admin {
 	public function ajax_update_link() {
 		$this->check_nonce_and_cap();
 		$link_id = isset( $_POST['link_id'] ) ? absint( $_POST['link_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
-		$new_url = isset( $_POST['new_url'] ) ? trim( str_replace( array( "\0", "\r", "\n" ), '', sanitize_text_field( wp_unslash( $_POST['new_url'] ) ) ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Missing
-		if ( ! $link_id || '' === $new_url ) {
+		$new_url_raw = isset( $_POST['new_url'] ) ? wp_unslash( $_POST['new_url'] ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		$new_url     = TSOLIIN_HTTP::sanitize_external_http_url( $new_url_raw );
+		if ( ! $link_id || false === $new_url ) {
 			wp_send_json_error( array( 'message' => __( 'Invalid data.', 'tso-link-inspector' ) ) );
 		}
 		$link = $this->db->get_link( $link_id );
@@ -942,7 +943,7 @@ class TSOLIIN_Admin {
 			$row_data = array( 'link_id' => $link_id );
 			if ( $link ) {
 				// Keep user_verified: update_check_result() still runs HTTP and will override if the link is actually broken.
-				$r = $this->http->check( $link->link_url );
+				$r = $this->http->check( $link->link_url, (int) $link->post_id );
 				$this->db->update_check_result( $link_id, $r['status_code'], $r['redirect_url'], $r['is_broken'] );
 				$row_data = array_merge( $row_data, array(
 					'status_code'  => $r['status_code'],
@@ -1064,33 +1065,76 @@ class TSOLIIN_Admin {
 
 		// If the DB already has a known redirect_url, offer it as first (instant) suggestion — except when
 		// applying it would pin a “rolling release” download to one file version (handled as transparent redirect).
+		$orig_abs = TSOLIIN_Scanner::resolve_to_absolute_url( (string) $link->link_url, (int) $link->post_id );
 		if ( ! empty( $link->redirect_url ) ) {
 			$rurl = (string) $link->redirect_url;
-			if ( ! $this->http->is_transparent_redirect( (string) $link->link_url, $rurl ) ) {
+			$skip_redirect_suggest = $this->http->is_transparent_redirect( (string) $link->link_url, $rurl )
+				|| (
+					TSOLIIN_HTTP::is_plain_http_url( $orig_abs )
+					&& TSOLIIN_HTTP::is_plain_http_url( $rurl )
+					&& TSOLIIN_HTTP::is_http_same_resource_bar_www( $orig_abs, $rurl )
+				)
+				|| (
+					! empty( $link->is_broken )
+					&& TSOLIIN_HTTP::is_http_same_resource_bar_www( $orig_abs, $rurl )
+				);
+			if ( ! $skip_redirect_suggest ) {
 				$suggestions[] = array(
-					'url'        => $rurl,
-					'status_code'=> (int) $link->status_code,
-					'label'      => TSOLIIN_HTTP::status_label( (int) $link->status_code, (string) $link->link_url ),
-					'reason'     => __( 'Destination detected (last check)', 'tso-link-inspector' ),
-					'confidence' => 'high',
+					'url'         => $rurl,
+					'status_code' => (int) $link->status_code,
+					'label'       => TSOLIIN_HTTP::status_label( (int) $link->status_code, (string) $link->link_url ),
+					'reason'      => __( 'Destination detected (last check)', 'tso-link-inspector' ),
+					'confidence'  => 'high',
+					'actionable'  => ! TSOLIIN_HTTP::is_hard_broken_status( (int) $link->status_code ),
 				);
 				$seen_urls[] = $rurl;
 			}
 		}
 
 		// Run smart suggest to find additional alternatives.
-		foreach ( $this->http->smart_suggest( $link->link_url ) as $s ) {
+		foreach ( $this->http->smart_suggest( $link->link_url, (int) $link->post_id ) as $s ) {
 			if ( ! in_array( $s['url'], $seen_urls, true ) ) {
 				$suggestions[] = $s;
 				$seen_urls[]   = $s['url'];
 			}
 		}
 
+		$safe_suggestions = array();
+		foreach ( $suggestions as $suggestion ) {
+			$safe_url = TSOLIIN_HTTP::sanitize_external_http_url( isset( $suggestion['url'] ) ? $suggestion['url'] : '' );
+			if ( false === $safe_url ) {
+				continue;
+			}
+			$suggestion['url']     = $safe_url;
+			$suggestion['label']   = sanitize_text_field( isset( $suggestion['label'] ) ? (string) $suggestion['label'] : '' );
+			$suggestion['reason']  = sanitize_text_field( isset( $suggestion['reason'] ) ? (string) $suggestion['reason'] : '' );
+			$sc                    = isset( $suggestion['status_code'] ) ? (int) $suggestion['status_code'] : 0;
+			$suggestion['actionable'] = isset( $suggestion['actionable'] )
+				? (bool) $suggestion['actionable']
+				: ! TSOLIIN_HTTP::is_hard_broken_status( $sc );
+			$safe_suggestions[]    = $suggestion;
+		}
+
+		$safe_suggestions = array_values(
+			array_filter(
+				$safe_suggestions,
+				static function ( $row ) {
+					return ! empty( $row['actionable'] );
+				}
+			)
+		);
+
+		$note = '';
+		if ( empty( $safe_suggestions ) && TSOLIIN_HTTP::is_plain_http_url( $orig_abs ) ) {
+			$note = __( 'No HTTPS upgrade or other useful alternative was found. The site may only offer HTTP, so there is nothing helpful to apply—changing www alone would not fix the insecure HTTP link.', 'tso-link-inspector' );
+		}
+
 		wp_send_json_success( array(
 			'link_id'     => $link_id,
 			'original'    => $link->link_url,
-			'suggestions' => $suggestions,
-			'count'       => count( $suggestions ),
+			'suggestions' => $safe_suggestions,
+			'count'       => count( $safe_suggestions ),
+			'note'        => $note,
 		) );
 	}
 
