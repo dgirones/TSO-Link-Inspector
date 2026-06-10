@@ -101,11 +101,38 @@ class TSOLIIN_HTTP {
 			if ( 0 === strpos( $url_lower, $p ) ) {
 				return true;
 			}
-			if ( $host === $p || ( '' !== $host && false !== strpos( '.' . $host, '.' . $p ) ) ) {
+			if ( '' !== $host && self::host_matches_ignore_pattern( $host, $p ) ) {
 				return true;
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Whether a hostname matches an ignore-list domain entry (exact or subdomain only).
+	 *
+	 * Avoids false positives such as pattern "sony" matching "talk.sonymobile.com".
+	 *
+	 * @param string $host    URL host (lowercase).
+	 * @param string $pattern Ignore-list entry (lowercase domain or URL prefix).
+	 * @return bool
+	 */
+	private static function host_matches_ignore_pattern( $host, $pattern ) {
+		$host    = strtolower( trim( (string) $host ) );
+		$pattern = strtolower( trim( (string) $pattern ) );
+		if ( '' === $host || '' === $pattern ) {
+			return false;
+		}
+		// URL/path prefixes are handled via strpos on the full URL, not here.
+		if ( preg_match( '#^https?://#', $pattern ) || false !== strpos( $pattern, '/' ) ) {
+			return false;
+		}
+		if ( $host === $pattern ) {
+			return true;
+		}
+		$suffix = '.' . $pattern;
+		$len    = strlen( $suffix );
+		return strlen( $host ) > $len && substr( $host, -$len ) === $suffix;
 	}
 
 	/**
@@ -219,10 +246,102 @@ class TSOLIIN_HTTP {
 	 */
 	private function skipped_url_result() {
 		return array(
-			'status_code'  => 0,
+			'status_code'  => -1,
 			'redirect_url' => '',
 			'is_broken'    => 0,
 		);
+	}
+
+	/**
+	 * Result when a URL cannot be requested from the server (SSRF / invalid host).
+	 *
+	 * @return array{status_code:int,redirect_url:string,is_broken:int}
+	 */
+	private function blocked_url_result() {
+		return array(
+			'status_code'  => -7,
+			'redirect_url' => '',
+			'is_broken'    => 0,
+		);
+	}
+
+	/**
+	 * Result for action URLs (logout, etc.) that must not be HTTP-checked.
+	 *
+	 * @return array{status_code:int,redirect_url:string,is_broken:int}
+	 */
+	private function action_url_result() {
+		return array(
+			'status_code'  => -6,
+			'redirect_url' => '',
+			'is_broken'    => 0,
+		);
+	}
+
+	/**
+	 * Whether a URL performs a side effect (logout) instead of normal navigation.
+	 *
+	 * @param string $url Full URL.
+	 * @return bool
+	 */
+	public static function is_action_url( $url ) {
+		$url = trim( (string) $url );
+		if ( '' === $url ) {
+			return false;
+		}
+
+		$path   = strtolower( (string) wp_parse_url( $url, PHP_URL_PATH ) );
+		$query  = (string) wp_parse_url( $url, PHP_URL_QUERY );
+		$params = array();
+		if ( '' !== $query ) {
+			parse_str( $query, $params );
+		}
+		$action = isset( $params['action'] ) ? strtolower( sanitize_key( (string) $params['action'] ) ) : '';
+
+		// WordPress logout (root or subdirectory installs).
+		if ( false !== strpos( $path, 'wp-login.php' ) && 'logout' === $action ) {
+			return true;
+		}
+
+		// Some plugins/themes route logout through admin-post.php.
+		if ( false !== strpos( $path, 'admin-post.php' ) && 'logout' === $action ) {
+			return true;
+		}
+
+		return false;
+	}
+
+	/**
+	 * Resolve a Location header value against the current request URL.
+	 *
+	 * @param string $location  Location header value.
+	 * @param string $base_url  URL of the response that sent the redirect.
+	 * @return string Absolute URL or empty if invalid.
+	 */
+	private function resolve_redirect_location( $location, $base_url ) {
+		$location = trim( str_replace( array( "\0", "\r", "\n" ), '', (string) $location ) );
+		if ( '' === $location ) {
+			return '';
+		}
+		if ( 0 === strpos( $location, 'http' ) ) {
+			return $location;
+		}
+		if ( 0 === strpos( $location, '//' ) ) {
+			$scheme = wp_parse_url( $base_url, PHP_URL_SCHEME );
+			if ( ! $scheme ) {
+				$scheme = is_ssl() ? 'https' : 'http';
+			}
+			return $scheme . ':' . $location;
+		}
+		$parsed = wp_parse_url( $base_url );
+		if ( empty( $parsed['host'] ) ) {
+			return '';
+		}
+		$base = $parsed['scheme'] . '://' . $parsed['host'];
+		if ( ! empty( $parsed['port'] ) ) {
+			$base .= ':' . $parsed['port'];
+		}
+		return ( '/' === $location[0] ) ? $base . $location : $base . '/' . $location;
 	}
 
 	/**
@@ -240,8 +359,15 @@ class TSOLIIN_HTTP {
 			return array( 'status_code' => 0, 'redirect_url' => '', 'is_broken' => 0 );
 		}
 
-		if ( self::is_ignored_url( $url ) || ! self::is_safe_remote_url( $url ) ) {
+		if ( self::is_action_url( $url ) ) {
+			return $this->action_url_result();
+		}
+
+		if ( self::is_ignored_url( $url ) ) {
 			return $this->skipped_url_result();
+		}
+		if ( ! self::is_safe_remote_url( $url ) ) {
+			return $this->blocked_url_result();
 		}
 
 		// Strip URL fragment (#anchor) before HTTP check.
@@ -309,11 +435,9 @@ class TSOLIIN_HTTP {
 					break; // No Location header, stop.
 				}
 
-				// Resolve relative URLs.
-				if ( 0 !== strpos( $loc, 'http' ) ) {
-					$parsed = wp_parse_url( $final_url );
-					$base   = $parsed['scheme'] . '://' . $parsed['host'];
-					$loc    = ( '/' === $loc[0] ) ? $base . $loc : $base . '/' . $loc;
+				$loc = $this->resolve_redirect_location( $loc, $final_url );
+				if ( '' === $loc ) {
+					break;
 				}
 
 				if ( self::is_ignored_url( $loc ) || ! self::is_safe_remote_url( $loc ) ) {
@@ -338,8 +462,18 @@ class TSOLIIN_HTTP {
 			// Treat as 200 OK — same content, no action needed.
 			if ( $this->is_trivial_redirect( $url, $final_url ) ) {
 				return array(
-					'status_code'  => $code,     // final code (200 OK)
-					'redirect_url' => '',        // no redirect to report
+					'status_code'  => 200,
+					'redirect_url' => '',
+					'is_broken'    => 0,
+				);
+			}
+
+			// Case 1c: same-site redirect that strips search/query intent (bot walls, empty search forms).
+			// e.g. filmaffinity search.php?stext=Actor → advsearch2.php?q= (empty) while the original URL works in a browser.
+			if ( $this->is_query_stripping_redirect( $url, $final_url ) ) {
+				return array(
+					'status_code'  => 200,
+					'redirect_url' => '',
 					'is_broken'    => 0,
 				);
 			}
@@ -448,6 +582,9 @@ class TSOLIIN_HTTP {
 	 */
 	public static function is_hard_broken_status( $code ) {
 		$code = (int) $code;
+		if ( in_array( $code, array( -1, -6, -7 ), true ) ) {
+			return false;
+		}
 		if ( $code <= 0 ) {
 			return true;
 		}
@@ -466,6 +603,36 @@ class TSOLIIN_HTTP {
 	}
 
 	/**
+	 * HTTP codes that usually mean the server blocked our checker, not that the URL is broken for visitors.
+	 *
+	 * @param int $code HTTP status code.
+	 * @return bool
+	 */
+	public static function is_bot_block_status( $code ) {
+		return in_array( (int) $code, array( 401, 403, 429 ), true );
+	}
+
+	/**
+	 * Whether a URL is safe to offer with an Apply button (confirmed 2xx from the server, not a bot-block).
+	 *
+	 * @param array $check_result Result from check(): status_code, is_broken, redirect_url.
+	 * @return bool
+	 */
+	public static function is_actionable_suggestion_result( $check_result ) {
+		if ( ! is_array( $check_result ) ) {
+			return false;
+		}
+		if ( ! empty( $check_result['is_broken'] ) ) {
+			return false;
+		}
+		$code = isset( $check_result['status_code'] ) ? (int) $check_result['status_code'] : 0;
+		if ( self::is_hard_broken_status( $code ) || self::is_bot_block_status( $code ) ) {
+			return false;
+		}
+		return $code >= 200 && $code < 300;
+	}
+
+	/**
 	 * Smart URL suggestion: tests https, follows redirects, tries www.
 	 *
 	 * @param string $url     Original URL.
@@ -481,42 +648,72 @@ class TSOLIIN_HTTP {
 		$suggestions = array();
 		$tested      = array( $url );
 
-		// 1. https upgrade.
-		if ( preg_match( '#^http://#i', $url ) ) {
-			$https = preg_replace( '#^http://#i', 'https://', $url );
-			if ( $https && ! in_array( $https, $tested, true ) ) {
-				$r = $this->check( $https );
-				if ( ! $r['is_broken'] ) {
+		// 1. Final destination after following redirects from the original URL (e.g. twitter.com → x.com).
+		$r_orig = $this->check( $url, $post_id );
+		if ( ! empty( $r_orig['redirect_url'] ) && ! $this->is_trivial_redirect( $url, $r_orig['redirect_url'] ) ) {
+			$final = trim( (string) $r_orig['redirect_url'] );
+			if ( '' !== $final && ! in_array( $final, $tested, true ) ) {
+				$r_final = $this->check( $final, $post_id );
+				if ( ! $r_final['is_broken'] ) {
+					$final_status = (int) $r_final['status_code'];
+					if ( $final_status <= 0 ) {
+						$final_status = (int) $r_orig['status_code'];
+					}
 					$suggestions[] = array(
-						'url'        => $https,
-						'status_code'=> $r['status_code'],
-						'label'      => self::status_label( $r['status_code'], $https ),
-						'reason'     => __( 'Secure HTTPS version available', 'tso-link-inspector' ),
-						'confidence' => 'high',
-						'actionable' => ! self::is_hard_broken_status( (int) $r['status_code'] ),
+						'url'         => $final,
+						'status_code' => $final_status,
+						'label'       => self::status_label( $final_status, $final ),
+						'reason'      => __( 'Final URL after redirects', 'tso-link-inspector' ),
+						'confidence'  => 'high',
+						'actionable'  => self::is_actionable_suggestion_result( $r_final ),
 					);
 				}
-				$tested[] = $https;
+				$tested[] = $final;
 			}
 		}
 
-		// 2. Follow redirects (do not suggest replacing when redirect is “transparent”, e.g. latest-channel → pinned version file).
-		$final = $this->get_final_url( $url, $post_id );
-		if ( $final && ! in_array( $final, $tested, true ) ) {
-			if ( ! $this->is_trivial_redirect( $url, $final ) ) {
-				$r = $this->check( $final );
+		// 2. https upgrade — only when there is no meaningful cross-domain redirect (avoid suggesting https://twitter.com when the real target is x.com).
+		$has_meaningful_redirect = ! empty( $r_orig['redirect_url'] ) && ! $this->is_trivial_redirect( $url, $r_orig['redirect_url'] );
+		if ( preg_match( '#^http://#i', $url ) && ! $has_meaningful_redirect ) {
+			$https = preg_replace( '#^http://#i', 'https://', $url );
+			if ( $https && ! in_array( $https, $tested, true ) ) {
+				$r = $this->check( $https, $post_id );
 				if ( ! $r['is_broken'] ) {
-					$suggestions[] = array(
-						'url'        => $final,
-						'status_code'=> $r['status_code'],
-						'label'      => self::status_label( $r['status_code'], $final ),
-						'reason'     => __( 'Final URL after redirects', 'tso-link-inspector' ),
-						'confidence' => 'high',
-						'actionable' => ! self::is_hard_broken_status( (int) $r['status_code'] ),
-					);
+					$target  = $https;
+					$reason  = __( 'Secure HTTPS version available', 'tso-link-inspector' );
+					$status  = (int) $r['status_code'];
+					$action  = self::is_actionable_suggestion_result( $r );
+
+					// HTTPS URL may itself redirect (e.g. legacy host); suggest the real destination, not the hop.
+					if ( ! empty( $r['redirect_url'] ) && ! $this->is_trivial_redirect( $https, $r['redirect_url'] ) ) {
+						$target = trim( (string) $r['redirect_url'] );
+						$reason = __( 'Final URL after redirects', 'tso-link-inspector' );
+						$r2     = $this->check( $target, $post_id );
+						if ( $r2['is_broken'] ) {
+							$target = '';
+						} else {
+							$status = (int) $r2['status_code'];
+							if ( $status <= 0 ) {
+								$status = (int) $r['status_code'];
+							}
+							$action = self::is_actionable_suggestion_result( $r2 );
+						}
+					}
+
+					if ( '' !== $target && ! in_array( $target, $tested, true ) ) {
+						$suggestions[] = array(
+							'url'         => $target,
+							'status_code' => $status,
+							'label'       => self::status_label( $status, $target ),
+							'reason'      => $reason,
+							'confidence'  => 'high',
+							'actionable'  => $action,
+						);
+						$tested[] = $target;
+					}
 				}
+				$tested[] = $https;
 			}
-			$tested[] = $final;
 		}
 
 		// 3. www variant — only for HTTPS URLs (for http://, toggling www stays insecure and confuses users).
@@ -542,7 +739,7 @@ class TSOLIIN_HTTP {
 							'label'       => self::status_label( $r['status_code'], $alt_url ),
 							'reason'      => __( 'www / non-www variant (HTTPS)', 'tso-link-inspector' ),
 							'confidence'  => 'medium',
-							'actionable'  => ! self::is_hard_broken_status( (int) $r['status_code'] ),
+							'actionable'  => self::is_actionable_suggestion_result( $r ),
 						);
 					}
 				}
@@ -589,21 +786,9 @@ class TSOLIIN_HTTP {
 		if ( ! preg_match( '#^https?://#i', $url ) || ! self::is_safe_remote_url( $url ) ) {
 			return null;
 		}
-		$r = wp_remote_get( $url, array(
-			'timeout'            => $this->timeout,
-			'redirection'        => 10,
-			'reject_unsafe_urls' => true,
-			'user-agent'         => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-			'sslverify'          => true,
-			'stream'             => false,
-		) );
-		if ( is_wp_error( $r ) ) {
-			return null;
-		}
-		$code = (int) wp_remote_retrieve_response_code( $r );
-		if ( in_array( $code, array( 301, 302, 307, 308 ), true ) ) {
-			$loc = wp_remote_retrieve_header( $r, 'location' );
-			return $loc ? trim( (string) $loc ) : null;
+		$r = $this->check( $url, $post_id );
+		if ( ! empty( $r['redirect_url'] ) && ! $this->is_trivial_redirect( $url, $r['redirect_url'] ) ) {
+			return trim( (string) $r['redirect_url'] );
 		}
 		return null;
 	}
@@ -656,6 +841,35 @@ class TSOLIIN_HTTP {
 	}
 
 	/**
+	 * Whether replacing $original with $target is a useful fix (HTTPS upgrade or canonical domain move).
+	 *
+	 * @param string $original Original URL.
+	 * @param string $target   Proposed destination URL.
+	 * @return bool
+	 */
+	public function is_meaningful_redirect_target( $original, $target ) {
+		$original = trim( (string) $original );
+		$target   = trim( (string) $target );
+		if ( '' === $original || '' === $target || $original === $target ) {
+			return false;
+		}
+		if ( $this->is_query_stripping_redirect( $original, $target ) ) {
+			return false;
+		}
+		if ( $this->is_trivial_redirect( $original, $target ) ) {
+			return false;
+		}
+		if ( self::is_plain_http_url( $original ) && ! self::is_plain_http_url( $target ) ) {
+			return true;
+		}
+		$orig_host = strtolower( (string) wp_parse_url( $original, PHP_URL_HOST ) );
+		$target_host = strtolower( (string) wp_parse_url( $target, PHP_URL_HOST ) );
+		$orig_host   = preg_replace( '#^www\.#i', '', $orig_host );
+		$target_host = preg_replace( '#^www\.#i', '', $target_host );
+		return $orig_host !== $target_host;
+	}
+
+	/**
 	 * Human-readable label for a status code.
 	 *
 	 * @param int    $code     HTTP status code.
@@ -672,7 +886,14 @@ class TSOLIIN_HTTP {
 			/* translators: %d: HTTP status code */
 			return sprintf( __( '%d OK (HTTP — use HTTPS)', 'tso-link-inspector' ), $code );
 		}
+		// Legacy rows: -1 was also used when the URL was blocked for safety, not ignore-list.
+		if ( -1 === $code && '' !== $link_url && ! self::is_ignored_url( $link_url ) ) {
+			return __( 'Blocked (cannot check from server)', 'tso-link-inspector' );
+		}
 		$labels = array(
+			-1   => __( 'Skipped (ignore list)', 'tso-link-inspector' ),
+			-6   => __( 'Action link (logout)', 'tso-link-inspector' ),
+			-7   => __( 'Blocked (cannot check from server)', 'tso-link-inspector' ),
 			0    => __( 'Cannot connect', 'tso-link-inspector' ),
 			-2   => __( 'Domain does not exist (DNS)', 'tso-link-inspector' ),
 			-3   => __( 'Timed out', 'tso-link-inspector' ),
@@ -729,7 +950,13 @@ class TSOLIIN_HTTP {
 		$is_broken = (int) $is_broken;
 		$link_url  = trim( (string) $link_url );
 
-		if ( $code <= 0 || in_array( $code, array( 2, 3, 4, 5 ), true ) ) {
+		if ( in_array( $code, array( -1, -6, -7 ), true ) && ! $is_broken ) {
+			return 'tsoliin-status--skipped';
+		}
+		if ( 0 === $code && ! $is_broken ) {
+			return 'tsoliin-status--unknown';
+		}
+		if ( $code < 0 || in_array( $code, array( 2, 3, 4, 5 ), true ) ) {
 			return 'tsoliin-status--broken';
 		}
 		if ( $is_broken ) {
@@ -874,7 +1101,212 @@ class TSOLIIN_HTTP {
 			return true;
 		}
 
+		// 10. YouTube short/share links → watch URL for the same video (youtu.be/ID, /shorts/ID, etc.).
+		if ( $this->is_youtube_same_video_redirect( $original, $final ) ) {
+			return true;
+		}
+
 		return false;
+	}
+
+	/**
+	 * Whether a redirect drops meaningful query/search parameters (common bot or anti-scraper behaviour).
+	 *
+	 * Example: search.php?stext=Jake+Gyllenhaal → advsearch2.php?q= (empty) on the same site.
+	 *
+	 * @param string $original Original URL.
+	 * @param string $final    Destination after redirects.
+	 * @return bool
+	 */
+	private function is_query_stripping_redirect( $original, $final ) {
+		$orig_parts  = wp_parse_url( $original );
+		$final_parts = wp_parse_url( $final );
+		if ( ! $orig_parts || ! $final_parts || empty( $orig_parts['host'] ) || empty( $final_parts['host'] ) ) {
+			return false;
+		}
+
+		$orig_host = strtolower( preg_replace( '#^www\.#i', '', (string) $orig_parts['host'] ) );
+		$fin_host  = strtolower( preg_replace( '#^www\.#i', '', (string) $final_parts['host'] ) );
+		if ( $orig_host !== $fin_host ) {
+			return false;
+		}
+
+		$orig_query = isset( $orig_parts['query'] ) ? (string) $orig_parts['query'] : '';
+		if ( '' === $orig_query ) {
+			return false;
+		}
+
+		parse_str( $orig_query, $orig_params );
+		$meaningful_orig = $this->get_meaningful_query_params( $orig_params );
+		if ( empty( $meaningful_orig ) ) {
+			return false;
+		}
+
+		$final_query = isset( $final_parts['query'] ) ? (string) $final_parts['query'] : '';
+		parse_str( $final_query, $final_params );
+		$meaningful_final = $this->get_meaningful_query_params( $final_params );
+
+		if ( empty( $meaningful_final ) ) {
+			if ( $this->redirect_lost_search_intent( $meaningful_orig, array() ) ) {
+				return true;
+			}
+			return $this->is_search_endpoint_path_swap( $orig_parts, $final_parts );
+		}
+
+		return $this->redirect_lost_search_intent( $meaningful_orig, $meaningful_final );
+	}
+
+	/**
+	 * Whether redirect moves between search-style paths on the same host (often anti-bot).
+	 *
+	 * @param array|false $orig_parts  wp_parse_url() of original.
+	 * @param array|false $final_parts wp_parse_url() of destination.
+	 * @return bool
+	 */
+	private function is_search_endpoint_path_swap( $orig_parts, $final_parts ) {
+		if ( ! is_array( $orig_parts ) || ! is_array( $final_parts ) ) {
+			return false;
+		}
+		$orig_path  = strtolower( rtrim( (string) ( $orig_parts['path'] ?? '' ), '/' ) );
+		$final_path = strtolower( rtrim( (string) ( $final_parts['path'] ?? '' ), '/' ) );
+		if ( '' === $orig_path || '' === $final_path || $orig_path === $final_path ) {
+			return false;
+		}
+		$patterns = array( 'search', 'find', 'buscar', 'busqueda', 'advsearch', 'lookup' );
+		foreach ( array( $orig_path, $final_path ) as $path ) {
+			foreach ( $patterns as $needle ) {
+				if ( false !== strpos( $path, $needle ) ) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Query parameters with non-empty values, excluding tracking/noise keys.
+	 *
+	 * @param array $params Parsed query parameters.
+	 * @return array<string, string>
+	 */
+	private function get_meaningful_query_params( array $params ) {
+		$out = array();
+		foreach ( $params as $key => $value ) {
+			if ( is_array( $value ) ) {
+				continue;
+			}
+			$key = strtolower( sanitize_key( (string) $key ) );
+			if ( '' === $key || $this->is_noise_query_param_key( $key ) ) {
+				continue;
+			}
+			$value = trim( (string) $value );
+			if ( '' !== $value ) {
+				$out[ $key ] = $value;
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * Whether redirect destination no longer carries original search terms.
+	 *
+	 * @param array<string, string> $orig  Meaningful original params.
+	 * @param array<string, string> $final Meaningful destination params.
+	 * @return bool
+	 */
+	private function redirect_lost_search_intent( array $orig, array $final ) {
+		$search_keys = array( 'stext', 'text', 'q', 'query', 'search', 's', 'keyword', 'term', 'stype', 'type', 'name' );
+		$orig_terms  = array();
+
+		foreach ( $orig as $key => $value ) {
+			$key = strtolower( (string) $key );
+			if ( ! in_array( $key, $search_keys, true ) && ! preg_match( '/(?:search|query|keyword|text|term)/', $key ) ) {
+				continue;
+			}
+			$term = strtolower( rawurldecode( (string) $value ) );
+			$term = preg_replace( '/\s+/', ' ', trim( $term ) );
+			if ( strlen( $term ) >= 2 ) {
+				$orig_terms[] = $term;
+			}
+		}
+
+		if ( empty( $orig_terms ) ) {
+			return false;
+		}
+
+		$final_blob = strtolower( implode( ' ', array_map( 'rawurldecode', array_values( $final ) ) ) );
+		foreach ( $orig_terms as $term ) {
+			if ( false !== strpos( $final_blob, $term ) ) {
+				return false;
+			}
+			// Also match if a significant word from multi-word search appears in final params.
+			foreach ( preg_split( '/\s+/', $term ) as $word ) {
+				if ( strlen( $word ) >= 4 && false !== strpos( $final_blob, $word ) ) {
+					return false;
+				}
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * Extract a YouTube video ID from common URL shapes (youtu.be, /watch?v=, /embed/, /shorts/).
+	 *
+	 * @param string $url URL.
+	 * @return string Eleven-character ID or empty string.
+	 */
+	private function extract_youtube_video_id( $url ) {
+		$parts = wp_parse_url( (string) $url );
+		if ( empty( $parts['host'] ) ) {
+			return '';
+		}
+		$host = strtolower( (string) $parts['host'] );
+		$path = isset( $parts['path'] ) ? trim( (string) $parts['path'], '/' ) : '';
+
+		if ( preg_match( '/(^|\.)youtu\.be$/', $host ) && '' !== $path ) {
+			$slug = strtok( $path, '/' );
+			return $this->sanitize_youtube_video_id( $slug );
+		}
+
+		if ( ! preg_match( '/(^|\.)(youtube\.com|youtube-nocookie\.com|m\.youtube\.com)$/', $host ) ) {
+			return '';
+		}
+
+		if ( ! empty( $parts['query'] ) ) {
+			parse_str( (string) $parts['query'], $query );
+			if ( ! empty( $query['v'] ) ) {
+				return $this->sanitize_youtube_video_id( (string) $query['v'] );
+			}
+		}
+
+		if ( preg_match( '#^(?:embed|shorts|v|live)/([^/?]+)#', $path, $matches ) ) {
+			return $this->sanitize_youtube_video_id( $matches[1] );
+		}
+
+		return '';
+	}
+
+	/**
+	 * @param string $id Raw candidate ID.
+	 * @return string
+	 */
+	private function sanitize_youtube_video_id( $id ) {
+		$id = trim( (string) $id );
+		return preg_match( '/^[a-zA-Z0-9_-]{11}$/', $id ) ? $id : '';
+	}
+
+	/**
+	 * Whether a redirect only expands a YouTube short link to the same video watch page.
+	 *
+	 * @param string $original Original URL.
+	 * @param string $final    Final URL after redirects.
+	 * @return bool
+	 */
+	private function is_youtube_same_video_redirect( $original, $final ) {
+		$id_orig  = $this->extract_youtube_video_id( $original );
+		$id_final = $this->extract_youtube_video_id( $final );
+		return ( '' !== $id_orig && $id_orig === $id_final );
 	}
 
 	/**
@@ -1085,7 +1517,41 @@ class TSOLIIN_HTTP {
 	 * @return bool
 	 */
 	public function is_transparent_redirect( $original, $final ) {
-		return $this->is_trivial_redirect( (string) $original, (string) $final );
+		return $this->is_trivial_redirect( (string) $original, (string) $final )
+			|| $this->is_query_stripping_redirect( (string) $original, (string) $final );
+	}
+
+	/**
+	 * Normalize a check result before storing in the DB (transparent redirects → OK, no redirect_url).
+	 *
+	 * @param string $link_url     Original link URL in the post.
+	 * @param int    $status_code  HTTP status from check().
+	 * @param string $redirect_url Redirect destination from check().
+	 * @param int    $is_broken    Broken flag from check().
+	 * @return array{status_code:int,redirect_url:string,is_broken:int}
+	 */
+	public static function normalize_stored_check_result( $link_url, $status_code, $redirect_url, $is_broken ) {
+		$link_url     = trim( (string) $link_url );
+		$redirect_url = trim( (string) $redirect_url );
+		$is_broken    = (int) $is_broken;
+		$status_code  = (int) $status_code;
+
+		if ( '' !== $redirect_url && '' !== $link_url ) {
+			$http = new self();
+			if ( $http->is_transparent_redirect( $link_url, $redirect_url ) ) {
+				return array(
+					'status_code'  => 200,
+					'redirect_url' => '',
+					'is_broken'    => 0,
+				);
+			}
+		}
+
+		return array(
+			'status_code'  => $status_code,
+			'redirect_url' => $redirect_url,
+			'is_broken'    => $is_broken ? 1 : 0,
+		);
 	}
 
 	/**
@@ -1216,6 +1682,7 @@ class TSOLIIN_HTTP {
 			'ns_source',
 			'ns_campaign',
 			'ns_mchannel',
+			'feature',
 		);
 
 		return in_array( $k, $noise, true );
@@ -1230,27 +1697,56 @@ class TSOLIIN_HTTP {
 	 * @return bool
 	 */
 	private function is_auth_redirect( $final ) {
-		$lower = strtolower( (string) $final );
-		$auth_patterns = array(
-			'/wp-login.php',
-			'/login',
-			'/signin',
-			'/sign-in',
-			'/auth',
-			'?next=',
-			'?redirect_to=',
-			'?returnurl=',
-			'?redirect=',
-			'?return_to=',
-			'?continue=',
+		$final = (string) $final;
+		if ( '' === $final ) {
+			return false;
+		}
+
+		$parts = wp_parse_url( $final );
+		$host  = isset( $parts['host'] ) ? strtolower( (string) $parts['host'] ) : '';
+		$path  = isset( $parts['path'] ) ? strtolower( (string) $parts['path'] ) : '';
+
+		$auth_hosts = array(
 			'accounts.google.com',
 			'login.microsoftonline.com',
 		);
-		foreach ( $auth_patterns as $pattern ) {
-			if ( false !== strpos( $lower, $pattern ) ) {
+		foreach ( $auth_hosts as $auth_host ) {
+			if ( $host === $auth_host || ( '' !== $host && str_ends_with( $host, '.' . $auth_host ) ) ) {
 				return true;
 			}
 		}
+
+		if ( false !== strpos( $path, '/wp-login.php' ) ) {
+			return true;
+		}
+
+		$auth_path_segments = array( 'login', 'signin', 'sign-in', 'auth' );
+		foreach ( $auth_path_segments as $seg ) {
+			if ( preg_match( '#/' . preg_quote( $seg, '#' ) . '(?:/|$|\.)#', $path ) ) {
+				return true;
+			}
+		}
+
+		if ( empty( $parts['query'] ) ) {
+			return false;
+		}
+
+		parse_str( (string) $parts['query'], $query );
+		if ( ! is_array( $query ) ) {
+			return false;
+		}
+
+		$auth_query_keys = array( 'redirect_to', 'returnurl', 'redirect', 'return_to', 'continue' );
+		foreach ( $auth_query_keys as $key ) {
+			if ( isset( $query[ $key ] ) ) {
+				return true;
+			}
+		}
+
+		if ( isset( $query['next'] ) && preg_match( '#/(?:login|signin|sign-in|auth|oauth)(?:/|$|\.)#', $path ) ) {
+			return true;
+		}
+
 		return false;
 	}
 

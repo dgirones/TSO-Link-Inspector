@@ -1,10 +1,11 @@
 === TSO Link Inspector ===
 Contributors: deadko
+Donate link: https://ko-fi.com/deadko_cat
 Tags: broken links, link checker, seo, maintenance, links
 Requires at least: 6.0
-Tested up to: 6.9
+Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 1.9.3
+Stable tag: 1.9.7
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -34,6 +35,8 @@ Find and fix broken links across your entire WordPress site without opening each
 * **Nofollow broken links**: automatically adds `rel="nofollow"` to broken links so search engines ignore them.
 * **Preserve post dates**: editing a link does not update the post modification date.
 * Compatible with LiteSpeed Cache, WP Rocket, W3 Total Cache, WP Super Cache, SG Optimizer, Breeze, and Cloudflare.
+* **Extended scanning**: plain-text URLs in posts, Gutenberg block JSON, navigation menus, responsive media (srcset/picture), page-builder `data-*` attributes, widget sidebars, taxonomy descriptions, Site Editor templates/reusable blocks, and plain URLs in custom fields.
+* **Third-party sources**: register extra link collectors with `tsoliin_register_link_source()`.
 * Includes Catalan and Spanish translations.
 
 = How it works =
@@ -87,19 +90,73 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 
 == Changelog ==
 
+= 1.9.7 =
+* New: Widget sidebar scanning (Text, Custom HTML, and block widgets).
+* New: Taxonomy term description scanning (categories, tags, and custom taxonomies).
+* New: Site Editor scanning for templates, template parts, and reusable blocks (`wp_block`).
+* New: Plain-text URLs inside custom fields when ACF/Meta scanning is enabled.
+* New: Third-party link source API — `tsoliin_register_link_source()` for plugins and themes.
+* New: Settings toggles under **Extended sources** (enabled by default until you save Settings).
+* Improvement: List table shows source type icons and links to Widgets, Menus, terms, or the Site Editor where inline edit is not available.
+* Fix: WordPress logout/action URLs detected and labelled separately; confirmation before opening from the admin list.
+* Fix: Smart Suggest keeps meaningful redirect destinations even when re-check is bot-blocked; Apply trusts stored 301/302 targets.
+* Fix: Query-stripping redirects (e.g. FilmAffinity search URLs) treated as transparent OK instead of false redirect rows.
+* Fix: Stale transparent redirect rows cleaned on list load and after background checks; Redirect filter stays in sync without F5.
+* Fix: Ignore-list vs server-blocked URLs use distinct statuses (-1 skipped, -7 blocked); smarter host pattern matching.
+* Fix: Status badge layout on narrow screens; broken rows highlighted in the list table.
+* Fix: Bulk unlink/delete refresh the list and pagination automatically; bulk unlink reports unlinked, skipped, and failed counts.
+* Fix: Filter tabs remove rows that no longer match the active view after edit, Smart Suggest Apply, recheck, or mark-as-OK (no manual F5).
+* Fix: Background check progress counts pending rows correctly (includes manual locks).
+* Fix: `save_post` rescans respect Settings when **Force scan all posts** is disabled.
+* Fix: Inline recheck/update passes `post_id` for relative internal URLs.
+* Fix: Auth-redirect detection uses stricter path/query rules (fewer false bot-wall positives).
+* Fix: Status code 0 on non-HTTP URLs shows as unknown, not broken.
+* Improvement: Catalan and Spanish translations updated for new strings.
+
+= 1.9.6 =
+* Fix: Transparent redirects (YouTube youtu.be→watch, trailing slash, CDN noise, etc.) are stored as OK and no longer fill the Redirect tab forever.
+* Fix: Automatic cleanup of existing transparent redirect rows on upgrade and after a full background check.
+
+= 1.9.5 =
+* New: Plain-text http(s) URLs in post content are scanned (same detection as comments — pasted URLs without `<a>` tags).
+* New: Gutenberg block attribute scanning via `parse_blocks()` (button, file, and other blocks that store URLs in JSON).
+* New: Navigation menu scanning — custom menu item URLs are checked during batch scans.
+* New: Responsive media scanning — `srcset`, `<picture>` / `<source>`, `video`, `audio`, `embed`, and `<object data>`.
+* New: Page-builder `data-url`, `data-href`, `data-link`, and related attributes in HTML and block markup.
+* New: Settings section **Extended scanning** to toggle each source (enabled by default on existing sites until you save Settings).
+* Fix: Smart Suggest follows the full redirect chain and proposes the real destination (e.g. `http://twitter.com/…` → `https://x.com/…`) instead of an intermediate HTTPS hop.
+* Fix: Smart Suggest **Apply** is shown only when the server confirms HTTP 2xx; 403/401/429 bot-blocks are informational (verify in a browser before editing).
+* Fix: Bulk unlink no longer modifies post content for navigation menu rows; menu Edit/Unlink actions are hidden (use **Appearance → Menus**).
+* Fix: Unlink removes `<img>` and `<iframe>` elements from post content, not only `<a>` tags.
+* Fix: Export CSV respects the per-post filter view; deleting all plugin records clears comment/menu scan cursors.
+* Fix: Saving a post rescans all link types in that post even when optional scanners are disabled in Settings.
+* Fix: Protocol-relative redirect URLs (`//cdn…`) are resolved correctly during HTTP checks.
+* Fix: Ignored URLs show a neutral **Skipped** badge instead of broken styling.
+* Fix: Live dashboard counts refresh after row actions; filter tabs keep locale number formatting.
+* Fix: Comment plain-text URL unlink; suggestion panel close button; duplicate suggestion panels.
+* Fix: YouTube `youtu.be` → `watch` treated as a transparent redirect (same video).
+* Fix: Recheck updates redirect sub-line and manual-lock badge without reload; **Mark as OK** keeps row actions.
+* Fix: Background check re-enables **Check now** if progress polling fails.
+* Improvement: Catalan and Spanish translations updated for new strings.
+
+= 1.9.4 =
+* Fix: Comment scan now detects plain-text http(s) URLs in comment bodies (not only `<a href>` links), so broken links like pasted URLs are found and checked.
+* Improvement: Relative and root-relative internal links (e.g. `/other-post/`) are resolved to the full site URL before HTTP checks, so links between articles on the same WordPress site are verified correctly (including deleted targets returning 404).
+* Improvement: Edit/Unlink and stale-link cleanup recognise the same URL whether it is stored or written as a relative or absolute href.
+* Fix: Redirect chains that end on an error page (for example 301 to www then 404) are stored as broken with the final status; they are no longer treated as a successful redirect with a misleading suggestion target.
+* Improvement: Smart suggestions skip misleading www-only or HTTP-only “fixes”; Apply is shown only for actionable alternatives.
+* Improvement: Broken-link notification emails are HTML with a TSO Link Inspector header, clickable URLs, and a button to open the inspector.
+* Improvement: Removed legacy migration code (old checker table and `tso_lc_*` options).
+* Fix: Dashboard stats query (`get_stats`) is cached per request (no duplicate SQL on admin load).
+* Fix: Frontend `rel="nofollow"` for broken links caches broken URLs per post (no duplicate SQL when `the_content` and `wp_trim_excerpt` run multiple times).
+* Fix: PHP 8.1+ deprecation on the hidden Settings screen (`strip_tags(null)` in admin-header).
+* Improvement: Tested up to WordPress 7.0.
+
 = 1.9.3 =
 * Security: Block SSRF targets in the HTTP checker (private/reserved IPs, unsafe hosts, redirect chains) using `wp_http_validate_url`, DNS resolution checks, and `reject_unsafe_urls`.
 * Security: Validate edited URLs with `esc_url_raw()` and the same safety rules (public `http`/`https` only).
 * Security: Escape admin JavaScript output for smart suggestions and diagnostics (XSS hardening).
 * Fix: Apply the ignore list during scans and HTTP checks (domains/prefixes in Settings are now honored).
-* Improvement: Relative and root-relative internal links (e.g. `/other-post/`) are resolved to the full site URL before HTTP checks, so links between articles on the same WordPress site are verified correctly (including deleted targets returning 404).
-* Improvement: Edit/Unlink and stale-link cleanup recognise the same URL whether it is stored or written as a relative or absolute href.
-* Fix: Redirect chains that end on an error page (for example 301 to www then 404) are stored as broken with the final status; they are no longer treated as a successful redirect with a misleading suggestion target.
-* Improvement: Smart suggestions skip instant redirect targets that only toggle www/non-www on HTTPS (or HTTP) when the row is already broken—no “Apply” for a URL that remains a 404.
-* Improvement: Smart suggestions no longer offer meaningless HTTP-only www/non-www swaps when no HTTPS exists (avoids a green-looking “fix” that does not improve security).
-* Improvement: When there is no useful alternative for an HTTP-only link, the suggestion panel shows a clear warning notice instead of implying a positive change.
-* Improvement: The suggestion list only shows a green “OK” style and an Apply button when the suggested URL is considered actionable (not a hard error such as 404).
-* Improvement: Broken-link notification emails are sent as HTML with a TSO Link Inspector header, clickable broken URLs, article edit links, and a button to open the inspector.
 
 = 1.9.2 =
 * Fix: Plugin **Description** on the Plugins screen now translates to Catalan and Spanish when the site (or bundled language files) uses those locales.
@@ -214,8 +271,20 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 
 == Upgrade Notice ==
 
+= 1.9.7 =
+Recommended update. Extended scanning (widgets, terms, FSE, meta plain URLs, third-party API), many admin and redirect fixes, and automatic list refresh after bulk actions. Run **Scan now** after updating, then **Check now** once to normalize existing rows.
+
+= 1.9.6 =
+Recommended update. YouTube and other harmless redirects no longer clutter the Redirect filter; run **Check now** once after updating to normalize existing rows.
+
+= 1.9.5 =
+Recommended update. Scans many more link sources (plain-text URLs, Gutenberg JSON, menus, srcset/picture, data attributes), safer Smart Suggest (Apply only on confirmed 2xx), and numerous admin/HTTP fixes. Run **Scan now** after updating.
+
+= 1.9.4 =
+Recommended update. Internal link checks, redirect-to-404 handling, smarter suggestions, HTML broken-link emails, performance fix, Settings screen PHP 8.1 fix, WordPress 7.0 tested.
+
 = 1.9.3 =
-Recommended security and reliability update: SSRF/XSS hardening, ignore list on scans, correct internal link checks, redirect-to-404 handling, and smarter URL suggestions (no misleading “Apply” for dead www/HTTP-only variants).
+Recommended security update. Hardens HTTP checks against SSRF, validates edited URLs, fixes XSS in admin suggestion UI, and applies the ignore list during scans.
 
 = 1.9.2 =
 Recommended update. Fixes the plugin description not appearing in Catalan or Spanish on the Plugins screen; updates bundled translations.

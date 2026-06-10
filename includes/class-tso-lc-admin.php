@@ -30,6 +30,9 @@ class TSOLIIN_Admin {
 	/** @var string */
 	private $page_hook = '';
 
+	/** @var string */
+	private $settings_page_hook = '';
+
 	public function __construct( TSOLIIN_DB $db, TSOLIIN_Scanner $scanner, TSOLIIN_HTTP $http, TSOLIIN_Cron $cron ) {
 		$this->db      = $db;
 		$this->scanner = $scanner;
@@ -38,6 +41,8 @@ class TSOLIIN_Admin {
 
 		add_action( 'admin_menu',             array( $this, 'register_menu' ) );
 		add_action( 'admin_enqueue_scripts',  array( $this, 'enqueue_assets' ) );
+		add_filter( 'admin_page_title',         array( $this, 'filter_settings_admin_page_title' ) );
+		add_filter( 'plugin_row_meta',          array( $this, 'filter_plugin_row_meta' ), 10, 2 );
 
 		add_action( 'wp_ajax_tsoliin_scan_batch',    array( $this, 'ajax_scan_batch' ) );
 		add_action( 'wp_ajax_tsoliin_recheck',       array( $this, 'ajax_recheck' ) );
@@ -49,6 +54,7 @@ class TSOLIIN_Admin {
 		add_action( 'wp_ajax_tsoliin_start_bg_check',  array( $this, 'ajax_start_bg_check' ) );
 		add_action( 'wp_ajax_tsoliin_stop_bg_check',   array( $this, 'ajax_stop_bg_check' ) );
 		add_action( 'wp_ajax_tsoliin_check_progress',  array( $this, 'ajax_check_progress' ) );
+		add_action( 'wp_ajax_tsoliin_get_stats',       array( $this, 'ajax_get_stats' ) );
 		add_action( 'wp_ajax_tsoliin_smart_suggest',   array( $this, 'ajax_smart_suggest' ) );
 		add_action( 'wp_ajax_tsoliin_diagnose',        array( $this, 'ajax_diagnose' ) );
 		add_action( 'wp_ajax_tsoliin_export_csv',      array( $this, 'ajax_export_csv' ) );
@@ -66,7 +72,7 @@ class TSOLIIN_Admin {
 			'tso-link-inspector',
 			array( $this, 'render_main_page' )
 		);
-		add_submenu_page(
+		$this->settings_page_hook = add_submenu_page(
 			'tools.php',
 			__( 'TSO Link Inspector - Settings', 'tso-link-inspector' ),
 			__( 'Settings', 'tso-link-inspector' ),
@@ -76,6 +82,66 @@ class TSOLIIN_Admin {
 		);
 		// Keep Settings accessible by URL but hidden from the Tools submenu.
 		remove_submenu_page( 'tools.php', 'tso-link-inspector-settings' );
+
+		if ( $this->settings_page_hook ) {
+			add_action( 'load-' . $this->settings_page_hook, array( $this, 'prepare_settings_screen' ) );
+		}
+	}
+
+	/**
+	 * Whether the current request is the plugin settings screen.
+	 *
+	 * @return bool
+	 */
+	private function is_settings_screen() {
+		global $pagenow;
+		if ( ! is_admin() || 'tools.php' !== $pagenow ) {
+			return false;
+		}
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		return isset( $_GET['page'] ) && 'tso-link-inspector-settings' === sanitize_key( wp_unslash( $_GET['page'] ) );
+	}
+
+	/**
+	 * Ensure admin header receives a string title (avoids strip_tags(null) on hidden submenu pages).
+	 *
+	 * @param string|null $page_title Title from core.
+	 * @return string
+	 */
+	public function filter_settings_admin_page_title( $page_title ) {
+		if ( ! $this->is_settings_screen() ) {
+			return is_string( $page_title ) ? $page_title : '';
+		}
+		return __( 'TSO Link Inspector - Settings', 'tso-link-inspector' );
+	}
+
+	/**
+	 * Add a Donate link on the Plugins screen.
+	 *
+	 * @param string[] $links Plugin row links.
+	 * @param string   $file  Plugin basename.
+	 * @return string[]
+	 */
+	public function filter_plugin_row_meta( $links, $file ) {
+		if ( plugin_basename( TSOLIIN_PLUGIN_FILE ) !== $file ) {
+			return $links;
+		}
+		$links[] = sprintf(
+			'<a href="%1$s" target="_blank" rel="noopener noreferrer">%2$s</a>',
+			esc_url( TSOLIIN_Support::get_kofi_donate_url() ),
+			esc_html( TSOLIIN_Support::get_donate_link_label() )
+		);
+		return $links;
+	}
+
+	/**
+	 * Set globals before admin-header.php runs on the hidden settings page.
+	 */
+	public function prepare_settings_screen() {
+		global $title, $parent_file, $submenu_file;
+		$title        = __( 'TSO Link Inspector - Settings', 'tso-link-inspector' );
+		$parent_file  = 'tools.php';
+		$submenu_file = 'tso-link-inspector';
 	}
 
 	// =========================================================================
@@ -92,9 +158,19 @@ class TSOLIIN_Admin {
 
 		$bg = $this->cron->get_bg_progress();
 
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$view_post_id = isset( $_GET['post_id'] ) ? absint( $_GET['post_id'] ) : 0;
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$list_filter  = isset( $_GET['filter'] ) ? sanitize_key( wp_unslash( $_GET['filter'] ) ) : 'all';
+		if ( ! in_array( $list_filter, $this->get_allowed_list_filters(), true ) ) {
+			$list_filter = 'all';
+		}
+
 		wp_localize_script( 'tsoliin-admin', 'tsoliinData', array(
 			'ajaxUrl'    => admin_url( 'admin-ajax.php' ),
 			'nonce'      => wp_create_nonce( 'tsoliin_action' ),
+			'viewPostId' => $view_post_id,
+			'listFilter' => $list_filter,
 			'totalPosts' => $this->scanner->get_total_posts(),
 			'batchSize'  => TSOLIIN_BATCH_SIZE,
 			'bgRunning'  => $bg['running'] ? 1 : 0,
@@ -112,6 +188,7 @@ class TSOLIIN_Admin {
 				'recheck'       => __( 'Recheck', 'tso-link-inspector' ),
 				'saving'        => __( 'Saving...', 'tso-link-inspector' ),
 				'urlSaved'      => __( 'URL updated successfully.', 'tso-link-inspector' ),
+				'urlUpdated'    => __( 'URL updated:', 'tso-link-inspector' ),
 				'notBrokenDone' => __( 'Marked as OK.', 'tso-link-inspector' ),
 				'diagnosi'      => __( 'Diagnostics', 'tso-link-inspector' ),
 				'diagChecking'  => __( 'Running diagnostics...', 'tso-link-inspector' ),
@@ -123,6 +200,9 @@ class TSOLIIN_Admin {
 				'applyUrl'      => __( 'Apply', 'tso-link-inspector' ),
 				'itemsChecked'  => __( 'links rechecked.', 'tso-link-inspector' ),
 				'itemsUnlinked' => __( 'links unlinked.', 'tso-link-inspector' ),
+				'itemsSkipped'  => __( 'rows skipped (menu/widget/term).', 'tso-link-inspector' ),
+				'itemsFailed'   => __( 'requests failed.', 'tso-link-inspector' ),
+				'unlinking'     => __( 'Unlinking…', 'tso-link-inspector' ),
 				'confirmUnlink' => __( 'Are you sure? The text will remain but the link will be removed.', 'tso-link-inspector' ),
 				'confirmDelete' => __( 'Delete this record from the list. The post will not be changed. Continue?', 'tso-link-inspector' ),
 				'error'         => __( 'An error occurred.', 'tso-link-inspector' ),
@@ -132,6 +212,8 @@ class TSOLIIN_Admin {
 				'rechecking'    => __( 'Rechecking…', 'tso-link-inspector' ),
 				'urlRequired'   => __( 'Please enter a valid URL.', 'tso-link-inspector' ),
 				'unlink'        => __( 'Unlink', 'tso-link-inspector' ),
+				'closePanel'    => __( 'Close', 'tso-link-inspector' ),
+				'actionUrlWarn' => __( 'This link ends your WordPress session. Open it anyway?', 'tso-link-inspector' ),
 			),
 		) );
 	}
@@ -167,6 +249,7 @@ class TSOLIIN_Admin {
 
 		echo '<div class="wrap tsoliin-wrap">';
 
+		echo '<div class="tsoliin-page-head">';
 		echo '<h1 class="wp-heading-inline">';
 		echo '<span class="dashicons dashicons-admin-links tsoliin-title-icon"></span> ';
 		if ( $view_post ) {
@@ -177,6 +260,8 @@ class TSOLIIN_Admin {
 			echo esc_html__( 'TSO Link Inspector', 'tso-link-inspector' );
 		}
 		echo '</h1>';
+		TSOLIIN_Support::render_donate_button();
+		echo '</div>';
 		echo '<hr class="wp-header-end">';
 
 
@@ -297,7 +382,15 @@ class TSOLIIN_Admin {
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$export_filter = isset( $_REQUEST['filter'] ) ? sanitize_key( wp_unslash( $_REQUEST['filter'] ) ) : 'all';
 		$export_nonce  = wp_create_nonce( 'tsoliin_action' );
-		echo '<a href="' . esc_url( admin_url( 'admin-ajax.php?action=tsoliin_export_csv&filter=' . $export_filter . '&nonce=' . $export_nonce ) ) . '" class="button button-secondary" id="tsoliin-export-csv">';
+		$export_args   = array(
+			'action' => 'tsoliin_export_csv',
+			'filter' => $export_filter,
+			'nonce'  => $export_nonce,
+		);
+		if ( $view_post_id ) {
+			$export_args['post_id'] = $view_post_id;
+		}
+		echo '<a href="' . esc_url( add_query_arg( $export_args, admin_url( 'admin-ajax.php' ) ) ) . '" class="button button-secondary" id="tsoliin-export-csv">';
 		echo '<span class="dashicons dashicons-download"></span> ';
 		echo esc_html__( 'Export CSV', 'tso-link-inspector' );
 		echo '</a>';
@@ -346,7 +439,7 @@ class TSOLIIN_Admin {
 		echo '<div class="tsoliin-modal__overlay"></div>';
 		echo '<div class="tsoliin-modal__content">';
 		echo '<h2>' . esc_html__( 'Edit URL', 'tso-link-inspector' ) . '</h2>';
-		echo '<p><label>' . esc_html__( 'URL actual:', 'tso-link-inspector' ) . '</label><code id="tsoliin-modal-old-url"></code></p>';
+		echo '<p><label>' . esc_html__( 'Current URL:', 'tso-link-inspector' ) . '</label><code id="tsoliin-modal-old-url"></code></p>';
 		echo '<p><label for="tsoliin-new-url">' . esc_html__( 'New URL:', 'tso-link-inspector' ) . '</label>';
 		echo '<input type="url" id="tsoliin-new-url" class="widefat" placeholder="https://" /></p>';
 		echo '<div class="tsoliin-modal__actions">';
@@ -427,6 +520,7 @@ class TSOLIIN_Admin {
 					$wpdb->query( 'TRUNCATE TABLE `' . esc_sql( $table ) . '`' ); // Table name validated against get_table() on line above.
 					// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 				}
+				$this->clear_scan_progress_options();
 				echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Records deleted.', 'tso-link-inspector' ) . '</p></div>';
 			}
 		}
@@ -437,6 +531,11 @@ class TSOLIIN_Admin {
 		$scan_images = ! empty( $s['scan_images'] );
 		$scan_iframes= ! empty( $s['scan_iframes'] );
 		$scan_comments=! empty( $s['scan_comments'] );
+		$scan_plain_urls   = array_key_exists( 'scan_plain_urls', $s ) ? ! empty( $s['scan_plain_urls'] ) : true;
+		$scan_block_attrs  = array_key_exists( 'scan_block_attrs', $s ) ? ! empty( $s['scan_block_attrs'] ) : true;
+		$scan_menus        = array_key_exists( 'scan_menus', $s ) ? ! empty( $s['scan_menus'] ) : true;
+		$scan_srcset       = array_key_exists( 'scan_srcset', $s ) ? ! empty( $s['scan_srcset'] ) : true;
+		$scan_data_attrs   = array_key_exists( 'scan_data_attrs', $s ) ? ! empty( $s['scan_data_attrs'] ) : true;
 		$recheck_days= isset( $s['recheck_days'] ) ? absint( $s['recheck_days'] ) : 7;
 		$allowed_email_modes = array( 'none', 'immediate', 'digest_7', 'digest_15', 'digest_30' );
 		$broken_email_mode   = isset( $s['broken_email_mode'] ) ? sanitize_key( (string) $s['broken_email_mode'] ) : 'none';
@@ -457,6 +556,7 @@ class TSOLIIN_Admin {
 		$all_pts     = get_post_types( array( 'public' => true ), 'objects' );
 
 		echo '<div class="wrap">';
+		echo '<div class="tsoliin-page-head">';
 		echo '<h1>';
 		echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector' ) ) . '" class="tsoliin-back-link">';
 		echo '<span class="dashicons dashicons-arrow-left-alt"></span> ';
@@ -465,6 +565,8 @@ class TSOLIIN_Admin {
 		echo ' <span class="tsoliin-breadcrumb-sep">&#8250;</span> ';
 		echo esc_html__( 'Settings', 'tso-link-inspector' );
 		echo '</h1>';
+		TSOLIIN_Support::render_donate_button();
+		echo '</div>';
 
 		echo '<form method="post" action="">';
 		wp_nonce_field( 'tsoliin_save_settings', 'tsoliin_settings_nonce' );
@@ -496,6 +598,38 @@ class TSOLIIN_Admin {
 		echo '<tr><th scope="row">' . esc_html__( 'Comments', 'tso-link-inspector' ) . '</th><td>';
 		echo '<label><input type="checkbox" name="tsoliin_scan_comments" value="1" ' . checked( $scan_comments, true, false ) . ' /> ';
 		echo esc_html__( 'Scan approved comments', 'tso-link-inspector' ) . '</label></td></tr>';
+
+		// Extended content scanning (phase 1).
+		echo '<tr><th scope="row">' . esc_html__( 'Extended scanning', 'tso-link-inspector' ) . '</th><td>';
+		echo '<label style="display:block;margin-bottom:5px;"><input type="checkbox" name="tsoliin_scan_plain_urls" value="1" ' . checked( $scan_plain_urls, true, false ) . ' /> ';
+		echo esc_html__( 'Plain-text URLs in post content (without <a> tags)', 'tso-link-inspector' ) . '</label>';
+		echo '<label style="display:block;margin-bottom:5px;"><input type="checkbox" name="tsoliin_scan_block_attrs" value="1" ' . checked( $scan_block_attrs, true, false ) . ' /> ';
+		echo esc_html__( 'Gutenberg block attributes (parse_blocks JSON)', 'tso-link-inspector' ) . '</label>';
+		echo '<label style="display:block;margin-bottom:5px;"><input type="checkbox" name="tsoliin_scan_menus" value="1" ' . checked( $scan_menus, true, false ) . ' /> ';
+		echo esc_html__( 'Navigation menus (custom menu links)', 'tso-link-inspector' ) . '</label>';
+		echo '<label style="display:block;margin-bottom:5px;"><input type="checkbox" name="tsoliin_scan_srcset" value="1" ' . checked( $scan_srcset, true, false ) . ' /> ';
+		echo esc_html__( 'Responsive media (srcset, picture, video, audio, embed)', 'tso-link-inspector' ) . '</label>';
+		echo '<label style="display:block;margin-bottom:5px;"><input type="checkbox" name="tsoliin_scan_data_attrs" value="1" ' . checked( $scan_data_attrs, true, false ) . ' /> ';
+		echo esc_html__( 'Page builder data-* link attributes', 'tso-link-inspector' ) . '</label>';
+		echo '<p class="description">' . esc_html__( 'These sources are enabled by default. Uncheck any you want to skip during scans.', 'tso-link-inspector' ) . '</p>';
+		echo '</td></tr>';
+
+		// Phase 2 extended sources.
+		$scan_widgets    = array_key_exists( 'scan_widgets', $s ) ? ! empty( $s['scan_widgets'] ) : true;
+		$scan_terms      = array_key_exists( 'scan_terms', $s ) ? ! empty( $s['scan_terms'] ) : true;
+		$scan_fse        = array_key_exists( 'scan_fse', $s ) ? ! empty( $s['scan_fse'] ) : true;
+		$scan_meta_plain = array_key_exists( 'scan_meta_plain', $s ) ? ! empty( $s['scan_meta_plain'] ) : true;
+		echo '<tr><th scope="row">' . esc_html__( 'Extended sources (Phase 2)', 'tso-link-inspector' ) . '</th><td>';
+		echo '<label style="display:block;margin-bottom:5px;"><input type="checkbox" name="tsoliin_scan_widgets" value="1" ' . checked( $scan_widgets, true, false ) . ' /> ';
+		echo esc_html__( 'Widget sidebars (Text, Custom HTML, block widgets)', 'tso-link-inspector' ) . '</label>';
+		echo '<label style="display:block;margin-bottom:5px;"><input type="checkbox" name="tsoliin_scan_terms" value="1" ' . checked( $scan_terms, true, false ) . ' /> ';
+		echo esc_html__( 'Taxonomy term descriptions (categories, tags, etc.)', 'tso-link-inspector' ) . '</label>';
+		echo '<label style="display:block;margin-bottom:5px;"><input type="checkbox" name="tsoliin_scan_fse" value="1" ' . checked( $scan_fse, true, false ) . ' /> ';
+		echo esc_html__( 'Site Editor templates, template parts, and reusable blocks', 'tso-link-inspector' ) . '</label>';
+		echo '<label style="display:block;margin-bottom:5px;"><input type="checkbox" name="tsoliin_scan_meta_plain" value="1" ' . checked( $scan_meta_plain, true, false ) . ' /> ';
+		echo esc_html__( 'Plain-text URLs inside custom fields (requires ACF/Meta scan above)', 'tso-link-inspector' ) . '</label>';
+		echo '<p class="description">' . esc_html__( 'Third-party plugins can register extra sources with the tsoliin_register_link_source() API.', 'tso-link-inspector' ) . '</p>';
+		echo '</td></tr>';
 
 		// Scan meta.
 		echo '<tr><th scope="row">' . esc_html__( 'ACF / Meta custom fields', 'tso-link-inspector' ) . '</th><td>';
@@ -615,6 +749,15 @@ class TSOLIIN_Admin {
 		$scan_images  = ! empty( $_POST['tsoliin_scan_images'] );
 		$scan_iframes = ! empty( $_POST['tsoliin_scan_iframes'] );
 		$scan_comments= ! empty( $_POST['tsoliin_scan_comments'] );
+		$scan_plain_urls   = ! empty( $_POST['tsoliin_scan_plain_urls'] );
+		$scan_block_attrs  = ! empty( $_POST['tsoliin_scan_block_attrs'] );
+		$scan_menus        = ! empty( $_POST['tsoliin_scan_menus'] );
+		$scan_srcset       = ! empty( $_POST['tsoliin_scan_srcset'] );
+		$scan_data_attrs   = ! empty( $_POST['tsoliin_scan_data_attrs'] );
+		$scan_widgets      = ! empty( $_POST['tsoliin_scan_widgets'] );
+		$scan_terms        = ! empty( $_POST['tsoliin_scan_terms'] );
+		$scan_fse          = ! empty( $_POST['tsoliin_scan_fse'] );
+		$scan_meta_plain   = ! empty( $_POST['tsoliin_scan_meta_plain'] );
 		$allowed_email_modes = array( 'none', 'immediate', 'digest_7', 'digest_15', 'digest_30' );
 		$broken_email_mode   = 'none';
 		if ( isset( $_POST['tsoliin_broken_email_mode'] ) ) {
@@ -673,6 +816,15 @@ class TSOLIIN_Admin {
 			'scan_images'       => $scan_images,
 			'scan_iframes'      => $scan_iframes,
 			'scan_comments'     => $scan_comments,
+			'scan_plain_urls'   => $scan_plain_urls,
+			'scan_block_attrs'  => $scan_block_attrs,
+			'scan_menus'        => $scan_menus,
+			'scan_srcset'       => $scan_srcset,
+			'scan_data_attrs'   => $scan_data_attrs,
+			'scan_widgets'      => $scan_widgets,
+			'scan_terms'        => $scan_terms,
+			'scan_fse'          => $scan_fse,
+			'scan_meta_plain'   => $scan_meta_plain,
 			'broken_email_mode' => $broken_email_mode,
 			'broken_email_to'   => $broken_email_to,
 			'meta_exclude_keys' => $meta_keys,
@@ -691,11 +843,140 @@ class TSOLIIN_Admin {
 	// AJAX HANDLERS
 	// =========================================================================
 
+	/**
+	 * Build status column HTML (matches list table output for live AJAX updates).
+	 *
+	 * @param int    $code          HTTP status code.
+	 * @param int    $is_broken     1 if broken.
+	 * @param string $link_url      Checked URL.
+	 * @param string $redirect_url  Redirect destination if any.
+	 * @param bool   $user_verified Manual lock flag.
+	 * @return string
+	 */
+	private static function format_status_column_html( $code, $is_broken, $link_url, $redirect_url = '', $user_verified = false ) {
+		$code          = (int) $code;
+		$is_broken     = (int) $is_broken;
+		$link_url      = (string) $link_url;
+		$redirect_url  = (string) $redirect_url;
+		$user_verified = (bool) $user_verified;
+		$class         = TSOLIIN_HTTP::status_class( $code, $is_broken, $link_url );
+		$label         = TSOLIIN_HTTP::status_label( $code, $link_url );
+		$html          = '';
+		if ( $user_verified ) {
+			$html .= '<span class="tsoliin-verified-badge" title="' . esc_attr__( 'Marked OK by you. Re-checks keep this unless the URL fails. Edit the URL in the post to clear.', 'tso-link-inspector' ) . '">&#128274; </span>';
+		}
+		$html .= '<span class="tsoliin-status ' . esc_attr( $class ) . '">';
+		if ( $code > 0 ) {
+			$html .= esc_html( (string) $code ) . ' ';
+		}
+		$html .= esc_html( $label ) . '</span>';
+		if ( '' !== $redirect_url && rtrim( $link_url, '/' ) !== rtrim( $redirect_url, '/' ) ) {
+			$rdisp = strlen( $redirect_url ) > 40 ? substr( $redirect_url, 0, 37 ) . '...' : $redirect_url;
+			$html .= '<br><small><a href="' . esc_url( $redirect_url ) . '" title="' . esc_attr( $redirect_url ) . '" target="_blank" rel="noopener noreferrer">' . esc_html( $rdisp ) . '</a></small>';
+		}
+		return $html;
+	}
+
+	private function clear_scan_progress_options() {
+		delete_option( 'tsoliin_comment_scan_after_id' );
+		delete_option( 'tsoliin_menu_scan_after_id' );
+		delete_option( 'tsoliin_widget_scan_after_index' );
+		delete_option( 'tsoliin_term_scan_after_id' );
+		delete_option( 'tsoliin_fse_scan_after_id' );
+		delete_option( 'tsoliin_total_posts_scanned' );
+		delete_option( 'tsoliin_last_full_scan' );
+		$this->cron->stop_bg_check();
+	}
+
+	/**
+	 * Whether a link row cannot be edited or unlinked from this plugin.
+	 *
+	 * @param object $link DB link row.
+	 * @return bool
+	 */
+	private function is_non_editable_source( $link ) {
+		return '' !== $this->get_non_editable_source_message( $link );
+	}
+
+	/**
+	 * User-facing message when Edit/Unlink is blocked for external sources.
+	 *
+	 * @param object $link DB link row.
+	 * @return string Empty when the row is editable here.
+	 */
+	private function get_non_editable_source_message( $link ) {
+		$type = ( $link && isset( $link->link_type ) ) ? (string) $link->link_type : 'link';
+		switch ( $type ) {
+			case 'menu':
+				return __( 'Menu links must be edited under Appearance > Menus.', 'tso-link-inspector' );
+			case 'widget':
+				return __( 'Widget links must be edited under Appearance > Widgets.', 'tso-link-inspector' );
+			case 'term':
+				return __( 'Term description links must be edited in the taxonomy editor.', 'tso-link-inspector' );
+			default:
+				if ( $link && empty( $link->post_id ) && 'comment' !== $type ) {
+					return __( 'This link must be edited at its original source.', 'tso-link-inspector' );
+				}
+				return '';
+		}
+	}
+
 	private function check_nonce_and_cap() {
 		check_ajax_referer( 'tsoliin_action', 'nonce' );
 		if ( ! current_user_can( 'manage_options' ) ) {
 			wp_send_json_error( array( 'message' => __( 'Insufficient permissions.', 'tso-link-inspector' ) ), 403 );
 		}
+	}
+
+	/**
+	 * Allowed list-table filter keys.
+	 *
+	 * @return string[]
+	 */
+	private function get_allowed_list_filters() {
+		return array( 'all', 'broken', 'redirect', 'ok', 'unchecked', 'http_insecure', 'manual_locked' );
+	}
+
+	/**
+	 * Sanitize a list-table filter key.
+	 *
+	 * @param string $filter Raw filter.
+	 * @return string
+	 */
+	private function sanitize_list_filter( $filter ) {
+		$filter = sanitize_key( (string) $filter );
+		return in_array( $filter, $this->get_allowed_list_filters(), true ) ? $filter : 'all';
+	}
+
+	/**
+	 * Active list filter from AJAX POST or admin GET.
+	 *
+	 * @return string
+	 */
+	private function get_list_filter_from_request() {
+		if ( isset( $_POST['list_filter'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Missing
+			return $this->sanitize_list_filter( wp_unslash( $_POST['list_filter'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		}
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		if ( isset( $_GET['filter'] ) ) {
+			return $this->sanitize_list_filter( wp_unslash( $_GET['filter'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		}
+		return 'all';
+	}
+
+	/**
+	 * Add matches_filter for the current list tab to an AJAX payload.
+	 *
+	 * @param array       $payload Response data.
+	 * @param object|null $link    Link row after the mutation.
+	 * @return array
+	 */
+	private function append_filter_match( array $payload, $link ) {
+		$filter = $this->get_list_filter_from_request();
+		$payload['matches_filter'] = ( 'all' === $filter || ! $link )
+			? true
+			: $this->db->link_matches_filter( $link, $filter );
+		return $payload;
 	}
 
 	public function ajax_scan_batch() {
@@ -731,14 +1012,22 @@ class TSOLIIN_Admin {
 		// Keep user_verified: update_check_result() still runs HTTP and will override if the link is actually broken.
 		$r = $this->http->check( $link->link_url, (int) $link->post_id );
 		$this->db->update_check_result( $link_id, $r['status_code'], $r['redirect_url'], $r['is_broken'] );
-		wp_send_json_success( array(
+		$updated = $this->db->get_link( $link_id );
+		wp_send_json_success( $this->append_filter_match( array(
 			'status_code'  => $r['status_code'],
 			'is_broken'    => $r['is_broken'],
 			'redirect_url' => $r['redirect_url'],
 			'label'        => TSOLIIN_HTTP::status_label( $r['status_code'], (string) $link->link_url ),
 			'css_class'    => TSOLIIN_HTTP::status_class( $r['status_code'], $r['is_broken'], (string) $link->link_url ),
+			'status_html'  => self::format_status_column_html(
+				$r['status_code'],
+				$r['is_broken'],
+				(string) $link->link_url,
+				$r['redirect_url'],
+				$updated && ! empty( $updated->user_verified )
+			),
 			'last_checked' => wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ) ),
-		) );
+		), $updated ) );
 	}
 
 	public function ajax_update_link() {
@@ -756,6 +1045,11 @@ class TSOLIIN_Admin {
 
 		$link_type = isset( $link->link_type ) ? (string) $link->link_type : 'link';
 
+		$blocked = $this->get_non_editable_source_message( $link );
+		if ( '' !== $blocked ) {
+			wp_send_json_error( array( 'message' => $blocked ) );
+		}
+
 		if ( 'comment' === $link_type ) {
 			// For comment links: update the comment author URL or comment content.
 			$done = $this->update_url_in_comment( $link, $new_url );
@@ -772,15 +1066,16 @@ class TSOLIIN_Admin {
 		}
 
 		$this->db->update_link_url( $link_id, $new_url );
-		$r = $this->http->check( $new_url );
+		$r = $this->http->check( $new_url, (int) $link->post_id );
 		$this->db->update_check_result( $link_id, $r['status_code'], $r['redirect_url'], $r['is_broken'] );
-		wp_send_json_success( array(
+		$updated = $this->db->get_link( $link_id );
+		wp_send_json_success( $this->append_filter_match( array(
 			'new_url'     => $new_url,
 			'status_code' => $r['status_code'],
 			'is_broken'   => $r['is_broken'],
 			'label'       => TSOLIIN_HTTP::status_label( $r['status_code'], $new_url ),
 			'css_class'   => TSOLIIN_HTTP::status_class( $r['status_code'], $r['is_broken'], $new_url ),
-		) );
+		), $updated ) );
 	}
 
 	/**
@@ -850,10 +1145,15 @@ class TSOLIIN_Admin {
 		}
 		$type = isset( $link->link_type ) ? (string) $link->link_type : 'link';
 
+		$blocked = $this->get_non_editable_source_message( $link );
+		if ( '' !== $blocked ) {
+			wp_send_json_error( array( 'message' => $blocked ) );
+		}
+
 		if ( 'comment' === $type ) {
 			$done = $this->unlink_comment( $link );
 		} else {
-			$done = $this->scanner->unlink_in_post( (int) $link->post_id, $link->link_url );
+			$done = $this->scanner->unlink_in_post( (int) $link->post_id, $link->link_url, $type );
 		}
 
 		if ( ! $done ) {
@@ -908,13 +1208,19 @@ class TSOLIIN_Admin {
 		if ( ! $link_id ) {
 			wp_send_json_error( array( 'message' => __( 'Invalid ID.', 'tso-link-inspector' ) ) );
 		}
+		$link = $this->db->get_link( $link_id );
+		if ( ! $link ) {
+			wp_send_json_error( array( 'message' => __( 'Link not found.', 'tso-link-inspector' ) ) );
+		}
 		$this->db->mark_as_not_broken( $link_id );
-		wp_send_json_success( array(
+		$updated = $this->db->get_link( $link_id );
+		wp_send_json_success( $this->append_filter_match( array(
 			'message'     => __( 'Marked as OK.', 'tso-link-inspector' ),
 			'css_class'   => 'tsoliin-status--ok',
 			'label'       => __( 'OK (manual)', 'tso-link-inspector' ),
 			'status_code' => 200,
-		) );
+			'status_html' => self::format_status_column_html( 200, 0, (string) $link->link_url, '', true ),
+		), $updated ) );
 	}
 
 	public function ajax_bulk_action() {
@@ -945,14 +1251,23 @@ class TSOLIIN_Admin {
 				// Keep user_verified: update_check_result() still runs HTTP and will override if the link is actually broken.
 				$r = $this->http->check( $link->link_url, (int) $link->post_id );
 				$this->db->update_check_result( $link_id, $r['status_code'], $r['redirect_url'], $r['is_broken'] );
+				$updated  = $this->db->get_link( $link_id );
 				$row_data = array_merge( $row_data, array(
 					'status_code'  => $r['status_code'],
 					'is_broken'    => $r['is_broken'],
 					'redirect_url' => $r['redirect_url'],
 					'label'        => TSOLIIN_HTTP::status_label( $r['status_code'], (string) $link->link_url ),
 					'css_class'    => TSOLIIN_HTTP::status_class( $r['status_code'], $r['is_broken'], (string) $link->link_url ),
+					'status_html'  => self::format_status_column_html(
+						$r['status_code'],
+						$r['is_broken'],
+						(string) $link->link_url,
+						$r['redirect_url'],
+						$updated && ! empty( $updated->user_verified )
+					),
 					'last_checked' => wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ) ),
 				) );
+				$row_data = $this->append_filter_match( $row_data, $updated );
 			}
 			wp_send_json_success( array(
 				'done'       => ( $index + 1 ) >= $total,
@@ -975,11 +1290,15 @@ class TSOLIIN_Admin {
 			$link    = $this->db->get_link( $link_id );
 			$type    = ( $link && isset( $link->link_type ) ) ? (string) $link->link_type : 'link';
 			$ok      = false;
+			$skipped = false;
 			if ( $link ) {
-				if ( 'comment' === $type ) {
+				if ( $this->is_non_editable_source( $link ) ) {
+					$ok      = false;
+					$skipped = true;
+				} elseif ( 'comment' === $type ) {
 					$ok = $this->unlink_comment( $link );
 				} else {
-					$ok = $this->scanner->unlink_in_post( (int) $link->post_id, $link->link_url );
+					$ok = $this->scanner->unlink_in_post( (int) $link->post_id, $link->link_url, $type );
 				}
 				if ( $ok ) {
 					$this->db->delete_link( $link_id );
@@ -993,6 +1312,7 @@ class TSOLIIN_Admin {
 				'next_index' => $index + 1,
 				'link_id'    => $link_id,
 				'unlinked'   => $ok,
+				'skipped'    => $skipped,
 				/* translators: 1: current, 2: total */
 				'message'    => sprintf( __( 'Unlinking %1$d of %2$d...', 'tso-link-inspector' ), $index + 1, $total ),
 			) );
@@ -1039,7 +1359,7 @@ class TSOLIIN_Admin {
 		$this->check_nonce_and_cap();
 		$bg    = $this->cron->get_bg_progress();
 		$stats = $this->db->get_stats();
-		$done  = ! $bg['running'] && $bg['total'] > 0 && 0 === $this->db->get_unchecked_count();
+		$done  = ! $bg['running'] && $bg['total'] > 0 && empty( $this->db->get_links_batch_for_check( 1 ) );
 		wp_send_json_success( array(
 			'running' => $bg['running'],
 			'checked' => $bg['checked'],
@@ -1052,6 +1372,25 @@ class TSOLIIN_Admin {
 		) );
 	}
 
+	/**
+	 * Return dashboard filter tab + stat card counts (optionally scoped to one post).
+	 */
+	public function ajax_get_stats() {
+		$this->check_nonce_and_cap();
+		$post_id = isset( $_POST['post_id'] ) ? absint( $_POST['post_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		$stats   = $post_id ? $this->db->get_stats_for_post( $post_id ) : $this->db->get_stats();
+		$display = array();
+		foreach ( $stats as $key => $value ) {
+			$display[ $key ] = number_format_i18n( (int) $value );
+		}
+		wp_send_json_success(
+			array(
+				'stats'   => $stats,
+				'display' => $display,
+			)
+		);
+	}
+
 	public function ajax_smart_suggest() {
 		$this->check_nonce_and_cap();
 		$link_id = isset( $_POST['link_id'] ) ? absint( $_POST['link_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
@@ -1062,6 +1401,7 @@ class TSOLIIN_Admin {
 
 		$suggestions  = array();
 		$seen_urls    = array( (string) $link->link_url );
+		$bot_blocked  = false;
 
 		// If the DB already has a known redirect_url, offer it as first (instant) suggestion — except when
 		// applying it would pin a “rolling release” download to one file version (handled as transparent redirect).
@@ -1079,13 +1419,29 @@ class TSOLIIN_Admin {
 					&& TSOLIIN_HTTP::is_http_same_resource_bar_www( $orig_abs, $rurl )
 				);
 			if ( ! $skip_redirect_suggest ) {
+				$r_dest       = $this->http->check( $rurl, (int) $link->post_id );
+				$sc           = (int) $r_dest['status_code'];
+				$display_code = $sc;
+				$reason       = __( 'Destination detected (re-checked now)', 'tso-link-inspector' );
+				if ( TSOLIIN_HTTP::is_bot_block_status( $sc ) ) {
+					$bot_blocked = true;
+					$stored_code = (int) $link->status_code;
+					if ( in_array( $stored_code, array( 301, 302, 303, 307, 308 ), true ) ) {
+						$display_code = $stored_code;
+						$reason       = __( 'Redirect destination already detected by scan (re-check blocked)', 'tso-link-inspector' );
+					}
+				}
 				$suggestions[] = array(
 					'url'         => $rurl,
-					'status_code' => (int) $link->status_code,
-					'label'       => TSOLIIN_HTTP::status_label( (int) $link->status_code, (string) $link->link_url ),
-					'reason'      => __( 'Destination detected (last check)', 'tso-link-inspector' ),
+					'status_code' => $display_code,
+					'label'       => TSOLIIN_HTTP::status_label( $display_code, $rurl ),
+					'reason'      => $reason,
 					'confidence'  => 'high',
-					'actionable'  => ! TSOLIIN_HTTP::is_hard_broken_status( (int) $link->status_code ),
+					'actionable'  => TSOLIIN_HTTP::is_actionable_suggestion_result( $r_dest )
+						|| (
+							in_array( (int) $link->status_code, array( 301, 302, 303, 307, 308 ), true )
+							&& $this->http->is_meaningful_redirect_target( $orig_abs, $rurl )
+						),
 				);
 				$seen_urls[] = $rurl;
 			}
@@ -1094,6 +1450,9 @@ class TSOLIIN_Admin {
 		// Run smart suggest to find additional alternatives.
 		foreach ( $this->http->smart_suggest( $link->link_url, (int) $link->post_id ) as $s ) {
 			if ( ! in_array( $s['url'], $seen_urls, true ) ) {
+				if ( ! empty( $s['status_code'] ) && TSOLIIN_HTTP::is_bot_block_status( (int) $s['status_code'] ) ) {
+					$bot_blocked = true;
+				}
 				$suggestions[] = $s;
 				$seen_urls[]   = $s['url'];
 			}
@@ -1111,11 +1470,33 @@ class TSOLIIN_Admin {
 			$sc                    = isset( $suggestion['status_code'] ) ? (int) $suggestion['status_code'] : 0;
 			$suggestion['actionable'] = isset( $suggestion['actionable'] )
 				? (bool) $suggestion['actionable']
-				: ! TSOLIIN_HTTP::is_hard_broken_status( $sc );
+				: TSOLIIN_HTTP::is_actionable_suggestion_result(
+					array(
+						'status_code' => $sc,
+						'is_broken'   => TSOLIIN_HTTP::is_hard_broken_status( $sc ) ? 1 : 0,
+					)
+				);
 			$safe_suggestions[]    = $suggestion;
 		}
 
 		$safe_suggestions = array_values(
+			array_filter(
+				$safe_suggestions,
+				function ( $row ) use ( $orig_abs ) {
+					if ( ! empty( $row['actionable'] ) ) {
+						return true;
+					}
+					$target = isset( $row['url'] ) ? (string) $row['url'] : '';
+					if ( '' === $target ) {
+						return false;
+					}
+					// Keep redirect targets the scanner already found (e.g. http legacy host → https canonical).
+					return $this->http->is_meaningful_redirect_target( $orig_abs, $target );
+				}
+			)
+		);
+
+		$has_actionable = ! empty(
 			array_filter(
 				$safe_suggestions,
 				static function ( $row ) {
@@ -1125,8 +1506,14 @@ class TSOLIIN_Admin {
 		);
 
 		$note = '';
-		if ( empty( $safe_suggestions ) && TSOLIIN_HTTP::is_plain_http_url( $orig_abs ) ) {
-			$note = __( 'No HTTPS upgrade or other useful alternative was found. The site may only offer HTTP, so there is nothing helpful to apply—changing www alone would not fix the insecure HTTP link.', 'tso-link-inspector' );
+		if ( empty( $safe_suggestions ) ) {
+			if ( $bot_blocked ) {
+				$note = __( 'The destination blocks automated checks (403/401/429). It may work in a browser, but your server cannot confirm it — verify manually before editing the link.', 'tso-link-inspector' );
+			} elseif ( TSOLIIN_HTTP::is_plain_http_url( $orig_abs ) ) {
+				$note = __( 'No HTTPS upgrade or other useful alternative was found. The site may only offer HTTP, so there is nothing helpful to apply—changing www alone would not fix the insecure HTTP link.', 'tso-link-inspector' );
+			}
+		} elseif ( $bot_blocked && ! $has_actionable ) {
+			$note = __( 'The destination blocks automated checks (403/401/429). It may work in a browser, but your server cannot confirm it — verify manually before editing the link.', 'tso-link-inspector' );
 		}
 
 		wp_send_json_success( array(
@@ -1148,8 +1535,16 @@ class TSOLIIN_Admin {
 			wp_die( esc_html__( 'Insufficient permissions.', 'tso-link-inspector' ) );
 		}
 
-		$filter = isset( $_GET['filter'] ) ? sanitize_key( wp_unslash( $_GET['filter'] ) ) : 'all';
-		$result = $this->db->get_links( array( 'filter' => $filter, 'per_page' => 9999, 'paged' => 1 ) );
+		$filter  = isset( $_GET['filter'] ) ? sanitize_key( wp_unslash( $_GET['filter'] ) ) : 'all';
+		$post_id = isset( $_GET['post_id'] ) ? absint( $_GET['post_id'] ) : 0;
+		$result  = $this->db->get_links(
+			array(
+				'filter'   => $filter,
+				'per_page' => 9999,
+				'paged'    => 1,
+				'post_id'  => $post_id,
+			)
+		);
 
 		$filename = 'tso-link-inspector-' . $filter . '-' . gmdate( 'Y-m-d' ) . '.csv';
 		header( 'Content-Type: text/csv; charset=utf-8' );

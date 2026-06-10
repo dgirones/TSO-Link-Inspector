@@ -17,6 +17,7 @@
 		currentPage : 1,
 		polling     : false,
 		pollTimer   : null,
+		statsTimer  : null,
 		completed   : false,   // Guard: prevents reload loop
 		editLinkId  : 0,
 		editOldUrl  : '',
@@ -30,6 +31,35 @@
 		 */
 		escapeHtml: function ( text ) {
 			return $( '<div/>' ).text( text == null ? '' : String( text ) ).html();
+		},
+
+		/**
+		 * Remove all suggestion panels stacked after a list row.
+		 *
+		 * @param {jQuery} $row Data table row.
+		 */
+		removeSuggestPanelsForRow: function ( $row ) {
+			if ( ! $row || ! $row.length ) {
+				return;
+			}
+			var $next = $row.next();
+			while ( $next.length && $next.hasClass( 'tsoliin-suggest-row' ) ) {
+				var $remove = $next;
+				$next = $next.next();
+				$remove.remove();
+			}
+		},
+
+		/**
+		 * Find the main list row for a link ID.
+		 *
+		 * @param {number} linkId Link row ID.
+		 * @return {jQuery}
+		 */
+		findLinkRow: function ( linkId ) {
+			return $( 'tr' ).filter( function () {
+				return $( this ).find( '.tsoliin-edit-link[data-id="' + linkId + '"], .tsoliin-suggest[data-id="' + linkId + '"]' ).length > 0;
+			} ).first();
 		},
 
 		// ---------------------------------------------------------------
@@ -63,8 +93,18 @@
 				this.startPolling();
 			} else {
 				// Not running: ensure progress bar is hidden.
-				// (Could be visible if stopped mid-way in a previous session.)
 				this.$checkProg.hide();
+			}
+
+			// Live stat / filter tab counts while editing the list.
+			if ( this.$form.length ) {
+				this.refreshStats();
+				var interval = parseInt( tsoliinData.refreshInterval, 10 ) || 8000;
+				if ( interval > 0 ) {
+					this.statsTimer = window.setInterval( function () {
+						LC.refreshStats();
+					}, interval );
+				}
 			}
 		},
 
@@ -86,6 +126,13 @@
 
 			this.$stopBtn.on( 'click', function () {
 				self.stopBgCheck();
+			} );
+
+			$( document ).on( 'click', '.tsoliin-url a[data-tsoliin-action-url="1"]', function ( e ) {
+				var msg = tsoliinData.i18n.actionUrlWarn || 'This link ends your WordPress session. Open it anyway?';
+				if ( ! window.confirm( msg ) ) {
+					e.preventDefault();
+				}
 			} );
 
 			$( document ).on( 'click', '.tsoliin-edit-link', function ( e ) {
@@ -120,6 +167,27 @@
 			$( document ).on( 'click', '.tsoliin-suggest', function ( e ) {
 				e.preventDefault();
 				self.smartSuggest( parseInt( $( this ).data( 'id' ), 10 ), $( this ) );
+			} );
+
+			$( document ).on( 'click', '.tsoliin-suggest-close', function ( e ) {
+				e.preventDefault();
+				e.stopPropagation();
+				$( this ).closest( '.tsoliin-suggest-row' ).remove();
+			} );
+
+			$( document ).on( 'click', '.tsoliin-apply-suggest', function ( e ) {
+				e.preventDefault();
+				var $btn   = $( this );
+				var linkId = parseInt( $btn.data( 'id' ), 10 );
+				var newUrl = $btn.data( 'url' );
+				var $row   = self.findLinkRow( linkId );
+				if ( ! $row.length ) {
+					$row = $btn.closest( '.tsoliin-suggest-row' ).prev( 'tr' );
+					while ( $row.length && $row.hasClass( 'tsoliin-suggest-row' ) ) {
+						$row = $row.prev( 'tr' );
+					}
+				}
+				self.applySmartUrl( linkId, newUrl, $btn, $row );
 			} );
 
 			this.$modalSave.on( 'click', function () { self.saveLink(); } );
@@ -288,7 +356,13 @@
 				method: 'POST',
 				data  : { action: 'tsoliin_check_progress', nonce: tsoliinData.nonce },
 				success: function ( r ) {
-					if ( ! r.success || self.completed ) { self.stopPolling(); return; }
+					if ( ! r.success || self.completed ) {
+						self.stopPolling();
+						if ( ! r.success ) {
+							self.$checkBtn.prop( 'disabled', false );
+						}
+						return;
+					}
 					var d = r.data;
 
 					self.updateCheckProgress( d.pct, d.message );
@@ -337,34 +411,71 @@
 		},
 
 		// ---------------------------------------------------------------
-		// Auto-refresh stat cards (without full reload)
+		// Live stat + filter tab counts
 		// ---------------------------------------------------------------
+		applyStatsToUI: function ( stats, display ) {
+			if ( ! stats ) {
+				return;
+			}
+			var tabMap = {
+				all            : 'total',
+				broken         : 'broken',
+				redirect       : 'redirect',
+				ok             : 'ok',
+				unchecked      : 'unchecked',
+				http_insecure  : 'http_insecure',
+				manual_locked  : 'manual_locked'
+			};
+			$.each( tabMap, function ( filterKey, statKey ) {
+				if ( undefined === stats[ statKey ] ) {
+					return;
+				}
+				var count = ( display && display[ statKey ] ) ? display[ statKey ] : stats[ statKey ];
+				$( '.tsoliin-filter-tabs a' ).each( function () {
+					var href = $( this ).attr( 'href' ) || '';
+					if ( href.indexOf( 'filter=' + filterKey ) !== -1 ) {
+						$( this ).text( $( this ).text().replace( /\([\d,.]+\)/, '(' + count + ')' ) );
+					}
+				} );
+			} );
+
+			var cardMap = {
+				total          : '.tsoliin-stats > .tsoliin-stat:first .tsoliin-stat__number',
+				broken         : '.tsoliin-stat--broken .tsoliin-stat__number',
+				redirect       : '.tsoliin-stat--redirect .tsoliin-stat__number',
+				ok             : '.tsoliin-stat--ok .tsoliin-stat__number',
+				unchecked      : '.tsoliin-stat--unchecked .tsoliin-stat__number',
+				http_insecure  : '.tsoliin-stat--http-insecure .tsoliin-stat__number'
+			};
+			$.each( cardMap, function ( statKey, selector ) {
+				if ( undefined === stats[ statKey ] ) {
+					return;
+				}
+				var $el = $( selector );
+				if ( $el.length ) {
+					$el.text( display && display[ statKey ] ? display[ statKey ] : stats[ statKey ] );
+				}
+			} );
+		},
+
 		refreshStats: function () {
+			if ( ! this.$form.length ) {
+				return;
+			}
 			var self = this;
 			$.ajax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
-				data  : { action: 'tsoliin_check_progress', nonce: tsoliinData.nonce },
+				data  : {
+					action  : 'tsoliin_get_stats',
+					nonce   : tsoliinData.nonce,
+					post_id : parseInt( tsoliinData.viewPostId, 10 ) || 0
+				},
 				success: function ( r ) {
-					if ( ! r.success ) { return; }
-					var d = r.data;
-					// Update broken counter in filter tab.
-					if ( d.broken !== undefined ) {
-						$( '.tsoliin-filter-tabs a' ).each( function () {
-							var href = $( this ).attr( 'href' ) || '';
-							if ( href.indexOf( 'filter=broken' ) !== -1 ) {
-								// Update count if changed.
-								var text = $( this ).text().replace( /\(\d+\)/, '(' + d.broken + ')' );
-								$( this ).text( text );
-							}
-						} );
-						// Update stat card.
-						$( '.tsoliin-stat--broken .tsoliin-stat__number' ).text( d.broken );
+					if ( ! r.success || ! r.data ) {
+						return;
 					}
-					if ( d.done && ! self.completed ) {
-						self.completed = true;
-						self.checkDone();
-					}
+					self.applyStatsToUI( r.data.stats, r.data.display );
 				}
 			} );
 		},
@@ -373,7 +484,52 @@
 			$( '.tsoliin-notice' ).remove();
 			var $n = $( '<div class="notice notice-' + ( type || 'info' ) + ' is-dismissible tsoliin-notice"><p>' + msg + '</p><button type="button" class="notice-dismiss"></button></div>' );
 			$( '.tsoliin-toolbar' ).after( $n );
-			$n.find( '.notice-dismiss' ).on( 'click', function () { $n.fadeOut( 200, function () { $n.remove(); } ); } );
+			$n.on( 'click', '.notice-dismiss', function ( e ) {
+				e.preventDefault();
+				$n.fadeOut( 200, function () { $n.remove(); } );
+			} );
+		},
+
+		/**
+		 * Reload the list table so pagination and row counts match the database.
+		 * Stat cards alone cannot refresh WP_List_Table tablenav output.
+		 *
+		 * @param {number} delay Ms before reload (lets the user read a short message).
+		 */
+		scheduleListReload: function ( delay ) {
+			setTimeout( function () {
+				window.location.reload();
+			}, delay || 1200 );
+		},
+
+		countListRows: function () {
+			return this.$form.find( 'tbody tr' ).not( '.tsoliin-suggest-row' ).length;
+		},
+
+		maybeReloadEmptyList: function () {
+			if ( 0 === this.countListRows() ) {
+				this.scheduleListReload( 800 );
+			}
+		},
+
+		listFilterParam: function () {
+			return { list_filter: tsoliinData.listFilter || 'all' };
+		},
+
+		removeRowIfFilterMismatch: function ( $row, data ) {
+			if ( ! $row || ! $row.length || ! data || false !== data.matches_filter ) {
+				return false;
+			}
+			if ( 'all' === ( tsoliinData.listFilter || 'all' ) ) {
+				return false;
+			}
+			var self = this;
+			self.removeSuggestPanelsForRow( $row );
+			$row.fadeOut( 300, function () {
+				$( this ).remove();
+				self.maybeReloadEmptyList();
+			} );
+			return true;
 		},
 
 		// ---------------------------------------------------------------
@@ -391,17 +547,27 @@
 			$.ajax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
-				data  : { action: 'tsoliin_recheck', nonce: tsoliinData.nonce, link_id: linkId },
+				data  : $.extend( { action: 'tsoliin_recheck', nonce: tsoliinData.nonce, link_id: linkId }, self.listFilterParam() ),
 				success: function ( r ) {
 					if ( ! r.success ) {
 						$status.html( '<span class="tsoliin-status tsoliin-status--broken">' + tsoliinData.i18n.error + '</span>' );
 						return;
 					}
 					var d = r.data;
-					$status.html( '<span class="tsoliin-status ' + d.css_class + '">' + d.status_code + ' ' + d.label + '</span>' );
+					if ( self.removeRowIfFilterMismatch( $row, d ) ) {
+						self.refreshStats();
+						$trigger.text( tsoliinData.i18n.recheck );
+						return;
+					}
+					if ( d.status_html ) {
+						$status.html( d.status_html );
+					} else {
+						$status.html( '<span class="tsoliin-status ' + d.css_class + '">' + d.status_code + ' ' + d.label + '</span>' );
+					}
 					$chk.text( d.last_checked );
 					$trigger.text( tsoliinData.i18n.recheck );
 					$row.toggleClass( 'tsoliin-row--broken', 1 === d.is_broken );
+					self.refreshStats();
 				},
 				error: function () {
 					$status.html( '<span class="tsoliin-status tsoliin-status--broken">' + tsoliinData.i18n.error + '</span>' );
@@ -444,7 +610,7 @@
 			$.ajax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
-				data  : { action: 'tsoliin_update_link', nonce: tsoliinData.nonce, link_id: self.editLinkId, new_url: newUrl },
+				data  : $.extend( { action: 'tsoliin_update_link', nonce: tsoliinData.nonce, link_id: self.editLinkId, new_url: newUrl }, self.listFilterParam() ),
 				success: function ( r ) {
 					self.$modalSave.prop( 'disabled', false ).text( tsoliinData.i18n.save );
 					self.$modalSpinner.removeClass( 'is-active' );
@@ -458,12 +624,18 @@
 						return $( this ).find( '.tsoliin-edit-link[data-id="' + self.editLinkId + '"]' ).length > 0;
 					} );
 					if ( $row.length ) {
+						if ( self.removeRowIfFilterMismatch( $row, d ) ) {
+							setTimeout( function () { self.closeModal(); }, 800 );
+							self.refreshStats();
+							return;
+						}
 						$row.find( '.column-status_code' ).html( '<span class="tsoliin-status ' + d.css_class + '">' + parseInt( d.status_code, 10 ) + ' ' + self.escapeHtml( d.label ) + '</span>' );
 						$row.find( '.tsoliin-url a' ).attr( 'href', d.new_url ).text( d.new_url.substring( 0, 57 ) );
 						$row.find( '.tsoliin-edit-link' ).attr( 'data-url', d.new_url );
 						$row.toggleClass( 'tsoliin-row--broken', 1 === d.is_broken );
 					}
 					setTimeout( function () { self.closeModal(); }, 1200 );
+					self.refreshStats();
 				},
 				error: function () {
 					self.$modalSave.prop( 'disabled', false ).text( tsoliinData.i18n.save );
@@ -477,6 +649,7 @@
 		// Unlink / Delete
 		// ---------------------------------------------------------------
 		unlinkItem: function ( linkId, $trigger ) {
+			var self = this;
 			var $row = $trigger.closest( 'tr' );
 			$trigger.text( tsoliinData.i18n.saving );
 			$.ajax( {
@@ -485,7 +658,12 @@
 				data  : { action: 'tsoliin_unlink', nonce: tsoliinData.nonce, link_id: linkId },
 				success: function ( r ) {
 					if ( r.success ) {
-						$row.fadeOut( 400, function () { $( this ).remove(); } );
+						self.removeSuggestPanelsForRow( $row );
+						$row.fadeOut( 400, function () {
+							$( this ).remove();
+							self.refreshStats();
+							self.maybeReloadEmptyList();
+						} );
 					} else {
 						alert( r.data ? r.data.message : tsoliinData.i18n.error );
 						$trigger.text( tsoliinData.i18n.unlink );
@@ -505,12 +683,22 @@
 			$.ajax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
-				data  : { action: 'tsoliin_not_broken', nonce: tsoliinData.nonce, link_id: linkId },
+				data  : $.extend( { action: 'tsoliin_not_broken', nonce: tsoliinData.nonce, link_id: linkId }, self.listFilterParam() ),
 				success: function ( r ) {
 					if ( r.success ) {
-						$row.find( '.column-status_code' ).html( '<span class="tsoliin-status tsoliin-status--ok">' + r.data.status_code + ' ' + r.data.label + '</span>' );
+						if ( self.removeRowIfFilterMismatch( $row, r.data ) ) {
+							self.refreshStats();
+							return;
+						}
+						if ( r.data.status_html ) {
+							$row.find( '.column-status_code' ).html( r.data.status_html );
+						} else {
+							$row.find( '.column-status_code' ).html( '<span class="tsoliin-status tsoliin-status--ok">' + r.data.status_code + ' ' + r.data.label + '</span>' );
+						}
 						$row.removeClass( 'tsoliin-row--broken' );
-						$row.find( '.row-actions' ).html( '<span style="color:#0a7d33;font-weight:600;">✓ ' + r.data.message + '</span>' );
+						$row.find( '.tsoliin-not-broken' ).closest( 'span' ).remove();
+						$row.find( '.tsoliin-suggest' ).closest( 'span' ).remove();
+						self.refreshStats();
 					} else {
 						alert( r.data ? r.data.message : tsoliinData.i18n.error );
 						$trigger.text( tsoliinData.i18n.notBroken );
@@ -521,6 +709,7 @@
 		},
 
 		deleteItem: function ( linkId, $trigger ) {
+			var self = this;
 			var $row = $trigger.closest( 'tr' );
 			$.ajax( {
 				url   : tsoliinData.ajaxUrl,
@@ -528,7 +717,12 @@
 				data  : { action: 'tsoliin_delete_link', nonce: tsoliinData.nonce, link_id: linkId },
 				success: function ( r ) {
 					if ( r.success ) {
-						$row.fadeOut( 400, function () { $( this ).remove(); } );
+						self.removeSuggestPanelsForRow( $row );
+						$row.fadeOut( 400, function () {
+							$( this ).remove();
+							self.refreshStats();
+							self.maybeReloadEmptyList();
+						} );
 					} else {
 						alert( r.data ? r.data.message : tsoliinData.i18n.error );
 					}
@@ -548,20 +742,29 @@
 			} );
 			if ( ! linkIds.length ) { return; }
 
+			if ( 'unlink' === action && ! window.confirm( tsoliinData.i18n.confirmUnlink ) ) {
+				return;
+			}
+
 			if ( 'recheck' === action || 'unlink' === action ) {
 				self.bulkRecheckStep( linkIds, 0, action );
 			} else if ( 'not_broken' === action ) {
 				$.ajax( {
 					url   : tsoliinData.ajaxUrl,
 					method: 'POST',
-					data  : { action: 'tsoliin_bulk_action', nonce: tsoliinData.nonce, bulk_action: 'not_broken', link_ids: linkIds, index: 0 },
+					data  : $.extend( { action: 'tsoliin_bulk_action', nonce: tsoliinData.nonce, bulk_action: 'not_broken', link_ids: linkIds, index: 0 }, self.listFilterParam() ),
 					success: function ( r ) {
 						if ( r.success ) {
-							self.$form.find( 'input[name="link_ids[]"]:checked' ).closest( 'tr' ).each( function () {
-								$( this ).find( '.column-status_code' ).html( '<span class="tsoliin-status tsoliin-status--ok">200 OK (manual)</span>' );
-								$( this ).removeClass( 'tsoliin-row--broken' );
-							} );
-							self.showNotice( r.data.message, 'success' );
+							if ( 'all' !== ( tsoliinData.listFilter || 'all' ) ) {
+								self.scheduleListReload( 1200 );
+							} else {
+								self.$form.find( 'input[name="link_ids[]"]:checked' ).closest( 'tr' ).each( function () {
+									$( this ).find( '.column-status_code' ).html( '<span class="tsoliin-status tsoliin-status--ok">200 OK (manual)</span>' );
+									$( this ).removeClass( 'tsoliin-row--broken' );
+								} );
+								self.showNotice( r.data.message, 'success' );
+								self.refreshStats();
+							}
 						} else { alert( r.data ? r.data.message : tsoliinData.i18n.error ); }
 					},
 					error: function () { alert( tsoliinData.i18n.error ); }
@@ -575,6 +778,8 @@
 					success: function ( r ) {
 						if ( r.success ) {
 							self.$form.find( 'input[name="link_ids[]"]:checked' ).closest( 'tr' ).fadeOut( 300, function () { $( this ).remove(); } );
+							self.showNotice( r.data.message, 'success' );
+							self.scheduleListReload( 1200 );
 						} else { alert( r.data ? r.data.message : tsoliinData.i18n.error ); }
 					},
 					error: function () { alert( tsoliinData.i18n.error ); }
@@ -592,61 +797,112 @@
 
 			// Show progress notice on first call.
 			if ( 0 === index ) {
-				var initMsg = 'unlink' === act ? tsoliinData.i18n.saving : tsoliinData.i18n.checking;
+				self._bulkStats = { unlinked: 0, skipped: 0, failed: 0 };
+				var initMsg = 'unlink' === act ? tsoliinData.i18n.unlinking : tsoliinData.i18n.checking;
 				self.$bulkProgress = $( '<div class="notice notice-info tsoliin-notice"><p><strong id="tsoliin-bulk-msg">' + initMsg + '</strong> <progress id="tsoliin-bulk-bar" max="100" value="0" style="width:200px;vertical-align:middle;"></progress></p></div>' );
 				$( '.tsoliin-toolbar' ).after( self.$bulkProgress );
 			}
 
 			if ( index >= total ) {
-				var doneMsg = 'unlink' === act
-					? ( '✅ ' + total + ' ' + tsoliinData.i18n.itemsUnlinked )
-					: ( '✅ ' + total + ' ' + tsoliinData.i18n.itemsChecked );
+				var doneMsg;
+				if ( 'unlink' === act ) {
+					var parts = [];
+					if ( self._bulkStats.unlinked > 0 ) {
+						parts.push( '✅ ' + self._bulkStats.unlinked + ' ' + tsoliinData.i18n.itemsUnlinked );
+					}
+					if ( self._bulkStats.skipped > 0 ) {
+						parts.push( '⚠ ' + self._bulkStats.skipped + ' ' + tsoliinData.i18n.itemsSkipped );
+					}
+					if ( self._bulkStats.failed > 0 ) {
+						parts.push( '❌ ' + self._bulkStats.failed + ' ' + tsoliinData.i18n.itemsFailed );
+					}
+					doneMsg = parts.length ? parts.join( ' ' ) : ( '✅ 0 ' + tsoliinData.i18n.itemsUnlinked );
+				} else {
+					doneMsg = '✅ ' + total + ' ' + tsoliinData.i18n.itemsChecked;
+				}
 				$( '#tsoliin-bulk-msg' ).text( doneMsg );
 				$( '#tsoliin-bulk-bar' ).val( 100 );
+				if ( 'unlink' === act ) {
+					self.scheduleListReload( 1500 );
+				} else {
+					self.refreshStats();
+					setTimeout( function () {
+						if ( self.$bulkProgress ) {
+							self.$bulkProgress.fadeOut( 300, function () { $( this ).remove(); } );
+							self.$bulkProgress = null;
+						}
+					}, 2500 );
+				}
 				return;
 			}
 
+			var progressLabel = 'unlink' === act ? tsoliinData.i18n.unlinking : tsoliinData.i18n.checking;
 			var pct = Math.round( ( index / total ) * 100 );
-			$( '#tsoliin-bulk-msg' ).text( tsoliinData.i18n.checking + ' ' + ( index + 1 ) + '/' + total );
+			$( '#tsoliin-bulk-msg' ).text( progressLabel + ' ' + ( index + 1 ) + '/' + total );
 			$( '#tsoliin-bulk-bar' ).val( pct );
 
 			$.ajax( {
 				url    : tsoliinData.ajaxUrl,
 				method : 'POST',
 				timeout: 30000,
-				data   : {
+				data   : $.extend( {
 					action     : 'tsoliin_bulk_action',
 					nonce      : tsoliinData.nonce,
 					bulk_action: act,
 					link_ids   : linkIds,
 					index      : index
-				},
+				}, self.listFilterParam() ),
 				success: function ( r ) {
-					if ( r.success ) {
-						if ( 'recheck' === act && r.data.row ) {
+					if ( ! r.success ) {
+						if ( 'unlink' === act ) {
+							self._bulkStats.failed++;
+						}
+						alert( r.data ? r.data.message : tsoliinData.i18n.error );
+						self.bulkRecheckStep( linkIds, index + 1, act );
+						return;
+					}
+					if ( 'recheck' === act && r.data.row ) {
 							// Update row status live.
 							var d   = r.data.row;
 							var $tr = $( 'tr' ).filter( function () {
 								return $( this ).find( 'input[value="' + d.link_id + '"]' ).length > 0;
 							} );
 							if ( $tr.length ) {
-								$tr.find( '.column-status_code' ).html( '<span class="tsoliin-status ' + d.css_class + '">' + parseInt( d.status_code, 10 ) + ' ' + self.escapeHtml( d.label ) + '</span>' );
-								$tr.find( '.column-last_checked' ).text( d.last_checked );
-								$tr.toggleClass( 'tsoliin-row--broken', 1 === parseInt( d.is_broken, 10 ) );
+								if ( self.removeRowIfFilterMismatch( $tr, d ) ) {
+									self.refreshStats();
+								} else {
+									if ( d.status_html ) {
+										$tr.find( '.column-status_code' ).html( d.status_html );
+									} else {
+										$tr.find( '.column-status_code' ).html( '<span class="tsoliin-status ' + d.css_class + '">' + parseInt( d.status_code, 10 ) + ' ' + self.escapeHtml( d.label ) + '</span>' );
+									}
+									$tr.find( '.column-last_checked' ).text( d.last_checked );
+									$tr.toggleClass( 'tsoliin-row--broken', 1 === parseInt( d.is_broken, 10 ) );
+								}
 							}
 						} else if ( 'unlink' === act && r.data.link_id ) {
-							// Remove unlinked row.
-							var $tr2 = $( 'tr' ).filter( function () {
-								return $( this ).find( 'input[value="' + r.data.link_id + '"]' ).length > 0;
-							} );
-							if ( $tr2.length && r.data.unlinked ) {
-								$tr2.fadeOut( 200, function () { $( this ).remove(); } );
+							if ( r.data.skipped ) {
+								self._bulkStats.skipped++;
+							} else if ( r.data.unlinked ) {
+								self._bulkStats.unlinked++;
+								var $tr2 = $( 'tr' ).filter( function () {
+									return $( this ).find( 'input[value="' + r.data.link_id + '"]' ).length > 0;
+								} );
+								if ( $tr2.length ) {
+									self.removeSuggestPanelsForRow( $tr2 );
+									$tr2.fadeOut( 200, function () { $( this ).remove(); } );
+								}
+							} else {
+								self._bulkStats.failed++;
 							}
 						}
-					}
 					self.bulkRecheckStep( linkIds, index + 1, act );
 				},
 				error: function () {
+					if ( 'unlink' === act ) {
+						self._bulkStats.failed++;
+					}
+					alert( tsoliinData.i18n.error );
 					self.bulkRecheckStep( linkIds, index + 1, act );
 				}
 			} );
@@ -658,12 +914,15 @@
 		smartSuggest: function ( linkId, $trigger ) {
 			var self    = this;
 			var $row    = $trigger.closest( 'tr' );
-			// Remove any existing suggestion panel in this row.
-			$row.next( '.tsoliin-suggest-row' ).remove();
+			self.removeSuggestPanelsForRow( $row );
+
+			if ( self.suggestXhr && self.suggestXhr.readyState !== 4 ) {
+				self.suggestXhr.abort();
+			}
 
 			$trigger.text( tsoliinData.i18n.smartChecking );
 
-			$.ajax( {
+			self.suggestXhr = $.ajax( {
 				url    : tsoliinData.ajaxUrl,
 				method : 'POST',
 				timeout: 60000,
@@ -672,7 +931,7 @@
 					$trigger.html( '💡 ' + tsoliinData.i18n.smartSuggest );
 
 					var cols = $row.find( 'td' ).length;
-					var html = '<tr class="tsoliin-suggest-row"><td colspan="' + cols + '" class="tsoliin-suggest-panel">';
+					var html = '<tr class="tsoliin-suggest-row" data-link-id="' + linkId + '"><td colspan="' + cols + '" class="tsoliin-suggest-panel">';
 
 					if ( ! r.success ) {
 						html += '<span style="color:#b32d2e;">' + self.escapeHtml( ( r.data && r.data.message ) ? r.data.message : tsoliinData.i18n.error ) + '</span>';
@@ -688,7 +947,9 @@
 							var actionable = ( false !== s.actionable );
 							var conf = 'high' === s.confidence ? '🟢' : '🟡';
 							var isHttps = /^https:\/\//i.test( s.url || '' );
-							if ( ! actionable ) {
+							var code = parseInt( s.status_code, 10 );
+							var isBotBlock = ( 401 === code || 403 === code || 429 === code );
+							if ( ! actionable || isBotBlock ) {
 								conf = '⚠️';
 							} else if ( ! isHttps ) {
 								conf = '⚠️';
@@ -696,8 +957,10 @@
 							var urlAttr  = String( s.url ).replace( /"/g, '&quot;' );
 							var urlLabel = self.escapeHtml( s.url );
 							var statusCls = 'tsoliin-status--broken';
-							if ( actionable ) {
+							if ( actionable && ! isBotBlock ) {
 								statusCls = isHttps ? 'tsoliin-status--ok' : 'tsoliin-status--warning';
+							} else if ( isBotBlock ) {
+								statusCls = 'tsoliin-status--warning';
 							}
 							html += '<li>';
 							html += conf + ' <a href="' + urlAttr + '" target="_blank" rel="noopener">' + urlLabel + '</a>';
@@ -711,26 +974,19 @@
 							html += '</li>';
 						} );
 						html += '</ul>';
+						if ( r.data.note ) {
+							html += '<div class="notice notice-warning inline" style="margin:0.75em 0 0;"><p style="margin:0.5em 0;">' + self.escapeHtml( r.data.note ) + '</p></div>';
+						}
 					}
 
-					html += '<button type="button" class="tsoliin-suggest-close button-link" style="float:right;margin-top:-8px;">✕</button>';
+					html += '<button type="button" class="tsoliin-suggest-close button-link" aria-label="' + self.escapeHtml( tsoliinData.i18n.closePanel ) + '">✕</button>';
 					html += '</td></tr>';
 					$row.after( html );
-
-					// Apply suggestion click.
-					$row.next( '.tsoliin-suggest-row' ).on( 'click', '.tsoliin-apply-suggest', function () {
-						var $btn  = $( this );
-						var id    = parseInt( $btn.data( 'id' ), 10 );
-						var newUrl = $btn.data( 'url' );
-						self.applySmartUrl( id, newUrl, $btn, $row );
-					} );
-
-					// Close button.
-					$row.next( '.tsoliin-suggest-row' ).on( 'click', '.tsoliin-suggest-close', function () {
-						$row.next( '.tsoliin-suggest-row' ).remove();
-					} );
 				},
-				error: function () {
+				error: function ( xhr, status ) {
+					if ( 'abort' === status ) {
+						return;
+					}
 					$trigger.html( '💡 ' + tsoliinData.i18n.smartSuggest );
 					alert( tsoliinData.i18n.error );
 				}
@@ -744,16 +1000,23 @@
 			$.ajax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
-				data  : { action: 'tsoliin_update_link', nonce: tsoliinData.nonce, link_id: linkId, new_url: newUrl },
+				data  : $.extend( { action: 'tsoliin_update_link', nonce: tsoliinData.nonce, link_id: linkId, new_url: newUrl }, self.listFilterParam() ),
 				success: function ( r ) {
 					if ( r.success ) {
 						var d = r.data;
+						if ( self.removeRowIfFilterMismatch( $row, d ) ) {
+							$btn.closest( '.tsoliin-suggest-row' ).fadeOut( 300, function () { $( this ).remove(); } );
+							self.showNotice( '✅ ' + tsoliinData.i18n.urlUpdated + ' ' + d.new_url, 'success' );
+							self.refreshStats();
+							return;
+						}
 						$row.find( '.column-status_code' ).html( '<span class="tsoliin-status ' + d.css_class + '">' + parseInt( d.status_code, 10 ) + ' ' + self.escapeHtml( d.label ) + '</span>' );
 						$row.find( '.tsoliin-url a' ).attr( 'href', d.new_url ).text( d.new_url.substring( 0, 57 ) );
 						$row.find( '.tsoliin-edit-link' ).attr( 'data-url', d.new_url );
 						$row.toggleClass( 'tsoliin-row--broken', 1 === d.is_broken );
-						$row.next( '.tsoliin-suggest-row' ).fadeOut( 300, function () { $( this ).remove(); } );
-						self.showNotice( '✅ URL actualitzada: ' + d.new_url, 'success' );
+						$btn.closest( '.tsoliin-suggest-row' ).fadeOut( 300, function () { $( this ).remove(); } );
+						self.showNotice( '✅ ' + tsoliinData.i18n.urlUpdated + ' ' + d.new_url, 'success' );
+						self.refreshStats();
 					} else {
 						$btn.prop( 'disabled', false ).text( tsoliinData.i18n.applyUrl );
 						alert( r.data ? r.data.message : tsoliinData.i18n.error );

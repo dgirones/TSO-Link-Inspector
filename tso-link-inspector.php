@@ -2,10 +2,10 @@
 /**
  * Plugin Name:       TSO Link Inspector
  * Description:       Find and fix broken links across your entire WordPress site without opening each post.
- * Version:           1.9.3
+ * Version:           1.9.7
  * Requires at least: 6.0
  * Requires PHP:      7.4
- * Tested up to:       6.9
+ * Tested up to:       7.0
  * Author:            Tu Soporte Online
  * Author URI:        https://tusoporteonline.es
  * License:           GPL-2.0-or-later
@@ -20,7 +20,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'TSOLIIN_VERSION',    '1.9.3' );
+define( 'TSOLIIN_VERSION',    '1.9.7' );
 define( 'TSOLIIN_PLUGIN_FILE', __FILE__ );
 define( 'TSOLIIN_PLUGIN_DIR',  plugin_dir_path( __FILE__ ) );
 define( 'TSOLIIN_PLUGIN_URL',  plugin_dir_url( __FILE__ ) );
@@ -86,8 +86,10 @@ final class TSOLIIN_Link_Inspector {
 		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-http.php';
 		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-email.php';
 		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-scanner.php';
+		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-sources.php';
 		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-cron.php';
 		if ( is_admin() ) {
+			require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-support.php';
 			require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-list-table.php';
 			require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-admin.php';
 		}
@@ -207,7 +209,7 @@ final class TSOLIIN_Link_Inspector {
 
 	/**
 	 * Load translations for a specific locale from bundled files.
-	 * Supports the current slug and a legacy fallback slug for compatibility.
+	 * Loads bundled .po/.mo files for the given locale.
 	 *
 	 * @param string $locale Locale code (e.g. es_ES, ca).
 	 * @return bool True when at least one translation file was loaded.
@@ -220,11 +222,9 @@ final class TSOLIIN_Link_Inspector {
 
 		$po_candidates = array(
 			TSOLIIN_PLUGIN_DIR . 'languages/' . TSOLIIN_TEXT_DOMAIN . '-' . $locale . '.po',
-			TSOLIIN_PLUGIN_DIR . 'languages/tso-link-checker-' . $locale . '.po',
 		);
 		$mo_candidates = array(
 			TSOLIIN_PLUGIN_DIR . 'languages/' . TSOLIIN_TEXT_DOMAIN . '-' . $locale . '.mo',
-			TSOLIIN_PLUGIN_DIR . 'languages/tso-link-checker-' . $locale . '.mo',
 		);
 
 		$loaded = false;
@@ -373,19 +373,14 @@ final class TSOLIIN_Link_Inspector {
 	 * Run DB upgrades when version changes.
 	 */
 	public function maybe_upgrade_db() {
-		$this->maybe_migrate_legacy_prefix_options();
-		$installed = get_option( 'tsoliin_version', false );
-		if ( false === $installed || '' === (string) $installed ) {
-			$installed = (string) get_option( 'tso_lc_version', '0' );
-		} else {
-			$installed = (string) $installed;
-		}
+		$installed = (string) get_option( 'tsoliin_version', '0' );
 		if ( version_compare( $installed, TSOLIIN_VERSION, '<' ) ) {
 			$this->db->create_table();
-			$this->db->migrate_legacy_error_codes();
-			$this->db->migrate_comment_source_keys();
 			$this->db->cleanup_trivial_redirects();
 			$this->db->cleanup_querystring_redirects();
+			$this->db->cleanup_transparent_redirects();
+			$this->db->cleanup_action_url_rows();
+			$this->db->cleanup_mislabeled_skip_rows( true, 15 );
 			$this->cron->schedule();
 			update_option( 'tsoliin_version', TSOLIIN_VERSION, false );
 		} else {
@@ -394,59 +389,10 @@ final class TSOLIIN_Link_Inspector {
 	}
 
 	/**
-	 * Copy options and clear legacy cron hooks from pre-1.8.3 installs (tso_lc_* options and cron).
-	 */
-	private function maybe_migrate_legacy_prefix_options() {
-		static $done = false;
-		if ( $done ) {
-			return;
-		}
-		$done = true;
-
-		$map = array(
-			'tso_lc_settings'              => 'tsoliin_settings',
-			'tso_lc_version'               => 'tsoliin_version',
-			'tso_lc_last_full_scan'        => 'tsoliin_last_full_scan',
-			'tso_lc_last_check_batch'      => 'tsoliin_last_check_batch',
-			'tso_lc_last_check_count'      => 'tsoliin_last_check_count',
-			'tso_lc_bg_check_running'      => 'tsoliin_bg_check_running',
-			'tso_lc_bg_check_total'        => 'tsoliin_bg_check_total',
-			'tso_lc_bg_check_checked'      => 'tsoliin_bg_check_checked',
-			'tso_lc_bg_check_started'      => 'tsoliin_bg_check_started',
-			'tso_lc_total_posts_scanned'   => 'tsoliin_total_posts_scanned',
-		);
-
-		$migrated = false;
-		foreach ( $map as $old_key => $new_key ) {
-			$old_val = get_option( $old_key, false );
-			if ( false === $old_val ) {
-				continue;
-			}
-			$new_val = get_option( $new_key, false );
-			if ( false !== $new_val ) {
-				delete_option( $old_key );
-				$migrated = true;
-				continue;
-			}
-			update_option( $new_key, $old_val, false );
-			delete_option( $old_key );
-			$migrated = true;
-		}
-
-		if ( $migrated ) {
-			foreach ( array( 'tso_lc_cron_scan', 'tso_lc_cron_check', 'tso_lc_bg_check_step' ) as $legacy_hook ) {
-				wp_clear_scheduled_hook( $legacy_hook );
-			}
-		}
-	}
-
-	/**
 	 * Plugin activation.
 	 */
 	public function on_activate() {
-		$this->maybe_migrate_legacy_prefix_options();
-		$this->db->create_table();
-		$this->db->migrate_comment_source_keys();
+		$this->db->ensure_table_exists();
 		$this->cron->schedule();
 		update_option( 'tsoliin_version', TSOLIIN_VERSION, false );
 	}
@@ -481,8 +427,8 @@ final class TSOLIIN_Link_Inspector {
 		if ( ! in_array( $post->post_type, $post_types, true ) ) {
 			return;
 		}
-		// Re-scan: updates DB with current links in post_content.
-		$this->scanner->scan_post( $post_id, true ); // force all types
+		// Re-scan: updates DB with current links in post_content (respects Settings toggles).
+		$this->scanner->scan_post( $post_id, false );
 	}
 
 	/**
@@ -502,22 +448,21 @@ final class TSOLIIN_Link_Inspector {
 	 * @return string
 	 */
 	public function add_nofollow_to_broken( $content ) {
-		if ( ! is_singular() ) {
+		if ( is_admin() || wp_doing_ajax() || ! is_string( $content ) || '' === $content ) {
 			return $content;
 		}
-		$post_id = get_the_ID();
+		if ( false === stripos( $content, '<a' ) ) {
+			return $content;
+		}
+		// Singular views and posts inside the main loop (e.g. blog home excerpts).
+		if ( ! is_singular() && ! in_the_loop() ) {
+			return $content;
+		}
+		$post_id = (int) get_the_ID();
 		if ( ! $post_id ) {
 			return $content;
 		}
-		// Get broken URLs for this post from the DB.
-		global $wpdb;
-		$table       = $this->db->get_table();
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
-		$broken_urls = $wpdb->get_col( $wpdb->prepare(
-			"SELECT link_url FROM {$table} WHERE post_id = %d AND is_broken = 1",
-			$post_id
-		) );
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+		$broken_urls = $this->db->get_broken_link_urls_for_post( $post_id );
 		if ( empty( $broken_urls ) ) {
 			return $content;
 		}

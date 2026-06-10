@@ -16,6 +16,45 @@
 	margin-right: 6px;
 }
 
+.tsoliin-page-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px 16px;
+	margin-bottom: 0;
+}
+
+.tsoliin-page-head .wp-heading-inline,
+.tsoliin-page-head h1 {
+	margin: 0;
+	flex: 1 1 auto;
+}
+
+.tsoliin-donate-btn {
+	display: inline-flex;
+	align-items: center;
+	padding: 6px 14px;
+	border-radius: 999px;
+	border: 1px solid #c07000;
+	background: #fff8e6;
+	color: #6b3800;
+	font-size: 13px;
+	font-weight: 600;
+	line-height: 1.4;
+	text-decoration: none;
+	white-space: nowrap;
+	flex-shrink: 0;
+}
+
+.tsoliin-donate-btn:hover,
+.tsoliin-donate-btn:focus {
+	background: #ffefb8;
+	color: #6b3800;
+	border-color: #a85f00;
+	box-shadow: none;
+}
+
 /* ── Stats cards ─────────────────────────────────────────────── */
 .tsoliin-stats {
 	display: flex;
@@ -166,7 +205,15 @@
 	border-radius: 4px;
 	font-size: 12px;
 	font-weight: 600;
+	line-height: 1.35;
 	white-space: nowrap;
+}
+
+.wp-list-table td.column-status_code .tsoliin-status {
+	white-space: normal;
+	word-break: break-word;
+	overflow-wrap: break-word;
+	max-width: 100%;
 }
 
 .tsoliin-status--ok       { background: #d1fae5; color: #065f46; }
@@ -183,10 +230,15 @@
 
 /* ── Table tweaks ────────────────────────────────────────────── */
 .wp-list-table .column-cb            { width: 2.2em; }
-.wp-list-table .column-status_code   { width: 160px; }
-.wp-list-table .column-last_checked  { width: 150px; }
+.wp-list-table .column-status_code   { width: 220px; min-width: 180px; }
+.wp-list-table .column-last_checked  { width: 130px; white-space: nowrap; }
 .wp-list-table .column-anchor_text   { width: 130px; }
 .wp-list-table .column-post_title    { width: 200px; }
+
+.wp-list-table td.column-status_code {
+	vertical-align: top;
+	line-height: 1.4;
+}
 
 /* Avoid duplicate header row at the bottom in short/empty tables. */
 .tsoliin-wrap .wp-list-table tfoot {
@@ -354,6 +406,11 @@
 }
 
 /* ── Warning badge (403/401/429 – bot block, probably not broken) ── */
+.tsoliin-status--skipped {
+	background: #e5e7eb;
+	color: #4b5563;
+}
+
 .tsoliin-status--warning {
 	background: #fff3cd;
 	color: #856404;
@@ -453,6 +510,24 @@
 	font-weight: 500;
 }
 
+.tsoliin-suggest-close {
+	float: right;
+	margin-top: -4px;
+	cursor: pointer;
+	font-size: 18px;
+	line-height: 1;
+	padding: 4px 10px;
+	min-width: 32px;
+	min-height: 32px;
+	color: #646970;
+	text-decoration: none;
+}
+
+.tsoliin-suggest-close:hover,
+.tsoliin-suggest-close:focus {
+	color: #b32d2e;
+}
+
 /* ── Settings meta keys textarea fix ────────────────────────── */
 .tsoliin-meta-keys {
 	box-sizing: border-box;
@@ -462,6 +537,12 @@
 }
 
 /* ── Not-broken resolved row ─────────────────────────────────── */
+.tsoliin-row--broken {
+	background: #fef2f2 !important;
+}
+.tsoliin-row--broken:hover {
+	background: #fee2e2 !important;
+}
 .tsoliin-row--resolved {
 	opacity: 0.6;
 	background: #f0fdf4 !important;
@@ -697,8 +778,12 @@
 	/* Status badge */
 	.wp-list-table td.column-status_code {
 		margin: 2px 0;
+		min-width: 140px;
 	}
-	.tsoliin-status { font-size: 11px; }
+	.wp-list-table td.column-status_code .tsoliin-status {
+		font-size: 11px;
+		max-width: 100%;
+	}
 
 	/* Hide less important columns */
 	.wp-list-table td.column-anchor_text,

@@ -3,7 +3,7 @@
  * HTML email notifications for broken links.
  *
  * @package TSOLIIN_Link_Inspector
- * @since   1.9.3
+ * @since   1.9.4
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

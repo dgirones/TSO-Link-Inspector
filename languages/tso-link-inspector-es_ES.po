@@ -3,7 +3,7 @@
 # This file is distributed under the same license as the TSO Link Inspector plugin.
 msgid ""
 msgstr ""
-"Project-Id-Version: TSO Link Inspector 1.0.0\n"
+"Project-Id-Version: TSO Link Inspector 1.9.7\n"
 "Report-Msgid-Bugs-To: https://tusoporteonline.es\n"
 "POT-Creation-Date: 2024-01-01 00:00:00+00:00\n"
 "PO-Revision-Date: 2026-05-09 14:21+0200\n"
@@ -70,8 +70,20 @@ msgstr "Cancelar"
 msgid "Editar URL de l'enllaç"
 msgstr "Editar URL del enlace"
 
-msgid "URL actual:"
+msgid "Current URL:"
 msgstr "URL actual:"
+
+msgid "URL updated:"
+msgstr "URL actualizada:"
+
+msgid "☕ Support this plugin"
+msgstr "☕ Apoya este plugin"
+
+msgid "Donate"
+msgstr "Donar"
+
+msgid "Skipped (ignore list)"
+msgstr "Omitida (lista de ignorados)"
 
 msgid "Enllaços totals"
 msgstr "Total de enlaces"
@@ -880,6 +892,15 @@ msgstr "enlaces recomprobados."
 msgid "links unlinked."
 msgstr "enlaces desenlazados."
 
+msgid "rows skipped (menu/widget/term)."
+msgstr "filas omitidas (menú/widget/término)."
+
+msgid "requests failed."
+msgstr "peticiones fallidas."
+
+msgid "Unlinking…"
+msgstr "Desenlazando…"
+
 msgid "Manual locks (%d)"
 msgstr "Bloqueados manuales (%d)"
 
@@ -1274,3 +1295,102 @@ msgid "%1$d new broken link was detected on %2$s."
 msgid_plural "%1$d new broken links were detected on %2$s."
 msgstr[0] "Se ha detectado %1$d enlace roto nuevo en %2$s."
 msgstr[1] "Se han detectado %1$d enlaces rotos nuevos en %2$s."
+
+msgid "Extended scanning"
+msgstr "Escaneo ampliado"
+
+msgid "Plain-text URLs in post content (without <a> tags)"
+msgstr "URLs en texto plano en el contenido (sin etiquetas <a>)"
+
+msgid "Gutenberg block attributes (parse_blocks JSON)"
+msgstr "Atributos de bloques Gutenberg (JSON parse_blocks)"
+
+msgid "Navigation menus (custom menu links)"
+msgstr "Menús de navegación (enlaces personalizados)"
+
+msgid "Responsive media (srcset, picture, video, audio, embed)"
+msgstr "Medios responsivos (srcset, picture, vídeo, audio, embed)"
+
+msgid "Page builder data-* link attributes"
+msgstr "Atributos data-* de enlace de page builders"
+
+msgid "These sources are enabled by default. Uncheck any you want to skip during scans."
+msgstr "Estas fuentes están activadas por defecto. Desmarca las que quieras omitir durante el escaneo."
+
+msgid "Menu item #%d"
+msgstr "Elemento de menú #%d"
+
+msgid "Menu"
+msgstr "Menú"
+
+msgid "Menu links must be edited under Appearance > Menus."
+msgstr "Los enlaces de menú deben editarse en Apariencia > Menús."
+
+msgid "Close"
+msgstr "Cerrar"
+
+msgid "Destination detected (re-checked now)"
+msgstr "Destino detectado (comprobado ahora)"
+
+msgid "The destination blocks automated checks (403/401/429). It may work in a browser, but your server cannot confirm it — verify manually before editing the link."
+msgstr "El destino bloquea comprobaciones automáticas (403/401/429). Puede funcionar en el navegador, pero el servidor no puede confirmarlo — verifica manualmente antes de editar el enlace."
+
+msgid "Extended sources (Phase 2)"
+msgstr "Fuentes ampliadas (Fase 2)"
+
+msgid "Widget sidebars (Text, Custom HTML, block widgets)"
+msgstr "Sidebars de widgets (Texto, HTML personalizado, widgets de bloques)"
+
+msgid "Taxonomy term descriptions (categories, tags, etc.)"
+msgstr "Descripciones de términos taxonómicos (categorías, etiquetas, etc.)"
+
+msgid "Site Editor templates, template parts, and reusable blocks"
+msgstr "Plantillas del editor del sitio, partes de plantilla y bloques reutilizables"
+
+msgid "Plain-text URLs inside custom fields (requires ACF/Meta scan above)"
+msgstr "URLs en texto plano dentro de campos personalizados (requiere el escaneo ACF/Meta de arriba)"
+
+msgid "Third-party plugins can register extra sources with the tsoliin_register_link_source() API."
+msgstr "Los plugins de terceros pueden registrar fuentes adicionales con la API tsoliin_register_link_source()."
+
+msgid "Widget links must be edited under Appearance > Widgets."
+msgstr "Los enlaces de widgets deben editarse en Apariencia > Widgets."
+
+msgid "Term description links must be edited in the taxonomy editor."
+msgstr "Los enlaces de la descripción del término deben editarse en el editor de taxonomía."
+
+msgid "This link must be edited at its original source."
+msgstr "Este enlace debe editarse en su fuente original."
+
+msgid "Widget"
+msgstr "Widget"
+
+msgid "Term"
+msgstr "Término"
+
+msgid "Template"
+msgstr "Plantilla"
+
+msgid "Reusable block"
+msgstr "Bloque reutilizable"
+
+msgid "Widget %1$s / %2$s"
+msgstr "Widget %1$s / %2$s"
+
+msgid "%1$s: %2$s"
+msgstr "%1$s: %2$s"
+
+msgid "Action link (logout)"
+msgstr "Enlace de acción (cerrar sesión)"
+
+msgid "Warning: this link logs you out. Open only if you intend to end your session."
+msgstr "Aviso: este enlace cierra la sesión. Ábrelo solo si quieres cerrar la sesión."
+
+msgid "This link ends your WordPress session. Open it anyway?"
+msgstr "Este enlace cierra la sesión de WordPress. ¿Quieres abrirlo igualmente?"
+
+msgid "Blocked (cannot check from server)"
+msgstr "Bloqueado (no se puede comprobar desde el servidor)"
+
+msgid "Redirect destination already detected by scan (re-check blocked)"
+msgstr "Destino de redirección ya detectado por el escaneo (recomprobación bloqueada)"

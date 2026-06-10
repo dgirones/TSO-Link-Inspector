@@ -106,10 +106,15 @@ class TSOLIIN_List_Table extends WP_List_Table {
 			case 'link_type':
 				$type   = isset( $item->link_type ) ? (string) $item->link_type : 'link';
 				$icons  = array(
-					'link'    => array( 'dashicons-admin-links',    __( 'Link', 'tso-link-inspector' ) ),
-					'image'   => array( 'dashicons-format-image',   __( 'Image', 'tso-link-inspector' ) ),
-					'iframe'  => array( 'dashicons-video-alt3',     __( 'Iframe', 'tso-link-inspector' ) ),
-					'comment' => array( 'dashicons-admin-comments', __( 'Comment', 'tso-link-inspector' ) ),
+					'link'     => array( 'dashicons-admin-links',    __( 'Link', 'tso-link-inspector' ) ),
+					'image'    => array( 'dashicons-format-image',   __( 'Image', 'tso-link-inspector' ) ),
+					'iframe'   => array( 'dashicons-video-alt3',     __( 'Iframe', 'tso-link-inspector' ) ),
+					'comment'  => array( 'dashicons-admin-comments', __( 'Comment', 'tso-link-inspector' ) ),
+					'menu'     => array( 'dashicons-menu',           __( 'Menu', 'tso-link-inspector' ) ),
+					'widget'   => array( 'dashicons-welcome-widgets-menus', __( 'Widget', 'tso-link-inspector' ) ),
+					'term'     => array( 'dashicons-tag',            __( 'Term', 'tso-link-inspector' ) ),
+					'template' => array( 'dashicons-layout',         __( 'Template', 'tso-link-inspector' ) ),
+					'wp_block' => array( 'dashicons-block-default',  __( 'Reusable block', 'tso-link-inspector' ) ),
 				);
 				$icon  = isset( $icons[ $type ] ) ? $icons[ $type ][0] : 'dashicons-admin-links';
 				$label = isset( $icons[ $type ] ) ? $icons[ $type ][1] : esc_html( $type );
@@ -145,8 +150,17 @@ class TSOLIIN_List_Table extends WP_List_Table {
 		$is_broken = (int) $item->is_broken;
 		$code      = (int) $item->status_code;
 
+		$is_action = TSOLIIN_HTTP::is_action_url( $url ) || -6 === $code;
+		$link_title = $is_action
+			? __( 'Warning: this link logs you out. Open only if you intend to end your session.', 'tso-link-inspector' )
+			: $url;
+
 		$out  = '<span class="tsoliin-url">';
-		$out .= '<a href="' . esc_url( $url ) . '" title="' . esc_attr( $url ) . '" target="_blank" rel="noopener noreferrer">';
+		$out .= '<a href="' . esc_url( $url ) . '" title="' . esc_attr( $link_title ) . '" target="_blank" rel="noopener noreferrer"';
+		if ( $is_action ) {
+			$out .= ' data-tsoliin-action-url="1"';
+		}
+		$out .= '>';
 		$out .= esc_html( $display );
 		$out .= ' <span class="dashicons dashicons-external" style="font-size:12px;vertical-align:middle;"></span>';
 		$out .= '</a></span>';
@@ -160,21 +174,30 @@ class TSOLIIN_List_Table extends WP_List_Table {
 			&& $this->http->is_transparent_redirect( $url, (string) $item->redirect_url );
 		$show_suggest   = ! $verified
 			&& ! $transparent_rd
+			&& ! $is_action
 			&& (
 				$is_broken
-				|| $code < 0
+				|| ( $code < 0 && ! in_array( $code, array( -1, -6, -7 ), true ) )
 				|| preg_match( '#^http://#i', $url )
 				|| in_array( $code, $redirect_codes, true )
 				|| ! empty( $item->redirect_url )
 			);
 
+		$type    = isset( $item->link_type ) ? (string) $item->link_type : 'link';
 		$actions = array(
-			'edit'       => sprintf( '<a href="#" class="tsoliin-edit-link" data-id="%d" data-url="%s" data-post="%d">%s</a>', absint( $item->id ), esc_attr( $url ), absint( $item->post_id ), esc_html__( 'Edit URL', 'tso-link-inspector' ) ),
 			'recheck'    => sprintf( '<a href="#" class="tsoliin-recheck" data-id="%d" data-nonce="%s">%s</a>', absint( $item->id ), esc_attr( $nonce ), esc_html__( 'Recheck', 'tso-link-inspector' ) ),
 			'not_broken' => sprintf( '<a href="#" class="tsoliin-not-broken" data-id="%d" data-nonce="%s" style="color:#0a7d33;font-weight:600;">%s</a>', absint( $item->id ), esc_attr( $nonce ), esc_html__( 'Not broken', 'tso-link-inspector' ) ),
-			'unlink'     => sprintf( '<a href="#" class="tsoliin-unlink" data-id="%d" data-url="%s" data-post="%d" data-nonce="%s">%s</a>', absint( $item->id ), esc_attr( $url ), absint( $item->post_id ), esc_attr( $nonce ), esc_html__( 'Unlink', 'tso-link-inspector' ) ),
-			'delete'     => sprintf( '<a href="#" class="tsoliin-delete" data-id="%d" data-nonce="%s" title="%s">%s</a>', absint( $item->id ), esc_attr( $nonce ), esc_attr__( 'Delete this record. The post link is not modified.', 'tso-link-inspector' ), esc_html__( 'Delete', 'tso-link-inspector' ) ),
 		);
+		if ( ! $this->is_non_editable_link_type( $type, $item ) ) {
+			$actions = array_merge(
+				array(
+					'edit' => sprintf( '<a href="#" class="tsoliin-edit-link" data-id="%d" data-url="%s" data-post="%d">%s</a>', absint( $item->id ), esc_attr( $url ), absint( $item->post_id ), esc_html__( 'Edit URL', 'tso-link-inspector' ) ),
+				),
+				$actions
+			);
+			$actions['unlink'] = sprintf( '<a href="#" class="tsoliin-unlink" data-id="%d" data-url="%s" data-post="%d" data-nonce="%s">%s</a>', absint( $item->id ), esc_attr( $url ), absint( $item->post_id ), esc_attr( $nonce ), esc_html__( 'Unlink', 'tso-link-inspector' ) );
+		}
+		$actions['delete'] = sprintf( '<a href="#" class="tsoliin-delete" data-id="%d" data-nonce="%s" title="%s">%s</a>', absint( $item->id ), esc_attr( $nonce ), esc_attr__( 'Delete this record. The post link is not modified.', 'tso-link-inspector' ), esc_html__( 'Delete', 'tso-link-inspector' ) );
 
 		if ( $show_suggest ) {
 			$actions['suggest'] = sprintf( '<a href="#" class="tsoliin-suggest" data-id="%d" data-nonce="%s" style="color:#b45309;font-weight:600;">%s</a>', absint( $item->id ), esc_attr( $nonce ), esc_html__( 'Suggestion', 'tso-link-inspector' ) );
@@ -184,7 +207,47 @@ class TSOLIIN_List_Table extends WP_List_Table {
 	}
 
 	protected function column_post_title( $item ) {
-		$title    = ! empty( $item->post_title ) ? (string) $item->post_title : __( '(no title)', 'tso-link-inspector' );
+		$type  = isset( $item->link_type ) ? (string) $item->link_type : 'link';
+		$title = ! empty( $item->post_title ) ? (string) $item->post_title : __( '(no title)', 'tso-link-inspector' );
+
+		if ( 'menu' === $type && ! empty( $item->anchor_text ) ) {
+			$title = (string) $item->anchor_text;
+			$edit  = admin_url( 'nav-menus.php' );
+			return '<a href="' . esc_url( $edit ) . '">' . esc_html( $title ) . '</a>';
+		}
+
+		if ( 'widget' === $type ) {
+			$title = ! empty( $item->anchor_text ) ? (string) $item->anchor_text : __( 'Widget', 'tso-link-inspector' );
+			$edit  = admin_url( 'widgets.php' );
+			return '<a href="' . esc_url( $edit ) . '">' . esc_html( $title ) . '</a>';
+		}
+
+		if ( 'term' === $type ) {
+			$title = ! empty( $item->anchor_text ) ? (string) $item->anchor_text : __( 'Term', 'tso-link-inspector' );
+			$edit  = '';
+			if ( ! empty( $item->source_key ) && preg_match( '/^t-(\d+)-/', (string) $item->source_key, $m ) ) {
+				$term = get_term( absint( $m[1] ) );
+				if ( $term && ! is_wp_error( $term ) ) {
+					$edit = (string) get_edit_term_link( $term, $term->taxonomy );
+				}
+			}
+			if ( '' !== $edit ) {
+				return '<a href="' . esc_url( $edit ) . '">' . esc_html( $title ) . '</a>';
+			}
+			return esc_html( $title );
+		}
+
+		if ( in_array( $type, array( 'template', 'wp_block' ), true ) && ! empty( $item->post_id ) ) {
+			$edit = (string) get_edit_post_link( absint( $item->post_id ) );
+			if ( '' !== $edit ) {
+				return '<a href="' . esc_url( $edit ) . '" target="_blank" rel="noopener noreferrer">' . esc_html( $title ) . '</a>';
+			}
+		}
+
+		if ( empty( $item->post_id ) ) {
+			return esc_html( $title );
+		}
+
 		$edit     = (string) get_edit_post_link( absint( $item->post_id ) );
 		$view     = (string) get_permalink( absint( $item->post_id ) );
 		$post_url = esc_url( add_query_arg( array( 'page' => 'tso-link-inspector', 'post_id' => absint( $item->post_id ) ), admin_url( 'tools.php' ) ) );
@@ -208,12 +271,35 @@ class TSOLIIN_List_Table extends WP_List_Table {
 		return $out;
 	}
 
+	/**
+	 * Whether Edit/Unlink row actions should be hidden.
+	 *
+	 * @param string $type Link type.
+	 * @param object $item DB row.
+	 * @return bool
+	 */
+	private function is_non_editable_link_type( $type, $item ) {
+		if ( in_array( $type, array( 'menu', 'widget', 'term' ), true ) ) {
+			return true;
+		}
+		return empty( $item->post_id ) && 'comment' !== $type;
+	}
+
 	protected function column_status_code( $item ) {
+		$orig     = (string) $item->link_url;
+		$rurl     = (string) $item->redirect_url;
 		$code     = (int) $item->status_code;
-		$class    = TSOLIIN_HTTP::status_class( $code, (int) $item->is_broken, (string) $item->link_url );
-		$label    = TSOLIIN_HTTP::status_label( $code, (string) $item->link_url );
 		$verified = ! empty( $item->user_verified );
-		$badge    = '';
+		$is_transparent = $this->http && '' !== $rurl && $this->http->is_transparent_redirect( $orig, $rurl );
+
+		if ( $is_transparent ) {
+			$code  = 200;
+			$rurl  = '';
+		}
+
+		$class = TSOLIIN_HTTP::status_class( $code, (int) $item->is_broken, $orig );
+		$label = TSOLIIN_HTTP::status_label( $code, $orig );
+		$badge = '';
 		if ( $verified ) {
 			$badge .= '<span class="tsoliin-verified-badge" title="' . esc_attr__( 'Marked OK by you. Re-checks keep this unless the URL fails. Edit the URL in the post to clear.', 'tso-link-inspector' ) . '">&#128274; </span>';
 		}
@@ -223,9 +309,7 @@ class TSOLIIN_List_Table extends WP_List_Table {
 		}
 		$badge .= esc_html( $label ) . '</span>';
 
-		if ( ! empty( $item->redirect_url ) ) {
-			$rurl      = (string) $item->redirect_url;
-			$orig      = (string) $item->link_url;
+		if ( '' !== $rurl ) {
 			// Suppress trivial trailing-slash redirects in display.
 			$is_trivial = ( rtrim( $orig, '/' ) === rtrim( $rurl, '/' ) );
 			if ( ! $is_trivial ) {

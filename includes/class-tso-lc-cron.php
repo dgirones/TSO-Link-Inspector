@@ -135,17 +135,14 @@ class TSOLIIN_Cron {
 	 * @param bool $resume Whether to resume partial progress when possible.
 	 */
 	public function start_bg_check( $resume = true ) {
-		$resume    = (bool) $resume;
-		$unchecked = $this->db->get_unchecked_count();
-		$total     = (int) $this->db->get_stats()['total'];
-		$checked   = 0;
+		$resume = (bool) $resume;
+		$total  = (int) $this->db->get_stats()['total'];
 
-		if ( $resume && $unchecked > 0 ) {
-			$checked = max( 0, $total - $unchecked );
+		if ( $resume && $this->db->get_pending_check_count() > 0 ) {
+			$checked = max( 0, $total - $this->db->get_pending_check_count() );
 		} else {
 			$this->db->reset_all_for_recheck();
-			$unchecked = $this->db->get_unchecked_count();
-			$checked   = max( 0, $total - $unchecked );
+			$checked = 0;
 		}
 
 		update_option( 'tsoliin_bg_check_running', 1, false );
@@ -180,6 +177,9 @@ class TSOLIIN_Cron {
 		if ( empty( $links ) ) {
 			update_option( 'tsoliin_bg_check_running', 0, false );
 			update_option( 'tsoliin_last_check_batch', current_time( 'mysql', true ), false );
+			$this->db->cleanup_transparent_redirects();
+			$this->db->cleanup_action_url_rows();
+			$this->db->cleanup_mislabeled_skip_rows( true, 15 );
 			$this->maybe_send_digest_broken_email();
 			return;
 		}
@@ -192,8 +192,8 @@ class TSOLIIN_Cron {
 			}
 		}
 		$total     = (int) get_option( 'tsoliin_bg_check_total', 0 );
-		$unchecked = $this->db->get_unchecked_count();
-		update_option( 'tsoliin_bg_check_checked', $total - $unchecked, false );
+		$pending   = $this->db->get_pending_check_count();
+		update_option( 'tsoliin_bg_check_checked', max( 0, $total - $pending ), false );
 
 		$more = $this->db->get_links_batch_for_check( 1 );
 		if ( ! empty( $more ) ) {
@@ -207,6 +207,9 @@ class TSOLIIN_Cron {
 			delete_option( self::OPT_IMMEDIATE_QUEUE );
 			update_option( 'tsoliin_bg_check_running', 0, false );
 			update_option( 'tsoliin_last_check_batch', current_time( 'mysql', true ), false );
+			$this->db->cleanup_transparent_redirects();
+			$this->db->cleanup_action_url_rows();
+			$this->db->cleanup_mislabeled_skip_rows( true, 15 );
 			$this->maybe_send_digest_broken_email();
 		}
 	}
@@ -231,8 +234,8 @@ class TSOLIIN_Cron {
 		}
 
 		if ( $running && $total > 0 ) {
-			$unchecked = $this->db->get_unchecked_count();
-			$checked   = $total - $unchecked;
+			$pending = $this->db->get_pending_check_count();
+			$checked = max( 0, $total - $pending );
 		}
 
 		$pct = ( $total > 0 ) ? min( 100, (int) round( ( $checked / $total ) * 100 ) ) : 0;

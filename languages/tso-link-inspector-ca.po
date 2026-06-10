@@ -3,7 +3,7 @@
 # This file is distributed under the same license as the TSO Link Inspector plugin.
 msgid ""
 msgstr ""
-"Project-Id-Version: TSO Link Inspector 1.0.0\n"
+"Project-Id-Version: TSO Link Inspector 1.9.7\n"
 "Report-Msgid-Bugs-To: https://tusoporteonline.es\n"
 "POT-Creation-Date: 2024-01-01 00:00:00+00:00\n"
 "PO-Revision-Date: 2026-05-09 14:21+0200\n"
@@ -70,8 +70,20 @@ msgstr "Cancel·lar"
 msgid "Editar URL de l'enllaç"
 msgstr "Editar URL de l'enllaç"
 
-msgid "URL actual:"
+msgid "Current URL:"
 msgstr "URL actual:"
+
+msgid "URL updated:"
+msgstr "URL actualitzada:"
+
+msgid "☕ Support this plugin"
+msgstr "☕ Dona suport al plugin"
+
+msgid "Donate"
+msgstr "Donar"
+
+msgid "Skipped (ignore list)"
+msgstr "Omesa (llista d'ignorats)"
 
 msgid "Enllaços totals"
 msgstr "Enllaços totals"
@@ -221,7 +233,7 @@ msgid "No s'ha pogut trobar l'URL original al contingut del post."
 msgstr "No s'ha pogut trobar l'URL original al contingut del post."
 
 msgid "No s'ha pogut eliminar l'etiqueta de l'enllaç."
-msgstr "No s'ha pogut eliminar l'etiqueta de l'enllaç."
+msgstr "No s'ha pogut desenllaçar l'enllaç."
 
 msgid "No es pot connectar"
 msgstr "No es pot connectar"
@@ -452,7 +464,7 @@ msgid "El cron horari re-comprova automàticament els links més antics d'aquest
 msgstr "El cron horari re-comprova automàticament els links més antics d'aquest nombre de dies. Per defecte: 7 dies."
 
 msgid "No s'ha pogut eliminar l'etiqueta. Per a comentaris, edita'l manualment des de Comentaris."
-msgstr "No s'ha pogut eliminar l'etiqueta. Per a comentaris, edita'l manualment des de Comentaris."
+msgstr "No s'ha pogut desenllaçar l'enllaç. Per a comentaris, edita'l manualment des de Comentaris."
 
 msgid "No és trencat"
 msgstr "No és trencat"
@@ -733,6 +745,15 @@ msgstr "links recomprovats."
 msgid "links unlinked."
 msgstr "links desenllaçats."
 
+msgid "rows skipped (menu/widget/term)."
+msgstr "files omeses (menú/widget/terme)."
+
+msgid "requests failed."
+msgstr "peticions fallides."
+
+msgid "Unlinking…"
+msgstr "Desenllaçant…"
+
 msgid "Manual locks (%d)"
 msgstr "Bloquejats manuals (%d)"
 
@@ -794,7 +815,7 @@ msgid "Original URL not found in post. Check whether the link was edited manuall
 msgstr "URL original no trobada al post. Comprova que el link no ha estat editat manualment."
 
 msgid "Cannot unlink this item. For comments, edit manually."
-msgstr "No es pot eliminar. Per a comentaris edita manualment."
+msgstr "No es pot desenllaçar aquest element. Per a comentaris, edita'l manualment."
 
 msgid "Link tag removed."
 msgstr "Etiqueta eliminada."
@@ -1130,3 +1151,102 @@ msgid "%1$d new broken link was detected on %2$s."
 msgid_plural "%1$d new broken links were detected on %2$s."
 msgstr[0] "S'ha detectat %1$d enllaç trencat nou a %2$s."
 msgstr[1] "S'han detectat %1$d enllaços trencats nous a %2$s."
+
+msgid "Extended scanning"
+msgstr "Escaneig ampliat"
+
+msgid "Plain-text URLs in post content (without <a> tags)"
+msgstr "URL en text pla al contingut (sense etiquetes <a>)"
+
+msgid "Gutenberg block attributes (parse_blocks JSON)"
+msgstr "Atributs de blocs Gutenberg (JSON parse_blocks)"
+
+msgid "Navigation menus (custom menu links)"
+msgstr "Menús de navegació (enllaços personalitzats)"
+
+msgid "Responsive media (srcset, picture, video, audio, embed)"
+msgstr "Mitjans responsius (srcset, picture, vídeo, àudio, embed)"
+
+msgid "Page builder data-* link attributes"
+msgstr "Atributs data-* d'enllaç de page builders"
+
+msgid "These sources are enabled by default. Uncheck any you want to skip during scans."
+msgstr "Aquestes fonts estan activades per defecte. Desmarca les que vulguis ometre durant l'escaneig."
+
+msgid "Menu item #%d"
+msgstr "Element de menú #%d"
+
+msgid "Menu"
+msgstr "Menú"
+
+msgid "Menu links must be edited under Appearance > Menus."
+msgstr "Els enllaços de menú s'han d'editar a Aparença > Menús."
+
+msgid "Close"
+msgstr "Tancar"
+
+msgid "Destination detected (re-checked now)"
+msgstr "Destí detectat (recomprovat ara)"
+
+msgid "The destination blocks automated checks (403/401/429). It may work in a browser, but your server cannot confirm it — verify manually before editing the link."
+msgstr "La destinació bloqueja comprovacions automàtiques (403/401/429). Pot funcionar al navegador, però el servidor no ho pot confirmar — verifica manualment abans d'editar l'enllaç."
+
+msgid "Extended sources (Phase 2)"
+msgstr "Fonts ampliades (Fase 2)"
+
+msgid "Widget sidebars (Text, Custom HTML, block widgets)"
+msgstr "Sidebars de widgets (Text, HTML personalitzat, widgets de blocs)"
+
+msgid "Taxonomy term descriptions (categories, tags, etc.)"
+msgstr "Descripcions de termes taxonòmics (categories, etiquetes, etc.)"
+
+msgid "Site Editor templates, template parts, and reusable blocks"
+msgstr "Plantilles de l'editor del lloc, parts de plantilla i blocs reutilitzables"
+
+msgid "Plain-text URLs inside custom fields (requires ACF/Meta scan above)"
+msgstr "URLs en text pla dins camps personalitzats (requereix l'escaneig ACF/Meta de dalt)"
+
+msgid "Third-party plugins can register extra sources with the tsoliin_register_link_source() API."
+msgstr "Els plugins de tercers poden registrar fonts addicionals amb l'API tsoliin_register_link_source()."
+
+msgid "Widget links must be edited under Appearance > Widgets."
+msgstr "Els enllaços de widgets s'han d'editar a Aparença > Widgets."
+
+msgid "Term description links must be edited in the taxonomy editor."
+msgstr "Els enllaços de la descripció del terme s'han d'editar a l'editor de taxonomia."
+
+msgid "This link must be edited at its original source."
+msgstr "Aquest enllaç s'ha d'editar a la font original."
+
+msgid "Widget"
+msgstr "Widget"
+
+msgid "Term"
+msgstr "Terme"
+
+msgid "Template"
+msgstr "Plantilla"
+
+msgid "Reusable block"
+msgstr "Bloc reutilitzable"
+
+msgid "Widget %1$s / %2$s"
+msgstr "Widget %1$s / %2$s"
+
+msgid "%1$s: %2$s"
+msgstr "%1$s: %2$s"
+
+msgid "Action link (logout)"
+msgstr "Enllaç d'acció (tancar sessió)"
+
+msgid "Warning: this link logs you out. Open only if you intend to end your session."
+msgstr "Avís: aquest enllaç tanca la sessió. Obre'l només si vols tancar la sessió."
+
+msgid "This link ends your WordPress session. Open it anyway?"
+msgstr "Aquest enllaç tanca la sessió de WordPress. El vols obrir igualment?"
+
+msgid "Blocked (cannot check from server)"
+msgstr "Bloquejat (no es pot comprovar des del servidor)"
+
+msgid "Redirect destination already detected by scan (re-check blocked)"
+msgstr "Destí de redirecció ja detectat per l'escaneig (recomprovació bloquejada)"

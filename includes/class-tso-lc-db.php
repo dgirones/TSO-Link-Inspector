@@ -19,14 +19,19 @@ class TSOLIIN_DB {
 
 	/** @var string Full table name. */
 	private $table;
-	/** @var string Legacy table name. */
-	private $legacy_table;
+
+	/** @var bool|null Cached result of table_exists() for this request. */
+	private $table_exists_cache = null;
+
+	/** @var array<string, array<string, int>> Request cache for get_stats() / get_stats_for_post(). */
+	private static $stats_cache = array();
+
+	/** @var array<int, string[]> Request cache for get_broken_link_urls_for_post(). */
+	private static $broken_urls_by_post_cache = array();
 
 	public function __construct() {
 		global $wpdb;
-		$this->table        = $wpdb->prefix . 'tso_link_inspector';
-		$this->legacy_table = str_replace( 'inspector', 'checker', $this->table );
-		$this->migrate_legacy_table_name();
+		$this->table = $wpdb->prefix . 'tso_link_inspector';
 	}
 
 	/** @return string */
@@ -72,54 +77,29 @@ class TSOLIIN_DB {
 	}
 
 	/**
-	 * Ensure the table exists; recreate if missing.
+	 * Ensure the table exists (at most one SHOW TABLES query per request).
 	 */
 	public function ensure_table_exists() {
+		if ( $this->table_exists() ) {
+			return;
+		}
+		$this->create_table();
+		$this->table_exists_cache = true;
+	}
+
+	/**
+	 * Whether the inspector table exists (one query per request, cached).
+	 *
+	 * @return bool
+	 */
+	private function table_exists() {
+		if ( null !== $this->table_exists_cache ) {
+			return $this->table_exists_cache;
+		}
 		global $wpdb;
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		$exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $this->table ) );
-		if ( ! $exists ) {
-			$this->create_table();
-		}
-	}
-
-	/**
-	 * Rename legacy table to the new inspector slug, preserving existing data.
-	 */
-	private function migrate_legacy_table_name() {
-		global $wpdb;
-		if ( $this->legacy_table === $this->table ) {
-			return;
-		}
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		$new_exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $this->table ) );
-		$old_exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $this->legacy_table ) );
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		if ( $new_exists || ! $old_exists ) {
-			return;
-		}
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
-		$wpdb->query( "RENAME TABLE `{$this->legacy_table}` TO `{$this->table}`" );
-	}
-
-	/**
-	 * Fix legacy error codes 2-5 stored by absint() bug (should be -2 to -5).
-	 */
-	public function migrate_legacy_error_codes() {
-		global $wpdb;
-		$map = array( 2 => -2, 3 => -3, 4 => -4, 5 => -5 );
-		foreach ( $map as $wrong => $correct ) {
-			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-			$wpdb->query(
-				$wpdb->prepare(
-					// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-					"UPDATE {$this->table} SET status_code = %d WHERE status_code = %d AND is_broken = 1",
-					$correct,
-					$wrong
-				)
-			);
-			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		}
+		$this->table_exists_cache = (bool) $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $this->table ) );
+		return $this->table_exists_cache;
 	}
 
 	/**
@@ -141,7 +121,7 @@ class TSOLIIN_DB {
 	 * @param int    $post_id     Post ID.
 	 * @param string $link_url    URL.
 	 * @param string $anchor      Anchor text.
-	 * @param string $link_type   link|image|iframe|comment.
+	 * @param string $link_type   link|image|iframe|comment|menu.
 	 * @param string $source_key  Empty for post content; for comments e.g. c-123-author or c-123-l-<md5>.
 	 * @return int|false
 	 */
@@ -151,11 +131,20 @@ class TSOLIIN_DB {
 		$post_id    = absint( $post_id );
 		$link_url   = trim( str_replace( array( "\0", "\r", "\n" ), '', (string) $link_url ) );
 		$anchor     = sanitize_text_field( (string) $anchor );
-		$types      = array( 'link', 'image', 'iframe', 'comment' );
+		$types      = array( 'link', 'image', 'iframe', 'comment', 'menu', 'widget', 'term', 'template', 'wp_block' );
 		$link_type  = in_array( $link_type, $types, true ) ? $link_type : 'link';
 		$source_key = $this->sanitize_source_key( (string) $source_key );
 
-		if ( ! $post_id || '' === $link_url ) {
+		$external_types = array( 'widget', 'term' );
+		if ( ! $post_id ) {
+			if ( ! in_array( $link_type, $external_types, true ) || '' === $source_key ) {
+				return false;
+			}
+		} elseif ( '' === $link_url ) {
+			return false;
+		}
+
+		if ( $post_id && '' === $link_url ) {
 			return false;
 		}
 
@@ -204,7 +193,11 @@ class TSOLIIN_DB {
 		);
 		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
 
-		return $wpdb->insert_id ? absint( $wpdb->insert_id ) : false;
+		if ( $wpdb->insert_id ) {
+			self::clear_stats_cache();
+			return absint( $wpdb->insert_id );
+		}
+		return false;
 	}
 
 	/**
@@ -214,6 +207,44 @@ class TSOLIIN_DB {
 	public function sanitize_source_key( $key ) {
 		$key = strtolower( preg_replace( '/[^a-z0-9\-]/', '', (string) $key ) );
 		return substr( $key, 0, 64 );
+	}
+
+	/**
+	 * Drop menu link rows whose source_key for this menu item is no longer present.
+	 *
+	 * @param int      $menu_item_id Nav menu item post ID.
+	 * @param string[] $allowed_keys Non-empty keys still valid (e.g. mi-42).
+	 * @return void
+	 */
+	public function delete_menu_sources_not_in( $menu_item_id, array $allowed_keys ) {
+		global $wpdb;
+		$item_id = absint( $menu_item_id );
+		if ( ! $item_id ) {
+			return;
+		}
+		$source_key = $this->sanitize_source_key( 'mi-' . $item_id );
+		$allowed    = array();
+		foreach ( $allowed_keys as $k ) {
+			$k = $this->sanitize_source_key( (string) $k );
+			if ( '' !== $k && $k === $source_key ) {
+				$allowed[] = $k;
+			}
+		}
+		$allowed = array_values( array_unique( $allowed ) );
+
+		if ( empty( $allowed ) ) {
+			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+			$wpdb->query(
+				$wpdb->prepare(
+					"DELETE FROM {$this->table} WHERE link_type = %s AND source_key = %s",
+					'menu',
+					$source_key
+				)
+			);
+			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+			self::clear_stats_cache();
+			return;
+		}
 	}
 
 	/**
@@ -238,6 +269,7 @@ class TSOLIIN_DB {
 			)
 		);
 		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+		self::clear_stats_cache();
 	}
 
 	/**
@@ -276,6 +308,7 @@ class TSOLIIN_DB {
 				)
 			);
 			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+			self::clear_stats_cache();
 			return;
 		}
 
@@ -288,46 +321,76 @@ class TSOLIIN_DB {
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Dynamic table; NOT IN placeholders built from sanitized keys.
 		$wpdb->query( $wpdb->prepare( $sql, $params ) );
 		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+		self::clear_stats_cache();
 	}
 
 	/**
-	 * One-time: set source_key on legacy comment rows; drop rows we cannot attribute; dedupe.
+	 * Drop rows for a source prefix when keys are no longer present (widgets, terms, templates, etc.).
+	 *
+	 * @param string   $link_type    link_type value.
+	 * @param string   $prefix       source_key prefix (e.g. t-42-, wg-sidebar-1-text-2-).
+	 * @param string[] $allowed_keys Valid keys for this source.
+	 * @param int      $post_id      Optional post scope (0 = any).
+	 * @return void
 	 */
-	public function migrate_comment_source_keys() {
-		if ( get_option( 'tsoliin_comment_source_key_migrated', false ) ) {
+	public function delete_sources_not_in( $link_type, $prefix, array $allowed_keys, $post_id = 0 ) {
+		global $wpdb;
+		$link_type = sanitize_key( (string) $link_type );
+		$prefix    = $this->sanitize_source_key( (string) $prefix );
+		$post_id   = absint( $post_id );
+		if ( '' === $link_type || '' === $prefix ) {
 			return;
 		}
-		global $wpdb;
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix + fixed suffix; migration runs once.
-		$rows = $wpdb->get_results(
-			"SELECT id, link_url, anchor_text FROM {$this->table} WHERE link_type = 'comment' AND ( source_key = '' OR source_key IS NULL )",
-			ARRAY_A
-		);
-		if ( $rows ) {
-			foreach ( $rows as $row ) {
-				$id = absint( $row['id'] );
-				if ( ! preg_match( '/#(\d+)/', (string) $row['anchor_text'], $m ) ) {
-					$wpdb->delete( $this->table, array( 'id' => $id ), array( '%d' ) );
-					continue;
-				}
-				$cid        = absint( $m[1] );
-				$authorish  = (bool) preg_match( '/\b(author|autor|auteur)\b/iu', (string) $row['anchor_text'] );
-				$source_key = $authorish ? 'c-' . $cid . '-author' : 'c-' . $cid . '-l-' . md5( (string) $row['link_url'] );
-				$source_key = $this->sanitize_source_key( $source_key );
-				$wpdb->update(
-					$this->table,
-					array( 'source_key' => $source_key ),
-					array( 'id' => $id ),
-					array( '%s' ),
-					array( '%d' )
-				);
+
+		$allowed = array();
+		foreach ( $allowed_keys as $k ) {
+			$k = $this->sanitize_source_key( (string) $k );
+			if ( '' !== $k && 0 === strpos( $k, $prefix ) ) {
+				$allowed[] = $k;
 			}
 		}
-		$wpdb->query(
-			"DELETE t1 FROM {$this->table} t1 INNER JOIN {$this->table} t2 ON t1.post_id = t2.post_id AND t1.link_url = t2.link_url AND t1.source_key = t2.source_key AND t1.id > t2.id"
-		);
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
-		update_option( 'tsoliin_comment_source_key_migrated', true, false );
+		$allowed = array_values( array_unique( $allowed ) );
+		$like    = $wpdb->esc_like( $prefix ) . '%';
+
+		if ( empty( $allowed ) ) {
+			if ( $post_id ) {
+				// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				$wpdb->query(
+					$wpdb->prepare(
+						"DELETE FROM {$this->table} WHERE post_id = %d AND link_type = %s AND source_key LIKE %s",
+						$post_id,
+						$link_type,
+						$like
+					)
+				);
+				// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+			} else {
+				// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				$wpdb->query(
+					$wpdb->prepare(
+						"DELETE FROM {$this->table} WHERE link_type = %s AND source_key LIKE %s",
+						$link_type,
+						$like
+					)
+				);
+				// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+			}
+			self::clear_stats_cache();
+			return;
+		}
+
+		$placeholders = implode( ',', array_fill( 0, count( $allowed ), '%s' ) );
+		if ( $post_id ) {
+			$sql    = "DELETE FROM {$this->table} WHERE post_id = %d AND link_type = %s AND source_key LIKE %s AND source_key NOT IN ({$placeholders})";
+			$params = array_merge( array( $post_id, $link_type, $like ), $allowed );
+		} else {
+			$sql    = "DELETE FROM {$this->table} WHERE link_type = %s AND source_key LIKE %s AND source_key NOT IN ({$placeholders})";
+			$params = array_merge( array( $link_type, $like ), $allowed );
+		}
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared
+		$wpdb->query( $wpdb->prepare( $sql, $params ) );
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared
+		self::clear_stats_cache();
 	}
 
 	/**
@@ -354,6 +417,16 @@ class TSOLIIN_DB {
 			return;
 		}
 
+		$normalized = TSOLIIN_HTTP::normalize_stored_check_result(
+			(string) $row->link_url,
+			$status_code,
+			$redirect_url,
+			$is_broken
+		);
+		$status_code  = (int) $normalized['status_code'];
+		$redirect_url = (string) $normalized['redirect_url'];
+		$is_broken    = (int) $normalized['is_broken'];
+
 		$verified = (int) $row->user_verified;
 		$clear_lock = false;
 
@@ -367,6 +440,7 @@ class TSOLIIN_DB {
 			if ( '' === $baseline_link && '' === $baseline_redir ) {
 				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 				$wpdb->update( $this->table, array( 'last_checked' => current_time( 'mysql', true ) ), array( 'id' => $link_id ), array( '%s' ), array( '%d' ) );
+				self::clear_stats_cache();
 				return;
 			}
 
@@ -377,6 +451,7 @@ class TSOLIIN_DB {
 			if ( ! $link_changed && ! $redirect_changed ) {
 				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 				$wpdb->update( $this->table, array( 'last_checked' => current_time( 'mysql', true ) ), array( 'id' => $link_id ), array( '%s' ), array( '%d' ) );
+				self::clear_stats_cache();
 				return;
 			}
 
@@ -405,6 +480,7 @@ class TSOLIIN_DB {
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$wpdb->update( $this->table, $data, array( 'id' => $link_id ), $format, array( '%d' ) );
 		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		self::clear_stats_cache();
 	}
 
 	/**
@@ -431,6 +507,7 @@ class TSOLIIN_DB {
 			array( '%d' )
 		);
 		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		self::clear_stats_cache();
 	}
 
 	/**
@@ -470,6 +547,7 @@ class TSOLIIN_DB {
 			array( '%d' )
 		);
 		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		self::clear_stats_cache();
 		return true;
 	}
 
@@ -480,6 +558,7 @@ class TSOLIIN_DB {
 		global $wpdb;
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$wpdb->delete( $this->table, array( 'id' => absint( $link_id ) ), array( '%d' ) );
+		self::clear_stats_cache();
 	}
 
 	/**
@@ -489,6 +568,7 @@ class TSOLIIN_DB {
 		global $wpdb;
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$wpdb->delete( $this->table, array( 'post_id' => absint( $post_id ) ), array( '%d' ) );
+		self::clear_stats_cache();
 	}
 
 	/**
@@ -500,6 +580,7 @@ class TSOLIIN_DB {
 		// detect real regressions when previously "Not broken" links change state.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$wpdb->query( "UPDATE {$this->table} SET last_checked = NULL" );
+		self::clear_stats_cache();
 	}
 
 	// -------------------------------------------------------------------------
@@ -533,6 +614,8 @@ class TSOLIIN_DB {
 	 */
 	public function get_links( $args = array() ) {
 		global $wpdb;
+
+		$this->maybe_cleanup_transparent_redirects();
 
 		$defaults = array(
 			'filter'   => 'all',
@@ -661,15 +744,111 @@ class TSOLIIN_DB {
 		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 	}
 
-	/** @return int */
-	public function get_unchecked_count() {
+	/** @return int Rows with last_checked IS NULL (includes manually verified). */
+	public function get_pending_check_count() {
 		global $wpdb;
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		return (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$this->table} WHERE last_checked IS NULL" );
 	}
 
+	/** @return int */
+	public function get_unchecked_count() {
+		global $wpdb;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		return (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$this->table} WHERE last_checked IS NULL AND user_verified = 0" );
+	}
+
+	/**
+	 * Whether a link row belongs to a list-table filter tab.
+	 *
+	 * Mirrors the SQL conditions in get_links() / get_stats().
+	 *
+	 * @param object|array $link   Link row.
+	 * @param string       $filter Filter key.
+	 * @return bool
+	 */
+	public function link_matches_filter( $link, $filter ) {
+		$filter = sanitize_key( (string) $filter );
+		if ( 'all' === $filter || '' === $filter ) {
+			return true;
+		}
+
+		$link          = (object) $link;
+		$status_code   = isset( $link->status_code ) ? (int) $link->status_code : 0;
+		$is_broken     = isset( $link->is_broken ) ? (int) $link->is_broken : 0;
+		$user_verified = isset( $link->user_verified ) ? (int) $link->user_verified : 0;
+		$link_url      = isset( $link->link_url ) ? (string) $link->link_url : '';
+		$redirect_url  = isset( $link->redirect_url ) ? (string) $link->redirect_url : '';
+		$last_checked  = isset( $link->last_checked ) ? $link->last_checked : null;
+
+		switch ( $filter ) {
+			case 'broken':
+				return 1 === $is_broken && 0 === $user_verified;
+			case 'redirect':
+				return 0 === $user_verified && (
+					in_array( $status_code, array( 301, 302, 303, 307, 308 ), true )
+					|| '' !== $redirect_url
+				);
+			case 'ok':
+				return 200 === $status_code
+					&& 0 === $user_verified
+					&& 0 !== strpos( $link_url, 'http://' );
+			case 'unchecked':
+				return null === $last_checked && 0 === $user_verified;
+			case 'http_insecure':
+				return 0 === strpos( $link_url, 'http://' )
+					&& 0 === $is_broken
+					&& 0 === $user_verified;
+			case 'manual_locked':
+				return 1 === $user_verified;
+		}
+
+		return true;
+	}
+
+	/**
+	 * Clear cached aggregate stats and broken URL lists (call after writes that change counts).
+	 */
+	public static function clear_stats_cache() {
+		self::$stats_cache                 = array();
+		self::$broken_urls_by_post_cache = array();
+	}
+
+	/**
+	 * Broken link_url values for a post (for frontend rel="nofollow"; cached per request).
+	 *
+	 * @param int $post_id Post ID.
+	 * @return string[]
+	 */
+	public function get_broken_link_urls_for_post( $post_id ) {
+		$post_id = absint( $post_id );
+		if ( ! $post_id ) {
+			return array();
+		}
+		if ( array_key_exists( $post_id, self::$broken_urls_by_post_cache ) ) {
+			return self::$broken_urls_by_post_cache[ $post_id ];
+		}
+		global $wpdb;
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$urls = $wpdb->get_col(
+			$wpdb->prepare(
+				"SELECT link_url FROM {$this->table} WHERE post_id = %d AND is_broken = 1",
+				$post_id
+			)
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		self::$broken_urls_by_post_cache[ $post_id ] = is_array( $urls ) ? array_map( 'strval', $urls ) : array();
+		return self::$broken_urls_by_post_cache[ $post_id ];
+	}
+
 	/** @return array */
 	public function get_stats() {
+		$this->maybe_cleanup_transparent_redirects();
+
+		if ( isset( self::$stats_cache['all'] ) ) {
+			return self::$stats_cache['all'];
+		}
+
 		global $wpdb;
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$row = $wpdb->get_row(
@@ -683,7 +862,9 @@ class TSOLIIN_DB {
 		);
 		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$defaults = array( 'total' => 0, 'broken' => 0, 'redirect' => 0, 'ok' => 0, 'unchecked' => 0, 'http_insecure' => 0, 'manual_locked' => 0 );
-		return $row ? array_map( 'absint', $row ) : $defaults;
+		$stats    = $row ? array_map( 'absint', $row ) : $defaults;
+		self::$stats_cache['all'] = $stats;
+		return $stats;
 	}
 
 	/** @return int */
@@ -699,9 +880,7 @@ class TSOLIIN_DB {
 	public function self_test() {
 		global $wpdb;
 		$result = array( 'table_exists' => false, 'insert_ok' => false, 'error' => '' );
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		$exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $this->table ) );
-		if ( ! $exists ) {
+		if ( ! $this->table_exists() ) {
 			$result['error'] = 'Table missing: ' . $this->table;
 			return $result;
 		}
@@ -769,8 +948,15 @@ class TSOLIIN_DB {
 	 * @return array
 	 */
 	public function get_stats_for_post( $post_id ) {
-		global $wpdb;
 		$post_id = absint( $post_id );
+		$this->maybe_cleanup_transparent_redirects();
+
+		$cache_key = 'post_' . $post_id;
+		if ( isset( self::$stats_cache[ $cache_key ] ) ) {
+			return self::$stats_cache[ $cache_key ];
+		}
+
+		global $wpdb;
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$row = $wpdb->get_row(
 			$wpdb->prepare(
@@ -784,7 +970,9 @@ class TSOLIIN_DB {
 		);
 		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$defaults = array( 'total' => 0, 'broken' => 0, 'redirect' => 0, 'ok' => 0, 'unchecked' => 0, 'http_insecure' => 0, 'manual_locked' => 0 );
-		return $row ? array_map( 'absint', $row ) : $defaults;
+		$stats    = $row ? array_map( 'absint', $row ) : $defaults;
+		self::$stats_cache[ $cache_key ] = $stats;
+		return $stats;
 	}
 
 	/**
@@ -803,6 +991,185 @@ class TSOLIIN_DB {
 			  AND LOCATE( CONCAT(link_url, '?'), redirect_url ) = 1"
 		);
 		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+	}
+
+	/**
+	 * Throttled pass: normalize transparent / false-positive redirect rows in the DB.
+	 *
+	 * @return int Rows updated (0 when skipped via transient).
+	 */
+	public function maybe_cleanup_transparent_redirects() {
+		if ( get_transient( 'tsoliin_transparent_rd_cleanup' ) ) {
+			return 0;
+		}
+		$updated = $this->cleanup_transparent_redirects();
+		set_transient( 'tsoliin_transparent_rd_cleanup', 1, 30 );
+		return $updated;
+	}
+
+	/**
+	 * Fix legacy rows stored as -1 (ignore list) when the URL is not on the ignore list.
+	 *
+	 * @param bool $run_http When true, re-check safe URLs (cron/upgrade only).
+	 * @param int  $limit    Max HTTP re-checks per call.
+	 * @return int Rows updated.
+	 */
+	public function cleanup_mislabeled_skip_rows( $run_http = false, $limit = 20 ) {
+		global $wpdb;
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$rows = $wpdb->get_results(
+			"SELECT id, link_url, post_id FROM {$this->table} WHERE status_code = -1"
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+		if ( empty( $rows ) ) {
+			return 0;
+		}
+
+		$http    = new TSOLIIN_HTTP();
+		$updated = 0;
+		$checked = 0;
+		$limit   = max( 1, absint( $limit ) );
+
+		foreach ( $rows as $row ) {
+			$url = (string) $row->link_url;
+			if ( TSOLIIN_HTTP::is_ignored_url( $url ) ) {
+				continue;
+			}
+
+			if ( ! TSOLIIN_HTTP::is_safe_remote_url( $url ) ) {
+				// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+				$changed = $wpdb->update(
+					$this->table,
+					array(
+						'status_code'  => -7,
+						'redirect_url' => '',
+						'is_broken'    => 0,
+					),
+					array( 'id' => (int) $row->id ),
+					array( '%d', '%s', '%d' ),
+					array( '%d' )
+				);
+				// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+				if ( false !== $changed ) {
+					$updated++;
+				}
+				continue;
+			}
+
+			if ( ! $run_http || $checked >= $limit ) {
+				continue;
+			}
+
+			$r = $http->check( $url, (int) $row->post_id );
+			$this->update_check_result( (int) $row->id, $r['status_code'], $r['redirect_url'], $r['is_broken'] );
+			$updated++;
+			$checked++;
+		}
+
+		if ( $updated > 0 ) {
+			self::clear_stats_cache();
+		}
+
+		return $updated;
+	}
+
+	/**
+	 * Normalize rows whose redirect is transparent (YouTube youtu.be→watch, trailing slash, CDN, etc.).
+	 *
+	 * @return int Rows updated.
+	 */
+	public function cleanup_transparent_redirects() {
+		global $wpdb;
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$rows = $wpdb->get_results(
+			"SELECT id, link_url, redirect_url FROM {$this->table} WHERE redirect_url != ''"
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+		if ( empty( $rows ) ) {
+			return 0;
+		}
+
+		$http    = new TSOLIIN_HTTP();
+		$updated = 0;
+		foreach ( $rows as $row ) {
+			$orig  = (string) $row->link_url;
+			$redir = (string) $row->redirect_url;
+			if ( '' === $orig || '' === $redir || ! $http->is_transparent_redirect( $orig, $redir ) ) {
+				continue;
+			}
+			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$changed = $wpdb->update(
+				$this->table,
+				array(
+					'status_code'  => 200,
+					'redirect_url' => '',
+					'is_broken'    => 0,
+				),
+				array( 'id' => (int) $row->id ),
+				array( '%d', '%s', '%d' ),
+				array( '%d' )
+			);
+			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			if ( false !== $changed ) {
+				$updated++;
+			}
+		}
+
+		if ( $updated > 0 ) {
+			self::clear_stats_cache();
+		}
+
+		return $updated;
+	}
+
+	/**
+	 * Reclassify logout/action URLs that were previously checked as 403 bot-blocks.
+	 *
+	 * @return int Rows updated.
+	 */
+	public function cleanup_action_url_rows() {
+		global $wpdb;
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$rows = $wpdb->get_results(
+			"SELECT id, link_url FROM {$this->table}
+			WHERE link_url LIKE '%wp-login.php%' OR link_url LIKE '%action=logout%'"
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+		if ( empty( $rows ) ) {
+			return 0;
+		}
+
+		$updated = 0;
+		foreach ( $rows as $row ) {
+			if ( ! TSOLIIN_HTTP::is_action_url( (string) $row->link_url ) ) {
+				continue;
+			}
+			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$changed = $wpdb->update(
+				$this->table,
+				array(
+					'status_code'  => -6,
+					'redirect_url' => '',
+					'is_broken'    => 0,
+				),
+				array( 'id' => (int) $row->id ),
+				array( '%d', '%s', '%d' ),
+				array( '%d' )
+			);
+			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			if ( false !== $changed ) {
+				$updated++;
+			}
+		}
+
+		if ( $updated > 0 ) {
+			self::clear_stats_cache();
+		}
+
+		return $updated;
 	}
 
 	/**
