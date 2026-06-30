@@ -3852,30 +3852,86 @@ class TSOLIIN_Scanner {
 		if ( ! $post || '' === $new_anchor ) {
 			return false;
 		}
-		$url      = (string) $url;
-		$content  = $post->post_content;
-		$variants = array_unique( array_filter( array_merge(
-			$this->url_content_variants( $url, $post_id ),
-			array(
-				urldecode( $url ),
-				rawurldecode( $url ),
-				str_replace( '&', '&amp;', $url ),
-				html_entity_decode( $url, ENT_QUOTES, 'UTF-8' ),
-			)
-		) ) );
 
-		foreach ( $variants as $v ) {
-			if ( '' === $v ) {
+		$content    = $post->post_content;
+		$candidates = $this->build_url_replace_candidates_for_content( (string) $url, $post_id, $content );
+
+		foreach ( $candidates as $spelling ) {
+			if ( '' === $spelling ) {
 				continue;
 			}
-			$pattern     = '#(<a\s[^>]*href=["\']' . preg_quote( $v, '#' ) . '["\'][^>]*>)(.*?)(</a>)#is';
-			$new_content = preg_replace( $pattern, '$1' . esc_html( $new_anchor ) . '$3', $content, 1, $count );
-			if ( $count > 0 && is_string( $new_content ) && $new_content !== $content ) {
-				$this->maybe_create_post_revision( $post_id );
-				return $this->update_post_content( $post_id, $new_content );
+			$snippet = $this->extract_anchor_tag_snippet_for_href( $content, $spelling );
+			if ( '' === $snippet ) {
+				continue;
+			}
+			$updated = $this->replace_anchor_text_in_tag_snippet( $snippet, $new_anchor );
+			if ( $updated === $snippet ) {
+				continue;
+			}
+			$pos = strpos( $content, $snippet );
+			if ( false === $pos ) {
+				$pos = stripos( $content, $snippet );
+				if ( false === $pos ) {
+					continue;
+				}
+			}
+			$new_content = substr_replace( $content, $updated, $pos, strlen( $snippet ) );
+			if ( $new_content === $content ) {
+				continue;
+			}
+			$this->maybe_create_post_revision( $post_id );
+			$r = $this->update_post_content( $post_id, $new_content );
+			if ( ! $r ) {
+				return false;
+			}
+			$this->purge_cache( $post_id );
+			return true;
+		}
+
+		return false;
+	}
+
+	/**
+	 * Full <a href="…">…</a> snippet matching an href spelling in post content.
+	 *
+	 * @param string $content      Raw post HTML.
+	 * @param string $href_spelling Exact href attribute value.
+	 * @return string
+	 */
+	private function extract_anchor_tag_snippet_for_href( $content, $href_spelling ) {
+		$content = (string) $content;
+		$open    = $this->extract_tag_snippet_for_attr_value( $content, 'href', (string) $href_spelling );
+		if ( '' === $open || ! preg_match( '#^<a\b#i', $open ) ) {
+			return '';
+		}
+		$pos = strpos( $content, $open );
+		if ( false === $pos ) {
+			$pos = stripos( $content, $open );
+			if ( false === $pos ) {
+				return '';
 			}
 		}
-		return false;
+		$after_open = $pos + strlen( $open );
+		$close_pos  = stripos( $content, '</a>', $after_open );
+		if ( false === $close_pos ) {
+			return '';
+		}
+		return substr( $content, $pos, $close_pos + 4 - $pos );
+	}
+
+	/**
+	 * Replace visible text inside a single anchor tag snippet.
+	 *
+	 * @param string $snippet    Full <a>…</a> HTML.
+	 * @param string $new_anchor New link text.
+	 * @return string
+	 */
+	private function replace_anchor_text_in_tag_snippet( $snippet, $new_anchor ) {
+		$snippet = (string) $snippet;
+		if ( ! preg_match( '#^(<a\b[^>]*>)(.*?)(</a>)$#is', $snippet, $matches ) ) {
+			return $snippet;
+		}
+		return $matches[1] . esc_html( (string) $new_anchor ) . $matches[3];
 	}
 
 	/**
