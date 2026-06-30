@@ -3705,18 +3705,47 @@ class TSOLIIN_Scanner {
 			$post_id,
 			$match_src
 		);
-		if ( null === $new_content ) {
-			return false;
+
+		$content_saved = false;
+		if ( null !== $new_content && $new_content !== $post->post_content ) {
+			$this->maybe_create_post_revision( $post_id );
+
+			$r = $this->update_post_content( $post_id, $new_content );
+			if ( ! $r ) {
+				return false;
+			}
+			$this->purge_cache( $post_id );
+			$content_saved = true;
 		}
 
-		$this->maybe_create_post_revision( $post_id );
+		$meta_saved = $this->sync_attachment_image_alt_meta( $match_src, (string) $old_url, (string) $new_alt );
 
-		$r = $this->update_post_content( $post_id, $new_content );
-		if ( ! $r ) {
+		return $content_saved || $meta_saved;
+	}
+
+	/**
+	 * Store alt text on the media-library attachment when the URL maps to one.
+	 *
+	 * @param string $primary_url Preferred image URL.
+	 * @param string $fallback_url Secondary URL variant.
+	 * @param string $new_alt      Alt text.
+	 * @return bool
+	 */
+	private function sync_attachment_image_alt_meta( $primary_url, $fallback_url, $new_alt ) {
+		$attachment_id = 0;
+		foreach ( array( (string) $primary_url, (string) $fallback_url ) as $url ) {
+			if ( '' === $url ) {
+				continue;
+			}
+			$attachment_id = TSOLIIN_Support::resolve_attachment_id_from_url( $url );
+			if ( $attachment_id > 0 ) {
+				break;
+			}
+		}
+		if ( $attachment_id <= 0 ) {
 			return false;
 		}
-		$this->purge_cache( $post_id );
-		return true;
+		return (bool) update_post_meta( $attachment_id, '_wp_attachment_image_alt', sanitize_text_field( (string) $new_alt ) );
 	}
 
 	/**
@@ -3730,44 +3759,82 @@ class TSOLIIN_Scanner {
 	 * @return string|null
 	 */
 	private function replace_alt_on_img_src( $content, $old_url, $new_alt, $post_id, $match_src ) {
-		$new_alt = sanitize_text_field( (string) $new_alt );
-		$candidates = array_unique( array_filter( array_merge(
-			$this->build_url_replace_candidates( $match_src, $post_id ),
-			$this->build_url_replace_candidates( $old_url, $post_id )
-		) ) );
+		$new_alt     = sanitize_text_field( (string) $new_alt );
+		$content     = (string) $content;
+		$escaped_alt = esc_attr( $new_alt );
+		$stored_urls = array_values( array_unique( array_filter( array( (string) $match_src, (string) $old_url ) ) ) );
+		$candidates  = array();
 
-		usort(
-			$candidates,
-			static function ( $a, $b ) {
-				return strlen( (string) $b ) - strlen( (string) $a );
-			}
-		);
+		foreach ( $stored_urls as $stored ) {
+			$candidates = array_merge(
+				$candidates,
+				$this->build_url_replace_candidates_for_content( $stored, $post_id, $content )
+			);
+		}
+		$candidates = array_values( array_unique( array_filter( $candidates ) ) );
 
-		foreach ( $candidates as $v ) {
-			if ( '' === $v ) {
+		foreach ( $candidates as $spelling ) {
+			$snippet = $this->extract_tag_snippet_for_attr_value( $content, 'src', $spelling );
+			if ( '' === $snippet || false === stripos( $snippet, '<img' ) ) {
 				continue;
 			}
-			$quoted      = preg_quote( (string) $v, '#' );
-			$pattern     = '#(<img\b)(\s[^>]*?\ssrc=(["\'])' . $quoted . '\3)([^>]*)(>)#is';
-			$escaped_alt = esc_attr( $new_alt );
-			$count       = 0;
-			$next        = preg_replace_callback(
-				$pattern,
-				static function ( $m ) use ( $escaped_alt ) {
-					$attrs = $m[2] . $m[4];
-					$attrs = preg_replace( '#\salt=(["\']).*?\1#is', '', $attrs );
-					return $m[1] . $attrs . ' alt="' . $escaped_alt . '"' . $m[5];
-				},
-				$content,
-				1,
-				$count
-			);
-			if ( $count > 0 && is_string( $next ) && $next !== $content ) {
-				return $next;
+			$updated = $this->replace_alt_in_img_tag_snippet( $snippet, $escaped_alt );
+			if ( $updated === $snippet ) {
+				continue;
+			}
+			$pos = strpos( $content, $snippet );
+			if ( false === $pos ) {
+				$pos = stripos( $content, $snippet );
+				if ( false === $pos ) {
+					continue;
+				}
+			}
+			return substr_replace( $content, $updated, $pos, strlen( $snippet ) );
+		}
+
+		$attachment_id = 0;
+		foreach ( $stored_urls as $stored ) {
+			$attachment_id = TSOLIIN_Support::resolve_attachment_id_from_url( $stored );
+			if ( $attachment_id > 0 ) {
+				break;
+			}
+		}
+		if ( $attachment_id > 0 && preg_match(
+			'#<img\b[^>]*\bclass=(["\'])[^"\']*\bwp-image-' . preg_quote( (string) $attachment_id, '#' ) . '\b[^"\']*\1[^>]*/?>#is',
+			$content,
+			$matches,
+			PREG_OFFSET_CAPTURE
+		) ) {
+			$snippet = (string) $matches[0][0];
+			$pos     = (int) $matches[0][1];
+			$updated = $this->replace_alt_in_img_tag_snippet( $snippet, $escaped_alt );
+			if ( $updated !== $snippet ) {
+				return substr_replace( $content, $updated, $pos, strlen( $snippet ) );
 			}
 		}
 
 		return null;
+	}
+
+	/**
+	 * Set or replace alt="" on a single <img> tag snippet.
+	 *
+	 * @param string $snippet     Full <img …> tag.
+	 * @param string $escaped_alt Escaped alt attribute value.
+	 * @return string
+	 */
+	private function replace_alt_in_img_tag_snippet( $snippet, $escaped_alt ) {
+		$snippet = (string) $snippet;
+		if ( preg_match( '#\salt=(["\']).*?\1#is', $snippet ) ) {
+			$next = preg_replace( '#\salt=(["\']).*?\1#is', ' alt="' . $escaped_alt . '"', $snippet, 1 );
+			return is_string( $next ) ? $next : $snippet;
+		}
+		if ( preg_match( '#/\s*>$#', $snippet ) ) {
+			$next = preg_replace( '#/\s*>$#', ' alt="' . $escaped_alt . '" />', $snippet, 1 );
+			return is_string( $next ) ? $next : $snippet;
+		}
+		$next = preg_replace( '#>$#', ' alt="' . $escaped_alt . '">', $snippet, 1 );
+		return is_string( $next ) ? $next : $snippet;
 	}
 
 	/**
