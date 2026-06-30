@@ -944,12 +944,12 @@
 				$link.attr( 'href', d.new_url ).attr( 'title', d.new_url );
 				$link.text( display + ' ' );
 				$link.append( $icon );
-				$row.find( '.tsoliin-edit-link' ).attr( 'data-url', d.new_url );
+				$row.find( '.tsoliin-edit-link' ).attr( 'data-url', d.new_url ).data( 'url', d.new_url );
 				this.editOldUrl = d.new_url;
 			}
-			if ( d.new_anchor ) {
+			if ( undefined !== d.new_anchor && null !== d.new_anchor ) {
 				$row.find( '.column-anchor_text' ).text( d.new_anchor );
-				$row.find( '.tsoliin-edit-link' ).attr( 'data-anchor', d.new_anchor );
+				$row.find( '.tsoliin-edit-link' ).attr( 'data-anchor', d.new_anchor ).data( 'anchor', d.new_anchor );
 			}
 			if ( d.status_html ) {
 				$row.find( '.column-status_code' ).html( d.status_html );
@@ -1370,10 +1370,11 @@
 						return;
 					}
 					if ( 'recheck' === act && r.data.row ) {
-							// Update row status live.
-							var d   = r.data.row;
-							var $tr = $( 'tr' ).filter( function () {
-								return $( this ).find( 'input[value="' + d.link_id + '"]' ).length > 0;
+							// Update row status live (use request ID — resync may assign a new DB row).
+							var d         = r.data.row;
+							var requestId = linkIds[ index ];
+							var $tr       = $( 'tr' ).filter( function () {
+								return $( this ).find( 'input[value="' + requestId + '"]' ).length > 0;
 							} );
 							if ( $tr.length ) {
 								if ( d.removed ) {
@@ -1385,13 +1386,19 @@
 									self._bulkFilterRemoved++;
 									self.refreshStats();
 								} else {
-									if ( d.status_html ) {
+									if ( d.new_url ) {
+										self.applyLinkEditToRow( $tr, d );
+									} else if ( d.status_html ) {
 										$tr.find( '.column-status_code' ).html( d.status_html );
-									} else {
+									} else if ( undefined !== d.status_code && undefined !== d.css_class && undefined !== d.label ) {
 										$tr.find( '.column-status_code' ).html( '<span class="tsoliin-status ' + d.css_class + '">' + parseInt( d.status_code, 10 ) + ' ' + self.escapeHtml( d.label ) + '</span>' );
 									}
 									$tr.find( '.column-last_checked' ).text( d.last_checked );
 									$tr.toggleClass( 'tsoliin-row--broken', 1 === parseInt( d.is_broken, 10 ) );
+									if ( d.link_id && parseInt( d.link_id, 10 ) !== parseInt( requestId, 10 ) ) {
+										$tr.find( 'input[name="link_ids[]"]' ).val( d.link_id );
+										$tr.find( '[data-id="' + requestId + '"]' ).attr( 'data-id', d.link_id );
+									}
 								}
 							}
 						} else if ( 'unlink' === act && r.data.link_id ) {
@@ -1653,7 +1660,7 @@
 						}
 						$row.find( '.column-status_code' ).html( '<span class="tsoliin-status ' + d.css_class + '">' + parseInt( d.status_code, 10 ) + ' ' + self.escapeHtml( d.label ) + '</span>' );
 						$row.find( '.tsoliin-url a' ).attr( 'href', d.new_url ).text( d.new_url.substring( 0, 57 ) );
-						$row.find( '.tsoliin-edit-link' ).attr( 'data-url', d.new_url );
+						$row.find( '.tsoliin-edit-link' ).attr( 'data-url', d.new_url ).data( 'url', d.new_url );
 						$row.toggleClass( 'tsoliin-row--broken', 1 === d.is_broken );
 						$btn.closest( '.tsoliin-suggest-row' ).fadeOut( 300, function () { $( this ).remove(); } );
 						self.showNotice( '✅ ' + tsoliinData.i18n.urlUpdated + ' ' + d.new_url, 'success' );

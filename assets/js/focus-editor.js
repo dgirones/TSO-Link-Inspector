@@ -8,6 +8,31 @@
 	var codeModeTried     = false;
 	var visualTried       = false;
 	var blockFocusPending = false;
+	var visualModeEnsured = false;
+
+	function isClassicEditorDom() {
+		if ( document.body.classList.contains( 'block-editor-page' ) ) {
+			return false;
+		}
+		return !! (
+			document.getElementById( 'post' ) && (
+				document.getElementById( 'content' ) ||
+				document.getElementById( 'wp-content-editor-container' ) ||
+				document.getElementById( 'postdivrich' )
+			)
+		);
+	}
+
+	function isBlockEditorScreen( data ) {
+		if ( isClassicEditorDom() ) {
+			return false;
+		}
+		if ( data && typeof data.isBlockEditor !== 'undefined' ) {
+			return !! data.isBlockEditor;
+		}
+		return document.body.classList.contains( 'block-editor-page' )
+			|| !! document.querySelector( '.block-editor-writing-flow, .edit-post-layout' );
+	}
 
 	function getFocusData() {
 		if ( window.tsoliinFocusLink && window.tsoliinFocusLink.variants && window.tsoliinFocusLink.variants.length ) {
@@ -90,9 +115,22 @@
 		return data.linkType !== 'image' && data.linkType !== 'iframe';
 	}
 
-	function ensureVisualEditorMode() {
+	function ensureVisualEditorMode( data ) {
+		if ( visualModeEnsured || ! isBlockEditorScreen( data ) ) {
+			return;
+		}
 		if ( ! window.wp || ! wp.data ) {
 			return;
+		}
+		var prefSelect = wp.data.select( 'core/preferences' );
+		if ( prefSelect && prefSelect.get ) {
+			try {
+				var current = prefSelect.get( 'core', 'editorMode' );
+				if ( 'visual' === current ) {
+					visualModeEnsured = true;
+					return;
+				}
+			} catch ( err ) {}
 		}
 		var prefs = wp.data.dispatch( 'core/preferences' );
 		if ( ! prefs || ! prefs.set ) {
@@ -104,6 +142,7 @@
 		try {
 			prefs.set( 'core/edit-post', 'editorMode', 'visual' );
 		} catch ( err ) {}
+		visualModeEnsured = true;
 	}
 
 	function getDocumentFromRoot( root ) {
@@ -518,7 +557,7 @@
 			return false;
 		}
 		blockFocusPending = true;
-		ensureVisualEditorMode();
+		ensureVisualEditorMode( data );
 		dispatch.selectBlock( clientId );
 		if ( dispatch.flashBlock ) {
 			dispatch.flashBlock( clientId );
@@ -564,7 +603,7 @@
 		return false;
 	}
 
-	function focusInTinyMce( searchVariants ) {
+	function focusInTinyMce( searchVariants, data ) {
 		if ( typeof window.tinymce === 'undefined' ) {
 			return false;
 		}
@@ -576,12 +615,48 @@
 		if ( ! doc || ! doc.body ) {
 			return false;
 		}
+		var linkType = data && data.linkType ? data.linkType : '';
+		if ( linkType === 'image' || linkType === 'iframe' ) {
+			var attachmentId = parseInt( data.attachmentId, 10 ) || 0;
+			var images       = doc.body.querySelectorAll( 'img' );
+			var i;
+			if ( attachmentId > 0 ) {
+				for ( i = 0; i < images.length; i++ ) {
+					var img = images[ i ];
+					if ( parseInt( img.getAttribute( 'data-id' ), 10 ) === attachmentId
+						|| parseInt( img.getAttribute( 'data-attachment-id' ), 10 ) === attachmentId
+						|| parseInt( img.getAttribute( 'data-wp-image' ), 10 ) === attachmentId ) {
+						ed.focus();
+						return highlightElement( img );
+					}
+				}
+			}
+			for ( i = 0; i < images.length; i++ ) {
+				var candidate = images[ i ];
+				var src       = candidate.getAttribute( 'src' ) || '';
+				var srcset    = candidate.getAttribute( 'srcset' ) || '';
+				if ( urlMatchesVariants( src, searchVariants ) || urlMatchesVariants( srcset, searchVariants ) ) {
+					ed.focus();
+					return highlightElement( candidate );
+				}
+			}
+		}
 		var el = highlightPlainTextInRoot( doc.body, searchVariants );
 		if ( ! el ) {
 			return false;
 		}
 		ed.focus();
 		return highlightElement( el );
+	}
+
+	function tryClassicEditorFocus( data, searchVariants ) {
+		if ( focusMetaField( data, searchVariants ) ) {
+			return true;
+		}
+		if ( focusInTinyMce( searchVariants, data ) ) {
+			return true;
+		}
+		return selectInTextarea( findCodeTextarea() || document.getElementById( 'content' ), searchVariants );
 	}
 
 	function tryFocus() {
@@ -593,8 +668,11 @@
 			return false;
 		}
 		var searchVariants = buildSearchVariants( data );
+		var blockEditor    = isBlockEditorScreen( data );
 
-		ensureVisualEditorMode();
+		if ( ! blockEditor ) {
+			return tryClassicEditorFocus( data, searchVariants );
+		}
 
 		if ( data.inPostContent === 0 && focusMetaField( data, searchVariants ) ) {
 			return true;
@@ -611,7 +689,7 @@
 			if ( shouldAllowCodeMode( data ) && focusInCodeEditor( data, searchVariants ) ) {
 				return true;
 			}
-			if ( focusInTinyMce( searchVariants ) ) {
+			if ( focusInTinyMce( searchVariants, data ) ) {
 				return true;
 			}
 			return shouldAllowCodeMode( data ) && selectInTextarea( findCodeTextarea(), searchVariants );
@@ -632,7 +710,7 @@
 		if ( focusMetaField( data, searchVariants ) ) {
 			return true;
 		}
-		if ( focusInTinyMce( searchVariants ) ) {
+		if ( focusInTinyMce( searchVariants, data ) ) {
 			return true;
 		}
 		if ( shouldAllowCodeMode( data ) ) {
@@ -641,24 +719,66 @@
 		return false;
 	}
 
-	function start() {
-		ensureVisualEditorMode();
-		if ( tryFocus() ) {
+	function whenTinyMceReady( callback ) {
+		if ( typeof callback !== 'function' ) {
 			return;
 		}
-		if ( window.wp && wp.data && wp.data.subscribe ) {
-			var attempts = 0;
-			var unsubscribe = wp.data.subscribe( function () {
-				attempts++;
-				if ( tryFocus() || attempts > 200 ) {
-					unsubscribe();
-				}
-			} );
+		if ( typeof window.tinymce === 'undefined' ) {
+			callback();
+			return;
 		}
-		window.setTimeout( tryFocus, 600 );
-		window.setTimeout( tryFocus, 1500 );
-		window.setTimeout( tryFocus, 3000 );
-		window.setTimeout( tryFocus, 5000 );
+		var ed = window.tinymce.get( 'content' );
+		if ( ed ) {
+			if ( ed.initialized ) {
+				callback();
+			} else {
+				ed.on( 'init', callback );
+			}
+			return;
+		}
+		window.tinymce.on( 'AddEditor', function ( event ) {
+			if ( event.editor && event.editor.id === 'content' ) {
+				event.editor.on( 'init', callback );
+			}
+		} );
+	}
+
+	function scheduleClassicFallback( data ) {
+		window.setTimeout( function () {
+			if ( focused || ! data ) {
+				return;
+			}
+			tryClassicEditorFocus( data, buildSearchVariants( data ) );
+		}, 2500 );
+	}
+
+	function start() {
+		var data = getFocusData();
+		if ( ! data ) {
+			return;
+		}
+		var blockEditor = isBlockEditorScreen( data );
+		if ( blockEditor ) {
+			ensureVisualEditorMode( data );
+		}
+		var runFocus = function () {
+			if ( tryFocus() ) {
+				return;
+			}
+			var delays = [ 400, 900, 1500, 2500, 4000, 6000 ];
+			var i;
+			for ( i = 0; i < delays.length; i++ ) {
+				window.setTimeout( tryFocus, delays[ i ] );
+			}
+			if ( blockEditor ) {
+				scheduleClassicFallback( data );
+			}
+		};
+		if ( ! blockEditor ) {
+			whenTinyMceReady( runFocus );
+		} else {
+			runFocus();
+		}
 	}
 
 	if ( window.wp && wp.domReady ) {

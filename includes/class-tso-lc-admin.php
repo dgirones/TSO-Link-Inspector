@@ -829,7 +829,7 @@ class TSOLIIN_Admin {
 		echo '<dd>' . esc_html__( 'Scan finds links in posts, comments, menus, widgets, custom fields, and other enabled sources, then saves them in the database. Check sends HTTP requests to test whether each URL works. Run Scan after editing content; run Check when you want fresh status codes.', 'tso-link-inspector' ) . '</dd>';
 
 		echo '<dt>' . esc_html__( 'Automatic checks (cron)', 'tso-link-inspector' ) . '</dt>';
-		echo '<dd>' . esc_html__( 'A full Scan runs once per day. HTTP checks run hourly in configurable batches via WP-Cron. Priority order: never-checked links first, then broken links past the broken recheck interval, then OK links past the OK recheck interval. The main dashboard shows the check queue, throughput, and next scheduled run. Adjust batch size and intervals in Settings.', 'tso-link-inspector' );
+		echo '<dd>' . esc_html__( 'A full Scan runs once per day. HTTP checks run hourly in configurable batches via WP-Cron. When a stored URL no longer appears in WordPress, the cron re-reads that source once before checking (or removes the row if the link is gone). Priority order: never-checked links first, then broken links past the broken recheck interval, then OK links past the OK recheck interval. The main dashboard shows the check queue, throughput, and next scheduled run. Adjust batch size and intervals in Settings.', 'tso-link-inspector' );
 		echo ' ' . esc_html__( 'WP-Cron only runs when your site receives visits. On low-traffic or cached sites, schedule a server cron job to call wp-cron.php every hour for reliable automatic checks.', 'tso-link-inspector' );
 		echo '</dd>';
 
@@ -1826,36 +1826,7 @@ class TSOLIIN_Admin {
 	 * @return object|null Updated row, or null if the link was removed from the source.
 	 */
 	private function resync_link_before_recheck( $link ) {
-		if ( ! $link ) {
-			return null;
-		}
-		$original  = $link;
-		$link_type = isset( $link->link_type ) ? (string) $link->link_type : 'link';
-		$post_id   = (int) $link->post_id;
-		$hint      = 0;
-
-		switch ( true ) {
-			case $post_id > 0 && in_array( $link_type, array( 'link', 'image', 'iframe', 'plain' ), true ):
-				$this->scanner->scan_post( $post_id, false );
-				break;
-			case 'widget' === $link_type:
-				$hint = $this->scanner->rescan_widget_link( $link );
-				break;
-			case 'menu' === $link_type:
-				$hint = $this->scanner->rescan_menu_link( $link );
-				break;
-			case 'comment' === $link_type:
-				$hint = $this->scanner->rescan_comment_link( $link );
-				break;
-			case 'term' === $link_type:
-				$hint = $this->scanner->rescan_term_link( $link );
-				break;
-			case in_array( $link_type, array( 'template', 'wp_block' ), true ):
-				$hint = $this->scanner->rescan_storage_post_link( $link );
-				break;
-		}
-
-		return $this->scanner->find_link_row_after_rescan( $original, $hint );
+		return $this->scanner->resync_link_from_source( $link );
 	}
 
 	public function ajax_update_link() {
@@ -1898,6 +1869,9 @@ class TSOLIIN_Admin {
 
 		$new_anchor     = null !== $new_anchor_raw ? sanitize_text_field( $new_anchor_raw ) : null;
 		$url_changed    = $new_url !== (string) $link->link_url;
+		if ( $url_changed && $this->scanner->urls_equivalent_for_stored_link( (string) $link->link_url, $new_url, (int) $link->post_id ) ) {
+			$url_changed = false;
+		}
 		$anchor_changed = null !== $new_anchor && $new_anchor !== (string) $link->anchor_text;
 		if ( ! $url_changed && $anchor_changed && ! TSOLIIN_Support::can_edit_link_anchor_in_modal( $link ) ) {
 			wp_send_json_error(
@@ -1937,27 +1911,25 @@ class TSOLIIN_Admin {
 					$match_src
 				);
 			} elseif ( in_array( $link_type, array( 'link', 'comment', 'widget', 'menu', 'term' ), true ) ) {
-				if ( ! $url_changed || $url_done ) {
-					$href_for_anchor = $url_changed ? $new_url : (string) $link->link_url;
-					if ( 'comment' === $link_type ) {
-						$anchor_done = $this->update_anchor_in_comment( $link, $href_for_anchor, $new_anchor );
-					} elseif ( 'widget' === $link_type ) {
-						$anchor_done = $this->scanner->replace_anchor_in_widget( (string) $link->source_key, $href_for_anchor, $new_anchor );
-					} elseif ( 'menu' === $link_type ) {
-						$anchor_done = $this->scanner->replace_anchor_in_menu_item( (string) $link->source_key, $new_anchor );
-					} elseif ( 'term' === $link_type ) {
-						$anchor_done = $this->scanner->replace_anchor_in_term( (string) $link->source_key, $href_for_anchor, $new_anchor );
-					} else {
-						$anchor_done = $this->scanner->replace_anchor_in_post( (int) $link->post_id, $href_for_anchor, $new_anchor );
-					}
+				$href_for_anchor = ( $url_changed && $url_done ) ? $new_url : (string) $link->link_url;
+				if ( 'comment' === $link_type ) {
+					$anchor_done = $this->update_anchor_in_comment( $link, $href_for_anchor, $new_anchor );
+				} elseif ( 'widget' === $link_type ) {
+					$anchor_done = $this->scanner->replace_anchor_in_widget( (string) $link->source_key, $href_for_anchor, $new_anchor );
+				} elseif ( 'menu' === $link_type ) {
+					$anchor_done = $this->scanner->replace_anchor_in_menu_item( (string) $link->source_key, $new_anchor );
+				} elseif ( 'term' === $link_type ) {
+					$anchor_done = $this->scanner->replace_anchor_in_term( (string) $link->source_key, $href_for_anchor, $new_anchor );
 				} else {
-					$anchor_done = false;
+					$anchor_done = $this->scanner->replace_anchor_in_post( (int) $link->post_id, $href_for_anchor, $new_anchor );
 				}
 			}
 		}
 
 		if ( $url_changed && ! $url_done ) {
-			if ( 'comment' === $link_type ) {
+			if ( $anchor_changed && $anchor_done ) {
+				$warning = __( 'Link text updated, but the URL could not be changed in the post. Edit the post manually or leave the URL field unchanged next time.', 'tso-link-inspector' );
+			} elseif ( 'comment' === $link_type ) {
 				wp_send_json_error( array( 'message' => __( 'Original URL not found in this comment. Edit the comment manually or check encoding (e.g. trailing slash).', 'tso-link-inspector' ) ) );
 			} elseif ( 'image' === $link_type ) {
 				wp_send_json_error( array( 'message' => __( 'Original image URL not found in post. Check whether the image was edited manually.', 'tso-link-inspector' ) ) );
@@ -2356,7 +2328,6 @@ class TSOLIIN_Admin {
 			$link     = $this->db->get_link( $link_id );
 			$row_data = array( 'link_id' => $link_id );
 			if ( $link ) {
-				$original_link_id = (int) $link->id;
 				$link             = $this->resync_link_before_recheck( $link );
 				if ( $link ) {
 					$link_id = (int) $link->id;
@@ -2390,9 +2361,7 @@ class TSOLIIN_Admin {
 					$this->status_payload_from_link( $updated, (string) $link->link_url, true )
 				);
 				$row_data = $this->append_filter_match( $row_data, $updated );
-				if ( $updated && isset( $original_link_id ) && $original_link_id !== (int) $updated->id ) {
-					$row_data['new_url'] = (string) $updated->link_url;
-				} elseif ( $updated ) {
+				if ( $updated ) {
 					$row_data['new_url'] = (string) $updated->link_url;
 				}
 			}

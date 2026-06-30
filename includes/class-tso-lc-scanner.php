@@ -2390,6 +2390,63 @@ class TSOLIIN_Scanner {
 	}
 
 	/**
+	 * Whether the stored URL still appears in its WordPress source.
+	 *
+	 * @param object $link DB row.
+	 * @return bool
+	 */
+	public function is_url_present_in_source( $link ) {
+		if ( ! $link || empty( $link->link_url ) ) {
+			return false;
+		}
+		$type = isset( $link->link_type ) ? (string) $link->link_type : 'link';
+		if ( 'plain' === $type ) {
+			return ! empty( $link->post_id )
+				&& $this->is_url_editable_in_post( (int) $link->post_id, (string) $link->link_url, 'plain' );
+		}
+		return $this->is_url_editable_in_source( $link );
+	}
+
+	/**
+	 * Re-read WordPress source storage and return the current DB row for a link.
+	 *
+	 * @param object $link DB row.
+	 * @return object|null Updated row, or null if removed from the source.
+	 */
+	public function resync_link_from_source( $link ) {
+		if ( ! $link ) {
+			return null;
+		}
+		$original  = $link;
+		$link_type = isset( $link->link_type ) ? (string) $link->link_type : 'link';
+		$post_id   = (int) $link->post_id;
+		$hint      = 0;
+
+		switch ( true ) {
+			case $post_id > 0 && in_array( $link_type, array( 'link', 'image', 'iframe', 'plain' ), true ):
+				$this->scan_post( $post_id, false );
+				break;
+			case 'widget' === $link_type:
+				$hint = $this->rescan_widget_link( $link );
+				break;
+			case 'menu' === $link_type:
+				$hint = $this->rescan_menu_link( $link );
+				break;
+			case 'comment' === $link_type:
+				$hint = $this->rescan_comment_link( $link );
+				break;
+			case 'term' === $link_type:
+				$hint = $this->rescan_term_link( $link );
+				break;
+			case in_array( $link_type, array( 'template', 'wp_block' ), true ):
+				$hint = $this->resync_storage_post_link( $link );
+				break;
+		}
+
+		return $this->find_link_row_after_rescan( $original, $hint );
+	}
+
+	/**
 	 * Pick the best row after a prefix-based rescan (comment, term, widget, FSE).
 	 *
 	 * @param string $link_type Link type.
@@ -3768,6 +3825,26 @@ class TSOLIIN_Scanner {
 		}
 
 		return null;
+	}
+
+	/**
+	 * Whether a candidate URL is equivalent to the stored link URL for editing.
+	 *
+	 * @param string $stored_url    URL as stored in the database.
+	 * @param string $candidate_url URL submitted in the edit modal.
+	 * @param int    $post_id       Post ID for relative-path resolution.
+	 * @return bool
+	 */
+	public function urls_equivalent_for_stored_link( $stored_url, $candidate_url, $post_id = 0 ) {
+		$stored_url    = (string) $stored_url;
+		$candidate_url = (string) $candidate_url;
+		if ( '' === $stored_url || '' === $candidate_url ) {
+			return false;
+		}
+		if ( $stored_url === $candidate_url ) {
+			return true;
+		}
+		return $this->url_attribute_matches_stored( $stored_url, $candidate_url, $post_id );
 	}
 
 	/**

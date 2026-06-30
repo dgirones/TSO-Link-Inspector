@@ -110,10 +110,11 @@ class TSOLIIN_Cron {
 		$checked        = 0;
 		$newly_detected = array();
 		foreach ( $links as $link ) {
-			$r             = $this->http->check( $link->link_url, (int) $link->post_id );
-			$prev_failures = isset( $link->consecutive_failures ) ? (int) $link->consecutive_failures : 0;
-			$this->db->update_check_result( (int) $link->id, $r['status_code'], $r['redirect_url'], $r['is_broken'], isset( $r['redirect_chain'] ) ? $r['redirect_chain'] : '' );
-			$item = $this->build_new_hard_broken_item( $link, $r, $prev_failures );
+			$check = $this->check_link_row( $link );
+			if ( null === $check ) {
+				continue;
+			}
+			$item = $this->build_new_hard_broken_item( $check['link'], $check['result'], $check['prev_failures'] );
 			if ( ! empty( $item ) ) {
 				$newly_detected[] = $item;
 			}
@@ -199,10 +200,11 @@ class TSOLIIN_Cron {
 			return;
 		}
 		foreach ( $links as $link ) {
-			$r             = $this->http->check( $link->link_url, (int) $link->post_id );
-			$prev_failures = isset( $link->consecutive_failures ) ? (int) $link->consecutive_failures : 0;
-			$this->db->update_check_result( (int) $link->id, $r['status_code'], $r['redirect_url'], $r['is_broken'], isset( $r['redirect_chain'] ) ? $r['redirect_chain'] : '' );
-			$item = $this->build_new_hard_broken_item( $link, $r, $prev_failures );
+			$check = $this->check_link_row( $link );
+			if ( null === $check ) {
+				continue;
+			}
+			$item = $this->build_new_hard_broken_item( $check['link'], $check['result'], $check['prev_failures'] );
 			if ( ! empty( $item ) ) {
 				$this->queue_immediate_broken_item( $item );
 			}
@@ -346,6 +348,54 @@ class TSOLIIN_Cron {
 		if ( $sent ) {
 			update_option( 'tsoliin_broken_digest_last_sent', current_time( 'mysql', true ), false );
 		}
+	}
+
+	/**
+	 * HTTP-check one row; resync from WordPress only when the stored URL is missing from its source.
+	 *
+	 * @param object $link DB row.
+	 * @return array{ link: object, result: array, prev_failures: int }|null Null when the row was removed.
+	 */
+	private function check_link_row( $link ) {
+		$link = $this->prepare_link_for_http_check( $link );
+		if ( ! $link ) {
+			return null;
+		}
+		$prev_failures = isset( $link->consecutive_failures ) ? (int) $link->consecutive_failures : 0;
+		$r             = $this->http->check( $link->link_url, (int) $link->post_id );
+		$this->db->update_check_result(
+			(int) $link->id,
+			$r['status_code'],
+			$r['redirect_url'],
+			$r['is_broken'],
+			isset( $r['redirect_chain'] ) ? $r['redirect_chain'] : ''
+		);
+		return array(
+			'link'          => $link,
+			'result'        => $r,
+			'prev_failures' => $prev_failures,
+		);
+	}
+
+	/**
+	 * Drop or refresh stale rows before cron HTTP checks.
+	 *
+	 * @param object $link DB row.
+	 * @return object|null Row to check, or null if removed.
+	 */
+	private function prepare_link_for_http_check( $link ) {
+		if ( ! $link || empty( $link->id ) ) {
+			return null;
+		}
+		if ( $this->scanner->is_url_present_in_source( $link ) ) {
+			return $link;
+		}
+		$synced = $this->scanner->resync_link_from_source( $link );
+		if ( ! $synced ) {
+			$this->db->delete_link( (int) $link->id );
+			return null;
+		}
+		return $synced;
 	}
 
 	/**

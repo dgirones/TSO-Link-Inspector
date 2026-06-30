@@ -1371,6 +1371,9 @@ msgstr "Text alternatiu:"
 msgid "URL updated, but link text could not be changed in the post. Edit the post manually or leave the link text field unchanged next time."
 msgstr "URL actualitzada, però el text de l'enllaç no s'ha pogut canviar a l'article. Edita l'article manualment o deixa el camp de text sense canvis la propera vegada."
 
+msgid "Link text updated, but the URL could not be changed in the post. Edit the post manually or leave the URL field unchanged next time."
+msgstr "Text de l'enllaç actualitzat, però la URL no s'ha pogut canviar a l'article. Edita l'article manualment o deixa el camp URL sense canvis la propera vegada."
+
 msgid "Original image URL not found in post. Check whether the image was edited manually."
 msgstr "No s'ha trobat la URL original de la imatge a l'article. Comprova si la imatge s'ha editat manualment."
 
@@ -1437,8 +1440,8 @@ msgstr "L'escaneig troba enllaços a articles, comentaris, menús, widgets, camp
 msgid "Automatic checks (cron)"
 msgstr "Comprovacions automàtiques (cron)"
 
-msgid "A full Scan runs once per day. HTTP checks run hourly in configurable batches via WP-Cron. Priority order: never-checked links first, then broken links past the broken recheck interval, then OK links past the OK recheck interval. The main dashboard shows the check queue, throughput, and next scheduled run. Adjust batch size and intervals in Settings."
-msgstr "Un escaneig complet s'executa un cop al dia. Les comprovacions HTTP s'executen cada hora en lots configurables via WP-Cron. Ordre de prioritat: primer enllaços sense comprovar, després enllaços trencats que superin l'interval de recomprovació de trencats, i després enllaços OK que superin l'interval de recomprovació OK. El tauler principal mostra la cua de comprovació, el rendiment i la propera execució programada. Ajusta la mida del lot i els intervals a Configuració."
+msgid "A full Scan runs once per day. HTTP checks run hourly in configurable batches via WP-Cron. When a stored URL no longer appears in WordPress, the cron re-reads that source once before checking (or removes the row if the link is gone). Priority order: never-checked links first, then broken links past the broken recheck interval, then OK links past the OK recheck interval. The main dashboard shows the check queue, throughput, and next scheduled run. Adjust batch size and intervals in Settings."
+msgstr "Un escaneig complet s'executa un cop al dia. Les comprovacions HTTP s'executen cada hora en lots configurables via WP-Cron. Si una URL guardada ja no apareix a WordPress, el cron torna a llegir aquest origen una vegada abans de comprovar (o elimina la fila si l'enllaç ja no existeix). Ordre de prioritat: primer enllaços sense comprovar, després enllaços trencats que superin l'interval de recomprovació de trencats, i després enllaços OK que superin l'interval de recomprovació OK. El tauler principal mostra la cua de comprovació, el rendiment i la propera execució programada. Ajusta la mida del lot i els intervals a Configuració."
 
 msgid "WP-Cron only runs when your site receives visits. On low-traffic or cached sites, schedule a server cron job to call wp-cron.php every hour for reliable automatic checks."
 msgstr "WP-Cron només s'executa quan el lloc rep visites. En llocs amb poc trànsit o amb memòria cau, programa un cron del servidor que cridi wp-cron.php cada hora per a comprovacions automàtiques fiables."

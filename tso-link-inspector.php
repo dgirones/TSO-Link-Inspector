@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       TSO Link Inspector
  * Description:       Find and fix broken links across your entire WordPress site without opening each post.
- * Version:           2.1.0
+ * Version:           2.1.5
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Tested up to:       7.0
@@ -20,7 +20,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'TSOLIIN_VERSION',    '2.1.0' );
+define( 'TSOLIIN_VERSION',    '2.1.5' );
 define( 'TSOLIIN_PLUGIN_FILE', __FILE__ );
 define( 'TSOLIIN_PLUGIN_DIR',  plugin_dir_path( __FILE__ ) );
 define( 'TSOLIIN_PLUGIN_URL',  plugin_dir_url( __FILE__ ) );
@@ -589,7 +589,31 @@ final class TSOLIIN_Link_Inspector {
 		if ( 'post.php' !== $hook && 'post-new.php' !== $hook ) {
 			return;
 		}
+		$post_id = $this->resolve_admin_post_editor_id();
+		if ( $post_id > 0 ) {
+			$post = get_post( $post_id );
+			if ( $post instanceof WP_Post && TSOLIIN_Support::post_uses_block_editor( $post ) ) {
+				return;
+			}
+		}
 		$this->enqueue_editor_link_focus_shared();
+	}
+
+	/**
+	 * Post ID for the current post edit admin screen.
+	 *
+	 * @return int
+	 */
+	private function resolve_admin_post_editor_id() {
+		global $post;
+		if ( $post instanceof WP_Post ) {
+			return (int) $post->ID;
+		}
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only admin screen routing; no state change.
+		if ( isset( $_GET['post'] ) ) {
+			return absint( wp_unslash( $_GET['post'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		}
+		return 0;
 	}
 
 	/**
@@ -613,10 +637,15 @@ final class TSOLIIN_Link_Inspector {
 		if ( $this->is_widgets_block_editor_screen() ) {
 			return;
 		}
+		static $enqueued = false;
+		if ( $enqueued ) {
+			return;
+		}
 		$request = $this->get_editor_focus_request();
 		if ( ! $request ) {
 			return;
 		}
+		$enqueued = true;
 		$link    = $request['link'];
 		$post_id = $request['post_id'];
 		wp_enqueue_style(
@@ -626,14 +655,18 @@ final class TSOLIIN_Link_Inspector {
 			TSOLIIN_VERSION
 		);
 		$deps = array();
-		if ( wp_script_is( 'wp-data', 'registered' ) ) {
-			$deps[] = 'wp-data';
-		}
-		if ( wp_script_is( 'wp-dom-ready', 'registered' ) ) {
-			$deps[] = 'wp-dom-ready';
-		}
-		if ( wp_script_is( 'wp-blocks', 'registered' ) ) {
-			$deps[] = 'wp-blocks';
+		$post = get_post( $post_id );
+		$use_block_editor = TSOLIIN_Support::post_uses_block_editor( $post );
+		if ( $use_block_editor ) {
+			if ( wp_script_is( 'wp-data', 'registered' ) ) {
+				$deps[] = 'wp-data';
+			}
+			if ( wp_script_is( 'wp-dom-ready', 'registered' ) ) {
+				$deps[] = 'wp-dom-ready';
+			}
+			if ( wp_script_is( 'wp-blocks', 'registered' ) ) {
+				$deps[] = 'wp-blocks';
+			}
 		}
 		$focus_ver = TSOLIIN_VERSION . '.' . (string) filemtime( TSOLIIN_PLUGIN_DIR . 'assets/js/focus-editor.js' );
 		wp_enqueue_script(

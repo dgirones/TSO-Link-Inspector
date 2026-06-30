@@ -1515,6 +1515,9 @@ msgstr "Texto alternativo:"
 msgid "URL updated, but link text could not be changed in the post. Edit the post manually or leave the link text field unchanged next time."
 msgstr "URL actualizada, pero el texto del enlace no se pudo cambiar en la entrada. Edita la entrada manualmente o deja el campo de texto sin cambios la próxima vez."
 
+msgid "Link text updated, but the URL could not be changed in the post. Edit the post manually or leave the URL field unchanged next time."
+msgstr "Texto del enlace actualizado, pero la URL no se pudo cambiar en la entrada. Edita la entrada manualmente o deja el campo URL sin cambios la próxima vez."
+
 msgid "Original image URL not found in post. Check whether the image was edited manually."
 msgstr "No se encontró la URL original de la imagen en la entrada. Comprueba si la imagen se editó manualmente."
 
@@ -1581,8 +1584,8 @@ msgstr "El escaneo encuentra enlaces en entradas, comentarios, menús, widgets, 
 msgid "Automatic checks (cron)"
 msgstr "Comprobaciones automáticas (cron)"
 
-msgid "A full Scan runs once per day. HTTP checks run hourly in configurable batches via WP-Cron. Priority order: never-checked links first, then broken links past the broken recheck interval, then OK links past the OK recheck interval. The main dashboard shows the check queue, throughput, and next scheduled run. Adjust batch size and intervals in Settings."
-msgstr "Un escaneo completo se ejecuta una vez al día. Las comprobaciones HTTP se ejecutan cada hora en lotes configurables vía WP-Cron. Orden de prioridad: primero enlaces sin comprobar, luego enlaces rotos que superen el intervalo de recomprobación de rotos, y después enlaces OK que superen el intervalo de recomprobación OK. El panel principal muestra la cola de comprobación, el rendimiento y la próxima ejecución programada. Ajusta el tamaño del lote y los intervalos en Ajustes."
+msgid "A full Scan runs once per day. HTTP checks run hourly in configurable batches via WP-Cron. When a stored URL no longer appears in WordPress, the cron re-reads that source once before checking (or removes the row if the link is gone). Priority order: never-checked links first, then broken links past the broken recheck interval, then OK links past the OK recheck interval. The main dashboard shows the check queue, throughput, and next scheduled run. Adjust batch size and intervals in Settings."
+msgstr "Un escaneo completo se ejecuta una vez al día. Las comprobaciones HTTP se ejecutan cada hora en lotes configurables vía WP-Cron. Si una URL guardada ya no aparece en WordPress, el cron vuelve a leer ese origen una vez antes de comprobar (o elimina la fila si el enlace ya no existe). Orden de prioridad: primero enlaces sin comprobar, luego enlaces rotos que superen el intervalo de recomprobación de rotos, y después enlaces OK que superen el intervalo de recomprobación OK. El panel principal muestra la cola de comprobación, el rendimiento y la próxima ejecución programada. Ajusta el tamaño del lote y los intervalos en Ajustes."
 
 msgid "WP-Cron only runs when your site receives visits. On low-traffic or cached sites, schedule a server cron job to call wp-cron.php every hour for reliable automatic checks."
 msgstr "WP-Cron solo se ejecuta cuando el sitio recibe visitas. En sitios con poco tráfico o con caché, programa un cron del servidor que llame a wp-cron.php cada hora para comprobaciones automáticas fiables."

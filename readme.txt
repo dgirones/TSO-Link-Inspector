@@ -5,7 +5,7 @@ Tags: broken links, link checker, seo, maintenance, links
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 2.1.0
+Stable tag: 2.1.5
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -100,6 +100,13 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 
 == Changelog ==
 
+= 2.1.5 =
+* Fix: Edit modal treats equivalent URL variants (trailing slash, www, relative paths) as unchanged — fewer false save errors.
+* Fix: Partial inline saves when only URL or only link text can be updated, with clear warnings.
+* Fix: **Go to edit** gallery focus opens visual mode; block editor posts no longer load duplicate classic focus scripts.
+* Fix: Edit row button stays in sync after save (jQuery data cache).
+* Improvement: Catalan and Spanish translations updated.
+
 = 2.1.0 =
 * New: **Go to edit** row action for comments, widgets, navigation menus, and taxonomy terms — edit at the source instead of the inline modal.
 * Fix: Gallery and image block URLs are classified as **image**, not plain text (Gutenberg JSON is no longer scanned as bare URLs).
@@ -113,6 +120,7 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 * Improvement: Coloured **type icons** in the link list (post, comment, menu, widget, plain text, etc.).
 * Improvement: URLs inside `<a href>` are stored as **links** even when the target is an image file (e.g. `.webp` downloads).
 * Improvement: Widget scan removes stale rows when widgets or URLs disappear; widget rows can be rescanned on Recheck.
+* Improvement: Hourly cron and background checks re-read a WordPress source only when the stored URL is missing, then check the current URL (or remove the row).
 * Improvement: Fewer duplicate database schema checks on admin load.
 * Fix: Comment author website URLs support **Unlink** (clears `comment_author_url`) with clearer Delete tooltips.
 * Fix: Editor focus assets are not loaded on the block widgets screen (avoids `wp-editor` conflicts).
@@ -345,6 +353,9 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 * Initial release.
 
 == Upgrade Notice ==
+
+= 2.1.5 =
+Recommended update. Editor focus, inline edit reliability, and Recheck/cron sync improvements. Run **Scan now** once after updating.
 
 = 2.1.0 =
 Recommended update. External sources use **Go to edit**; gallery images classify correctly; **Recheck** syncs from WordPress before HTTP. Run **Scan now** after updating to refresh link types.
