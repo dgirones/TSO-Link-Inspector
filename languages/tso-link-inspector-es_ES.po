@@ -3,7 +3,7 @@
 # This file is distributed under the same license as the TSO Link Inspector plugin.
 msgid ""
 msgstr ""
-"Project-Id-Version: TSO Link Inspector 1.9.7\n"
+"Project-Id-Version: TSO Link Inspector 2.1.0\n"
 "Report-Msgid-Bugs-To: https://tusoporteonline.es\n"
 "POT-Creation-Date: 2024-01-01 00:00:00+00:00\n"
 "PO-Revision-Date: 2026-05-09 14:21+0200\n"
@@ -799,6 +799,27 @@ msgstr "Desenlazar"
 msgid "Delete this record. The post link is not modified."
 msgstr "Elimina este registro. El enlace del artículo no se modifica."
 
+msgid "Clear the comment author website field (URL)"
+msgstr "Vaciar el campo URL del autor del comentario"
+
+msgid "Remove the link tag from content; visible text is kept."
+msgstr "Quitar la etiqueta de enlace del contenido; el texto visible se mantiene."
+
+msgid "Cannot unlink this item."
+msgstr "No se puede desenlazar este elemento."
+
+msgid "Delete this record from the list only. The source content is not modified."
+msgstr "Elimina solo este registro de la lista. El contenido de origen no se modifica."
+
+msgid "Delete this record from the list only. The author URL in the comment is not cleared — use Unlink for that."
+msgstr "Elimina solo este registro de la lista. La URL del autor en el comentario no se borra — usa Desenlazar para eso."
+
+msgid "Delete this record from the list only. The comment is not modified."
+msgstr "Elimina solo este registro de la lista. El comentario no se modifica."
+
+msgid "Delete this record from the list. The post link is not modified."
+msgstr "Elimina este registro de la lista. El enlace de la entrada no se modifica."
+
 msgid "Delete"
 msgstr "Eliminar"
 
@@ -817,14 +838,14 @@ msgstr "Ver todos los enlaces de este artículo"
 msgid "No links found. Run a scan first."
 msgstr "No se han encontrado enlaces. Ejecuta un escaneo primero."
 
-msgid "All (%d)"
-msgstr "Todos (%d)"
+msgid "All (%s)"
+msgstr "Todos (%s)"
 
-msgid "Broken (%d)"
-msgstr "Rotos (%d)"
+msgid "Broken (%s)"
+msgstr "Rotos (%s)"
 
-msgid "OK (%d)"
-msgstr "Correctos (%d)"
+msgid "OK (%s)"
+msgstr "Correctos (%s)"
 
 msgid "Links found but not checked by HTTP yet. Cron will check them automatically, or click Check now."
 msgstr "Enlaces encontrados pero aún sin comprobar por HTTP. El cron los comprobará automáticamente, o pulsa Comprobar ahora."
@@ -877,6 +898,12 @@ msgstr "Buscando alternativas..."
 msgid "Suggested URL"
 msgstr "URL sugerida"
 
+msgid "No working alternative was found for this link."
+msgstr "No se ha encontrado ninguna alternativa que funcione para este enlace."
+
+msgid "No alternative URL could fix this broken link. The destination may be permanently gone — update or remove the link manually."
+msgstr "Ninguna URL alternativa puede corregir este enlace roto. El destino puede haber desaparecido de forma permanente — actualiza o elimina el enlace manualmente."
+
 msgid "No alternatives found."
 msgstr "No se han encontrado alternativas."
 
@@ -901,8 +928,8 @@ msgstr "peticiones fallidas."
 msgid "Unlinking…"
 msgstr "Desenlazando…"
 
-msgid "Manual locks (%d)"
-msgstr "Bloqueados manuales (%d)"
+msgid "Manual locks (%s)"
+msgstr "Bloqueados manuales (%s)"
 
 msgid "Links manually marked as not broken."
 msgstr "Enlaces marcados manualmente como no rotos."
@@ -979,8 +1006,11 @@ msgstr "Ver artículo"
 msgid "Back"
 msgstr "Volver"
 
-msgid "Search (URL, text, post...)"
-msgstr "Buscar (URL, texto, artículo...)"
+msgid "Search URLs..."
+msgstr "Buscar URLs..."
+
+msgid "Searching..."
+msgstr "Buscando..."
 
 msgid "Search"
 msgstr "Buscar"
@@ -1051,6 +1081,9 @@ msgstr "Tiempo de espera agotado"
 msgid "Connection refused"
 msgstr "Conexión rechazada"
 
+msgid "SSL error (server cannot verify)"
+msgstr "Error SSL (el servidor no puede verificar)"
+
 msgid "SSL error"
 msgstr "Error SSL"
 
@@ -1071,6 +1104,9 @@ msgstr "Acceso restringido (¿bot?)"
 
 msgid "Access forbidden (bot?)"
 msgstr "Acceso prohibido (¿bot?)"
+
+msgid "Extension unavailable"
+msgstr "Extensión no disponible"
 
 msgid "Not found"
 msgstr "No encontrado"
@@ -1156,6 +1192,18 @@ msgstr "Medios"
 msgid "Type"
 msgstr "Tipo"
 
+msgid "Select All"
+msgstr "Seleccionar todo"
+
+msgid "Sort ascending."
+msgstr "Ordenar ascendente."
+
+msgid "Sort descending."
+msgstr "Ordenar descendente."
+
+msgid "Pagination"
+msgstr "Paginación"
+
 msgid "Status"
 msgstr "Estado"
 
@@ -1171,14 +1219,14 @@ msgstr "Fecha desconocida"
 msgid "Never"
 msgstr "Nunca"
 
-msgid "Redirect (%d)"
-msgstr "Redirección (%d)"
+msgid "Redirect (%s)"
+msgstr "Redirección (%s)"
 
-msgid "Unchecked (%d)"
-msgstr "No comprobados (%d)"
+msgid "Unchecked (%s)"
+msgstr "No comprobados (%s)"
 
-msgid "HTTP insecure (%d)"
-msgstr "HTTP inseguro (%d)"
+msgid "HTTP insecure (%s)"
+msgstr "HTTP inseguro (%s)"
 
 msgid "Bulk actions"
 msgstr "Acciones en masa"
@@ -1302,6 +1350,15 @@ msgstr "Escaneo ampliado"
 msgid "Plain-text URLs in post content (without <a> tags)"
 msgstr "URLs en texto plano en el contenido (sin etiquetas <a>)"
 
+msgid "Plain-text URLs in post content (without <a> tags). Checked for broken links; edit the post manually to change or remove them."
+msgstr "URLs en texto plano en el contenido (sin etiquetas <a>). Se comprueban si están rotas; edita la entrada manualmente para cambiarlas o eliminarlas."
+
+msgid "Plain text URL"
+msgstr "URL en texto plano"
+
+msgid "This URL is plain text in the content, not an HTML link. Edit the post manually, or use Delete to remove this record from the list."
+msgstr "Esta URL es texto plano en el contenido, no un enlace HTML. Edita la entrada manualmente o usa Eliminar para quitar este registro de la lista."
+
 msgid "Gutenberg block attributes (parse_blocks JSON)"
 msgstr "Atributos de bloques Gutenberg (JSON parse_blocks)"
 
@@ -1394,3 +1451,689 @@ msgstr "Bloqueado (no se puede comprobar desde el servidor)"
 
 msgid "Redirect destination already detected by scan (re-check blocked)"
 msgstr "Destino de redirección ya detectado por el escaneo (recomprobación bloqueada)"
+
+msgid "Edit link"
+msgstr "Editar enlace"
+
+msgid "Link text:"
+msgstr "Texto del enlace:"
+
+msgid "Inspector label (read-only):"
+msgstr "Etiqueta interna (solo lectura):"
+
+msgid "Link text in comment (read-only):"
+msgstr "Texto del enlace en el comentario (solo lectura):"
+
+msgid "This is an internal label, not the visible link text in the comment. Edit the comment in WordPress to change what visitors see."
+msgstr "Es una etiqueta interna, no el texto visible del enlace en el comentario. Edita el comentario en WordPress para cambiar lo que ven los visitantes."
+
+msgid "Only the URL can be changed here. To edit the visible link text, open the comment in WordPress."
+msgstr "Aquí solo se puede cambiar la URL. Para editar el texto visible del enlace, abre el comentario en WordPress."
+
+msgid "Link text cannot be changed here for this comment. Edit the comment in WordPress to change visible text."
+msgstr "El texto del enlace no se puede cambiar aquí para este comentario. Edita el comentario en WordPress para cambiar el texto visible."
+
+msgid "No changes to save."
+msgstr "No hay cambios que guardar."
+
+msgid "Stop scan"
+msgstr "Detener escaneo"
+
+msgid "Check this post"
+msgstr "Comprobar esta entrada"
+
+msgid "Scan stopped."
+msgstr "Escaneo detenido."
+
+msgid "Scan complete. Starting HTTP check…"
+msgstr "Escaneo completado. Iniciando comprobación HTTP…"
+
+msgid "Check now will send an HTTP request to every link saved in the database. On large sites this can take a long time. Continue?"
+msgstr "Comprobar ahora enviará una petición HTTP a cada enlace guardado en la base de datos. En sitios grandes puede tardar mucho. ¿Continuar?"
+
+msgid "Scan:"
+msgstr "Escaneo:"
+
+msgid "Check:"
+msgstr "Comprobación:"
+
+msgid "Reads your content and adds links to this list. It does not test whether URLs work yet."
+msgstr "Lee el contenido y añade enlaces a esta lista. Aún no comprueba si las URLs funcionan."
+
+msgid "Tests every saved URL on the site over HTTP (can take a while). Use Stop to cancel. After editing one post, open its link list or use Recheck on a row."
+msgstr "Comprueba cada URL guardada del sitio por HTTP (puede tardar). Usa Detener para cancelar. Tras editar una entrada, abre su lista de enlaces o usa Recomprobar en una fila."
+
+msgid "Tests each saved URL in this post over HTTP. Use Stop to cancel."
+msgstr "Comprueba cada URL de esta entrada por HTTP. Usa Detener para cancelar."
+
+msgid "Checking links in this post. You can continue browsing."
+msgstr "Comprobando enlaces de esta entrada. Puedes seguir navegando."
+
+msgid "Alt text:"
+msgstr "Texto alternativo:"
+
+msgid "URL updated, but link text could not be changed in the post. Edit the post manually or leave the link text field unchanged next time."
+msgstr "URL actualizada, pero el texto del enlace no se pudo cambiar en la entrada. Edita la entrada manualmente o deja el campo de texto sin cambios la próxima vez."
+
+msgid "Original image URL not found in post. Check whether the image was edited manually."
+msgstr "No se encontró la URL original de la imagen en la entrada. Comprueba si la imagen se editó manualmente."
+
+msgid "Marked as OK and moved to Manual locks. It leaves that list only if the URL or redirect changes, or a check finds it broken."
+msgstr "Marcado como OK y movido a Bloqueos manuales. Sale de esa lista solo si cambia la URL o la redirección, o si una comprobación lo encuentra roto."
+
+msgid "Mark this link as OK?"
+msgstr "¿Marcar este enlace como OK?"
+
+msgid "• It moves to Manual locks and leaves the Broken/Redirect lists."
+msgstr "• Se mueve a Bloqueos manuales y sale de las listas Rotos/Redirección."
+
+msgid "• Background checks (Check now / cron) still run."
+msgstr "• Las comprobaciones en segundo plano (Comprobar ahora / cron) siguen ejecutándose."
+
+msgid "• It returns to the normal lists only if the URL or redirect changes, or a check finds it broken again."
+msgstr "• Vuelve a las listas normales solo si cambia la URL o la redirección, o si una comprobación lo encuentra roto de nuevo."
+
+msgid "Mark the selected links as OK?"
+msgstr "¿Marcar los enlaces seleccionados como OK?"
+
+msgid "They move to Manual locks and leave the Broken/Redirect lists. Background checks still run. They return to the normal lists only if the URL or redirect changes, or a check finds them broken again."
+msgstr "Se mueven a Bloqueos manuales y salen de las listas Rotos/Redirección. Las comprobaciones en segundo plano continúan. Vuelven a las listas normales solo si cambia la URL o la redirección, o si una comprobación los encuentra rotos."
+
+msgid "Mark as OK: moves this link to Manual locks. Background checks still run; it returns to Broken/Redirect only if the URL or redirect changes, or a check finds it broken."
+msgstr "Marcar como OK: mueve el enlace a Bloqueos manuales. Las comprobaciones en segundo plano continúan; vuelve a Rotos/Redirección solo si cambia la URL o la redirección, o si una comprobación lo encuentra roto."
+
+msgid "Links you marked as OK. They stay here while nothing changes. Background checks still run; they leave this list if the URL or redirect changes, or a check finds them broken."
+msgstr "Enlaces que marcaste como OK. Permanecen aquí mientras no cambie nada. Las comprobaciones en segundo plano continúan; salen de esta lista si cambia la URL o la redirección, o si una comprobación los encuentra rotos."
+
+msgid "Manual lock: marked OK by you. Background checks still run. Cleared if the URL or redirect changes, or if a check finds it broken."
+msgstr "Bloqueo manual: marcado como OK por ti. Las comprobaciones en segundo plano continúan. Se desbloquea si cambia la URL o la redirección, o si una comprobación lo encuentra roto."
+
+msgid "%d marked as OK and moved to Manual locks."
+msgstr "%d marcados como OK y movidos a Bloqueos manuales."
+
+msgid "Getting started"
+msgstr "Primeros pasos"
+
+msgid "Review Broken"
+msgstr "Revisar Rotos"
+
+msgid "open the Broken filter and fix links with Edit link, Suggestion, or Not broken."
+msgstr "abre el filtro Rotos y corrige enlaces con Editar enlace, Sugerencia o No roto."
+
+msgid "Open Broken links"
+msgstr "Abrir enlaces rotos"
+
+msgid "Read help"
+msgstr "Leer ayuda"
+
+msgid "Help"
+msgstr "Ayuda"
+
+msgid "Settings sections"
+msgstr "Secciones de configuración"
+
+msgid "How it works"
+msgstr "Cómo funciona"
+
+msgid "Scan finds links in posts, comments, menus, widgets, custom fields, and other enabled sources, then saves them in the database. Check sends HTTP requests to test whether each URL works. Run Scan after editing content; run Check when you want fresh status codes."
+msgstr "El escaneo encuentra enlaces en entradas, comentarios, menús, widgets, campos personalizados y otras fuentes activadas y los guarda en la base de datos. Comprobar envía peticiones HTTP para ver si cada URL funciona. Ejecuta Escanear tras editar contenido; Comprobar cuando quieras códigos de estado actualizados."
+
+msgid "Automatic checks (cron)"
+msgstr "Comprobaciones automáticas (cron)"
+
+msgid "A full Scan runs once per day. HTTP checks run hourly in configurable batches via WP-Cron. Priority order: never-checked links first, then broken links past the broken recheck interval, then OK links past the OK recheck interval. The main dashboard shows the check queue, throughput, and next scheduled run. Adjust batch size and intervals in Settings."
+msgstr "Un escaneo completo se ejecuta una vez al día. Las comprobaciones HTTP se ejecutan cada hora en lotes configurables vía WP-Cron. Orden de prioridad: primero enlaces sin comprobar, luego enlaces rotos que superen el intervalo de recomprobación de rotos, y después enlaces OK que superen el intervalo de recomprobación OK. El panel principal muestra la cola de comprobación, el rendimiento y la próxima ejecución programada. Ajusta el tamaño del lote y los intervalos en Ajustes."
+
+msgid "WP-Cron only runs when your site receives visits. On low-traffic or cached sites, schedule a server cron job to call wp-cron.php every hour for reliable automatic checks."
+msgstr "WP-Cron solo se ejecuta cuando el sitio recibe visitas. En sitios con poco tráfico o con caché, programa un cron del servidor que llame a wp-cron.php cada hora para comprobaciones automáticas fiables."
+
+msgid "Posts with issues"
+msgstr "Entradas con problemas"
+
+msgid "Open Posts with issues from the main screen to see articles that contain broken, redirected, or unchecked links. Click a post to filter the list to that post only."
+msgstr "Abre Entradas con problemas desde la pantalla principal para ver artículos con enlaces rotos, redirigidos o sin comprobar. Haz clic en una entrada para filtrar la lista solo a esa entrada."
+
+msgid "Open posts view"
+msgstr "Abrir vista de entradas"
+
+msgid "List filters"
+msgstr "Filtros de la lista"
+
+msgid "Status filter tabs"
+msgstr "Pestañas de filtro de estado"
+
+msgid "Quality filters"
+msgstr "Filtros de calidad"
+
+msgid "Optional second row: Empty anchor (missing text), Generic anchor (non-descriptive phrases such as “click here”), Unpublished target (internal links to draft, private, pending, or trashed posts). Combine with status filters and Internal/External scope."
+msgstr "Segunda fila opcional: Ancla vacía (sin texto), Ancla genérica (frases poco descriptivas como «haz clic aquí»), Destino no publicado (enlaces internos a borradores, privados, pendientes o en la papelera). Combínalos con filtros de estado y ámbito Interno/Externo."
+
+msgid "Internal and external links"
+msgstr "Enlaces internos y externos"
+
+msgid "Scope tabs filter by destination: internal (same site or relative paths) vs external (other domains). Useful on large sites with many outbound links."
+msgstr "Las pestañas de ámbito filtran por destino: interno (mismo sitio o rutas relativas) vs externo (otros dominios). Útil en sitios grandes con muchos enlaces salientes."
+
+msgid "Row and bulk actions"
+msgstr "Acciones de fila y en masa"
+
+msgid "Editing and fixing links"
+msgstr "Editar y corregir enlaces"
+
+msgid "Edit link changes the URL in the stored source (post content, comment, menu, widget, or term). Unlink removes the <a> tag but keeps the visible text. Recheck re-reads the WordPress source (post, comment, menu, widget, term, or template) and then runs one HTTP test. Not broken locks the link as OK. Suggestion offers HTTPS upgrades when available. Edit and Unlink are not available for some source types (images, templates, etc.) — open the post or source editor instead."
+msgstr "Editar enlace cambia la URL en el origen guardado (contenido de la entrada, comentario, menú, widget o término). Desenlazar elimina la etiqueta <a> pero conserva el texto visible. Recomprobar vuelve a leer el origen en WordPress (entrada, comentario, menú, widget, término o plantilla) y después hace una prueba HTTP. No roto bloquea el enlace como OK. Sugerencia ofrece mejoras HTTPS cuando hay disponibles. Editar y Desenlazar no están disponibles para algunos tipos de origen (imágenes, plantillas, etc.) — abre el editor de la entrada o del origen."
+
+msgid "Bulk actions"
+msgstr "Acciones en masa"
+
+msgid "Select rows and apply Recheck selected, Unlink all, Mark as OK, Convert selected to /path (when enabled in Settings), or Delete from list. Delete only removes the database row, not the link in your content."
+msgstr "Selecciona filas y aplica Recomprobar seleccionados, Desenlazar todo, Marcar como OK, Convertir seleccionados a /path (cuando está activado en Ajustes) o Eliminar de la lista. Eliminar solo borra la fila de la base de datos, no el enlace del contenido."
+
+msgid "View post at link"
+msgstr "Ver la entrada en el enlace"
+
+msgid "The external-link icon opens the front end and highlights the matching link in post content, or scrolls to a comment. Works for links stored in post content and approved comments."
+msgstr "El icono de enlace externo abre el front-end y resalta el enlace coincidente en el contenido de la entrada, o se desplaza hasta un comentario. Funciona para enlaces en el contenido de la entrada y comentarios aprobados."
+
+msgid "Settings and maintenance"
+msgstr "Ajustes y mantenimiento"
+
+msgid "Custom fields (ACF / Meta)"
+msgstr "Campos personalizados (ACF / Meta)"
+
+msgid "Enable ACF / Meta custom fields in Settings to find URLs in fields added by plugins like ACF, PODS, or CPT UI. Plain-text URLs inside meta also require Extended sources (Phase 2). Internal SEO keys are excluded by default; add extra keys to exclude to speed up scans."
+msgstr "Activa Campos personalizados ACF / Meta en Ajustes para encontrar URLs en campos añadidos por plugins como ACF, PODS o CPT UI. Las URLs en texto plano dentro de meta también requieren Fuentes ampliadas (Fase 2). Las claves SEO internas se excluyen por defecto; añade claves extra a excluir para acelerar los escaneos."
+
+msgid "Open meta settings"
+msgstr "Abrir ajustes de meta"
+
+msgid "Broken links email notifications"
+msgstr "Notificaciones por correo de enlaces rotos"
+
+msgid "Choose immediate alerts, confirmed alerts (two consecutive failed checks), or periodic summaries every 7, 15, or 30 days. Only hard-broken links (no redirect destination) are included. Summary emails are skipped when there are none."
+msgstr "Elige alertas inmediatas, alertas confirmadas (dos comprobaciones fallidas consecutivas) o resúmenes periódicos cada 7, 15 o 30 días. Solo se incluyen enlaces totalmente rotos (sin destino de redirección). Los correos de resumen se omiten cuando no hay ninguno."
+
+msgid "Relative URLs and Convert to /path"
+msgstr "URLs relativas y Convertir a /path"
+
+msgid "Edit link accepts site-relative paths such as /page/, ./file.html, or ../other/. They are stored as written and checked against your site. The edit modal shows an HTML preview of the matched tag before you save. Enable post revisions in Settings to keep a restore point. Optional: enable “Convert to /path” to bulk-replace absolute same-site URLs with /path automatically."
+msgstr "Editar enlace acepta rutas relativas al sitio como /pagina/, ./archivo.html o ../otro/. Se guardan tal como se escriben y se comprueban contra tu sitio. El modal de edición muestra una vista previa HTML de la etiqueta coincidente antes de guardar. Activa revisiones de entrada en Ajustes para tener un punto de restauración. Opcional: activa «Convertir a /path» para sustituir en masa URLs absolutas del mismo sitio por /path automáticamente."
+
+msgid "nofollow on broken links"
+msgstr "nofollow en enlaces rotos"
+
+msgid "When enabled in Settings, adds rel=\"nofollow\" to broken links in post content on the front end so search engines are less likely to follow them. Does not affect comments or custom fields."
+msgstr "Cuando está activado en Ajustes, añade rel=\"nofollow\" a los enlaces rotos en el contenido de la entrada en el front-end para que los motores de búsqueda los sigan menos. No afecta a comentarios ni campos personalizados."
+
+msgid "Export CSV and PDF"
+msgstr "Exportar CSV y PDF"
+
+msgid "Export buttons on the main screen respect the active status filter, quality filter, scope, search, and post view. PDF reports are limited to a subset of rows; use CSV for the full filtered list."
+msgstr "Los botones de exportación de la pantalla principal respetan el filtro de estado activo, el filtro de calidad, el ámbito, la búsqueda y la vista de entrada. Los informes PDF están limitados a un subconjunto de filas; usa CSV para la lista filtrada completa."
+
+msgid "Delete all plugin records"
+msgstr "Eliminar todos los registros del plugin"
+
+msgid "Maintenance in Settings empties the link database and scan/check progress but does not edit posts, comments, or other content. Plugin Settings are kept. Run Scan now, then Check now, to rebuild the list."
+msgstr "El mantenimiento en Ajustes vacía la base de datos de enlaces y el progreso de escaneo/comprobación pero no edita entradas, comentarios ni otro contenido. Se conservan los Ajustes del plugin. Ejecuta Escanear ahora y después Comprobar ahora para reconstruir la lista."
+
+msgid "Not broken (Manual locks)"
+msgstr "No roto (Bloqueos manuales)"
+
+msgid "Marks a link as OK and moves it to the Manual locks tab. Background checks still run. The link returns to Broken or Redirect only if the URL or redirect outcome changes, or if a check finds it broken again."
+msgstr "Marca un enlace como OK y lo mueve a la pestaña Bloqueos manuales. Las comprobaciones en segundo plano continúan. Vuelve a Rotos o Redirección solo si cambia la URL o la redirección, o si una comprobación lo encuentra roto de nuevo."
+
+msgid "Domains or URL prefixes on the ignore list are skipped during Scan and Check (useful for sites that block bots). You can add entries in Settings or use Ignore domain on any row."
+msgstr "Los dominios o prefijos URL de la lista de ignorados se omiten durante el escaneo y la comprobación (útil para sitios que bloquean bots). Puedes añadir entradas en Configuración o usar Ignorar dominio en cualquier fila."
+
+msgid "Open ignore list"
+msgstr "Abrir lista de ignorados"
+
+msgid "Broken: HTTP errors and timeouts. Redirect: non-transparent redirects. OK: working links. Unchecked: found but not tested yet. HTTP insecure: active http:// links. Manual locks: links you marked Not broken."
+msgstr "Rotos: errores HTTP y tiempos de espera. Redirección: redirecciones no transparentes. OK: enlaces que funcionan. Sin comprobar: encontrados pero no probados. HTTP inseguro: enlaces http:// activos. Bloqueos manuales: enlaces marcados como No roto."
+
+msgid "Open URL"
+msgstr "Abrir URL"
+
+msgid "Ignore domain"
+msgstr "Ignorar dominio"
+
+msgid "Add %s to the ignore list? This link will be skipped during scans and HTTP checks. You can edit the list in Settings."
+msgstr "¿Añadir %s a la lista de ignorados? Este enlace se omitirá durante escaneos y comprobaciones HTTP. Puedes editar la lista en Configuración."
+
+msgid "Added %s to the ignore list. This link is now skipped."
+msgstr "Se ha añadido %s a la lista de ignorados. Este enlace ahora se omite."
+
+msgid "This domain or URL is already on the ignore list."
+msgstr "Este dominio o URL ya está en la lista de ignorados."
+
+msgid "Could not derive an ignore pattern from this URL."
+msgstr "No se pudo obtener un patrón de ignorar de esta URL."
+
+msgid "Add %s to the ignore list (skip during scan and check)"
+msgstr "Añadir %s a la lista de ignorados (omitir en escaneo y comprobación)"
+
+msgid "sends HTTP requests to every saved URL (runs in the background; you can close this tab)."
+msgstr "envía peticiones HTTP a cada URL guardada (se ejecuta en segundo plano; puedes cerrar esta pestaña)."
+
+msgid "This action only clears data stored by Link Inspector. Your website content is not edited."
+msgstr "Esta acción solo borra datos guardados por Link Inspector. El contenido del sitio web no se edita."
+
+msgid "What is deleted:"
+msgstr "Qué se borra:"
+
+msgid "Every row in the link list (URLs found during scans, anchor text, link type)."
+msgstr "Todas las filas de la lista de enlaces (URLs encontradas en escaneos, texto del enlace, tipo)."
+
+msgid "HTTP results: status codes, broken/OK flags, redirect destinations, and last-checked dates."
+msgstr "Resultados HTTP: códigos de estado, marcas roto/OK, destinos de redirección y fechas de última comprobación."
+
+msgid "Manual locks (links you marked Not broken)."
+msgstr "Bloqueos manuales (enlaces marcados como No roto)."
+
+msgid "Scan and check progress (last scan date, batch cursors, any running background check)."
+msgstr "Progreso de escaneo y comprobación (fecha del último escaneo, cursores de lotes, cualquier comprobación en segundo plano en curso)."
+
+msgid "What is kept:"
+msgstr "Qué se conserva:"
+
+msgid "Posts, pages, comments, menus, widgets, and all other site content (no links are removed or changed)."
+msgstr "Entradas, páginas, comentarios, menús, widgets y todo el demás contenido del sitio (no se elimina ni cambia ningún enlace)."
+
+msgid "Plugin Settings on this page (ignore list, email alerts, scan options, language)."
+msgstr "La configuración del plugin en esta página (lista de ignorados, avisos por correo, opciones de escaneo, idioma)."
+
+msgid "After deleting:"
+msgstr "Después de borrar:"
+
+msgid "open the main dashboard, click Scan now to rebuild the list from your content, then Check now to test URLs again."
+msgstr "abre el panel principal, haz Escanear ahora para reconstruir la lista desde el contenido y después Comprobar ahora para volver a probar las URLs."
+
+msgid "Delete all plugin records?"
+msgstr "¿Borrar todos los registros del plugin?"
+
+msgid "This empties the link database and resets scan/check progress. Posts and Settings are not changed. You will need to run Scan now and Check now again."
+msgstr "Esto vacía la base de datos de enlaces y reinicia el progreso de escaneo/comprobación. Las entradas y la configuración no cambian. Tendrás que ejecutar Escanear ahora y Comprobar ahora de nuevo."
+
+msgid "Broken links"
+msgstr "Enlaces rotos"
+
+msgid "Unchecked links"
+msgstr "Enlaces sin comprobar"
+
+msgid "Total saved links"
+msgstr "Enlaces guardados en total"
+
+msgid "Open Link Inspector"
+msgstr "Abrir Link Inspector"
+
+msgid "Posts with issues"
+msgstr "Entradas con problemas"
+
+msgid "All links"
+msgstr "Todos los enlaces"
+
+msgid "Internal"
+msgstr "Internos"
+
+msgid "External"
+msgstr "Externos"
+
+msgid "Link scope"
+msgstr "Ámbito del enlace"
+
+msgid "Links on this site (same domain or relative paths)"
+msgstr "Enlaces de este sitio (mismo dominio o rutas relativas)"
+
+msgid "Links pointing to other domains"
+msgstr "Enlaces que apuntan a otros dominios"
+
+msgid "Use relative URL"
+msgstr "Convertir a /path"
+
+msgid "Convert to /path"
+msgstr "Convertir a /path"
+
+msgid "Convert selected to /path"
+msgstr "Convertir seleccionados a /path"
+
+msgid "Replace https://yoursite.com/page/ with /page/ in the post (same site only)"
+msgstr "Sustituir https://tusitio.com/pagina/ por /pagina/ en la entrada (solo mismo sitio)"
+
+msgid "Remove the site domain from this link? It will be saved as a path starting with / (e.g. /contact/). Only for links on this site."
+msgstr "¿Quitar el dominio del sitio de este enlace? Se guardará como ruta que empieza por / (p. ej. /contacto/). Solo para enlaces de este sitio."
+
+msgid "Remove the site domain from the selected same-site links and save them as /path URLs?"
+msgstr "¿Quitar el dominio del sitio de los enlaces seleccionados del mismo sitio y guardarlos como URLs /path?"
+
+msgid "Link saved as /path (domain removed)."
+msgstr "Enlace guardado como /path (dominio eliminado)."
+
+msgid "Enable “Convert to /path” in Settings first."
+msgstr "Activa primero «Convertir a /path» en Configuración."
+
+msgid "This link cannot be converted to /path."
+msgstr "Este enlace no se puede convertir a /path."
+
+msgid "%1$d links saved as /path. %2$d skipped or failed."
+msgstr "%1$d enlaces guardados como /path. %2$d omitidos o fallidos."
+
+msgid "Show “Convert to /path” in the link list"
+msgstr "Mostrar «Convertir a /path» en la lista de enlaces"
+
+msgid "When enabled, adds a row and bulk action to replace same-site URLs like https://yoursite.com/contact/ with /contact/ in post content. Disabled by default."
+msgstr "Si se activa, añade una acción por fila y en masa para sustituir URLs del mismo sitio como https://tusitio.com/contacto/ por /contacto/ en el contenido de la entrada. Desactivado por defecto."
+
+msgid "Optional: enable “Convert to /path” in Settings to bulk-replace absolute same-site URLs with /path automatically."
+msgstr "Opcional: activa «Convertir a /path» en Configuración para sustituir en masa URLs absolutas del mismo sitio por /path automáticamente."
+
+msgid "Convert this same-site URL to a root-relative path (e.g. /page/)"
+msgstr "Convierte esta URL del mismo sitio en una ruta relativa raíz (p. ej. /pagina/)"
+
+msgid "Convert this internal link to a site-relative URL (e.g. /page/)?"
+msgstr "¿Convertir este enlace interno en una URL relativa del sitio (p. ej. /pagina/)?"
+
+msgid "Convert the selected internal links to site-relative URLs?"
+msgstr "¿Convertir los enlaces internos seleccionados en URLs relativas del sitio?"
+
+msgid "URL converted to a relative path."
+msgstr "URL convertida en una ruta relativa."
+
+msgid "This URL cannot be converted to a relative path."
+msgstr "Esta URL no se puede convertir en una ruta relativa."
+
+msgid "%1$d converted to relative URLs. %2$d skipped or failed."
+msgstr "%1$d convertidos a URLs relativas. %2$d omitidos o fallidos."
+
+msgid "Articles sorted by broken links, then redirects. Click a title to review and fix links in that post."
+msgstr "Entradas ordenadas por enlaces rotos y después redirecciones. Haz clic en un título para revisar y corregir los enlaces de esa entrada."
+
+msgid "Total links"
+msgstr "Enlaces totales"
+
+msgid "No posts with broken or redirected links."
+msgstr "No hay entradas con enlaces rotos o redirigidos."
+
+msgid "Quick health check when scan or check fails: database, settings, and one sample post."
+msgstr "Comprobación rápida si el escaneo o la revisión fallan: base de datos, configuración y una entrada de muestra."
+
+msgid "DB table:"
+msgstr "Tabla BD:"
+
+msgid "INSERT test"
+msgstr "Prueba INSERT"
+
+msgid "Post types:"
+msgstr "Tipos de contenido:"
+
+msgid "Published posts:"
+msgstr "Entradas publicadas:"
+
+msgid "First post:"
+msgstr "Primera entrada:"
+
+msgid "Links in first post:"
+msgstr "Enlaces en la primera entrada:"
+
+msgid "DB records:"
+msgstr "Registros en la BD:"
+
+msgid "HTML preview (only the matched tag attribute will change):"
+msgstr "Vista previa HTML (solo cambiará el atributo de la etiqueta coincidente):"
+
+msgid "Before"
+msgstr "Antes"
+
+msgid "After"
+msgstr "Después"
+
+msgid "Loading preview..."
+msgstr "Cargando vista previa..."
+
+msgid "No matching HTML tag found in the post for this URL."
+msgstr "No se encontró ninguna etiqueta HTML coincidente en la entrada para esta URL."
+
+msgid "Post revisions"
+msgstr "Revisiones de la entrada"
+
+msgid "Create a revision before editing a link in post content"
+msgstr "Crear una revisión antes de editar un enlace en el contenido de la entrada"
+
+msgid "When enabled, saves a WordPress revision before Edit link or Convert to /path changes post content. Disabled by default."
+msgstr "Si se activa, guarda una revisión de WordPress antes de que Editar enlace o Convertir a /path modifiquen el contenido. Desactivado por defecto."
+
+msgid "The edit modal shows an HTML preview of the matched tag before you save. Enable post revisions in Settings to keep a restore point."
+msgstr "El modal de edición muestra una vista previa HTML de la etiqueta coincidente antes de guardar. Activa las revisiones en Configuración para tener un punto de restauración."
+
+msgid "A WordPress revision will be saved when you save, so you can restore the previous post content from the post editor (Revisions panel)."
+msgstr "Al guardar se creará una revisión de WordPress para poder restaurar el contenido anterior desde el editor de la entrada (panel Revisiones)."
+
+msgid "A post revision was saved. Open the article in the editor to view or restore it under Revisions."
+msgstr "Se ha guardado una revisión de la entrada. Abre el artículo en el editor para verla o restaurarla en Revisiones."
+
+msgid "Go to edit"
+msgstr "Ir a editar"
+
+msgid "Go to edit comment"
+msgstr "Ir a editar el comentario"
+
+msgid "Open the editor and scroll to this link"
+msgstr "Abre el editor y desplázate hasta este enlace"
+
+msgid "Edit comment links in WordPress using Go to edit comment."
+msgstr "Edita los enlaces del comentario en WordPress con Ir a editar el comentario."
+
+msgid "Open the widget editor for this sidebar widget"
+msgstr "Abre el editor de widgets de este widget de la barra lateral"
+
+msgid "Edit widget links in Appearance > Widgets using Go to edit."
+msgstr "Edita los enlaces del widget en Apariencia > Widgets con Ir a editar."
+
+msgid "Open the navigation menu editor for this link"
+msgstr "Abre el editor de menús de navegación de este enlace"
+
+msgid "Open the taxonomy editor for this link"
+msgstr "Abre el editor de taxonomías de este enlace"
+
+msgid "Edit menu links in Appearance > Menus using Go to edit."
+msgstr "Edita los enlaces del menú en Apariencia > Menús con Ir a editar."
+
+msgid "Edit term description links in the taxonomy editor using Go to edit."
+msgstr "Edita los enlaces de la descripción del término en el editor de taxonomías con Ir a editar."
+
+msgid "%d hops"
+msgstr "%d saltos"
+
+msgid "Export report (PDF)"
+msgstr "Exportar informe (PDF)"
+
+msgid "Empty anchor (%s)"
+msgstr "Ancla vacía (%s)"
+
+msgid "Generic anchor (%s)"
+msgstr "Ancla genérica (%s)"
+
+msgid "Unpublished target (%s)"
+msgstr "Destino no publicado (%s)"
+
+msgid "Quality filters"
+msgstr "Filtros de calidad"
+
+msgid "Quality:"
+msgstr "Calidad:"
+
+msgid "Links with no visible anchor text (empty or missing)."
+msgstr "Enlaces sin texto de ancla visible (vacío o ausente)."
+
+msgid "Links using non-descriptive anchor text such as “click here” or “read more”."
+msgstr "Enlaces con texto de ancla poco descriptivo como «haz clic aquí» o «leer más»."
+
+msgid "Internal links pointing to draft, private, pending, or trashed posts."
+msgstr "Enlaces internos que apuntan a entradas en borrador, privadas, pendientes o en la papelera."
+
+msgid "Anchor text"
+msgstr "Texto de ancla"
+
+msgid "Source post"
+msgstr "Entrada de origen"
+
+msgid "Source status"
+msgstr "Estado del origen"
+
+msgid "Redirect URL"
+msgstr "URL de redirección"
+
+msgid "Redirect chain"
+msgstr "Cadena de redirección"
+
+msgid "Target status"
+msgstr "Estado del destino"
+
+msgid "Manual lock"
+msgstr "Bloqueo manual"
+
+msgid "Date found"
+msgstr "Fecha de detección"
+
+msgid "All links"
+msgstr "Todos los enlaces"
+
+msgid "Redirects"
+msgstr "Redirecciones"
+
+msgid "OK links"
+msgstr "Enlaces OK"
+
+msgid "HTTP insecure links"
+msgstr "Enlaces HTTP inseguros"
+
+msgid "Manual locks"
+msgstr "Bloqueos manuales"
+
+msgid "Empty anchor text"
+msgstr "Ancla vacía"
+
+msgid "Generic anchor text"
+msgstr "Ancla genérica"
+
+msgid "Unpublished targets"
+msgstr "Destinos no publicados"
+
+msgid "Link report"
+msgstr "Informe de enlaces"
+
+msgid "Print / Save as PDF"
+msgstr "Imprimir / Guardar como PDF"
+
+msgid "Top broken links"
+msgstr "Principales enlaces rotos"
+
+msgid "Sample: %s"
+msgstr "Muestra: %s"
+
+msgid "Anchor"
+msgstr "Ancla"
+
+msgid "Source"
+msgstr "Origen"
+
+msgid "No links match this report."
+msgstr "Ningún enlace coincide con este informe."
+
+msgid "Showing up to 50 links. Export CSV for the full list."
+msgstr "Se muestran hasta 50 enlaces. Exporta CSV para la lista completa."
+
+msgid "Generated by %s"
+msgstr "Generado por %s"
+
+msgid "Showing %1$d of %2$d links. Export CSV for the full list or raise tsoliin_pdf_export_limit."
+msgstr "Se muestran %1$d de %2$d enlaces. Exporta CSV para la lista completa o aumenta tsoliin_pdf_export_limit."
+
+msgid "Large report: printing may take a while in the browser."
+msgstr "Informe grande: imprimir puede tardar un poco en el navegador."
+
+msgid "This URL is not stored in editable post content. Open the post in the editor to change it, then run Scan again."
+msgstr "Esta URL no está en el contenido editable de la entrada. Abre la entrada en el editor para cambiarla y vuelve a escanear."
+
+msgid "Unverifiable (site blocks bots)"
+msgstr "No verificable (el sitio bloquea bots)"
+
+msgid "Canonical HTTPS URL (server cannot verify — check in browser)"
+msgstr "URL HTTPS canónica (el servidor no puede verificar — comprueba en el navegador)"
+
+msgid "Secure HTTPS canonical URL"
+msgstr "URL HTTPS canónica segura"
+
+msgid "Social networks often block server checks. The suggested HTTPS URL should work in a browser — open it to confirm before applying."
+msgstr "Las redes sociales suelen bloquear las comprobaciones del servidor. La URL HTTPS sugerida debería funcionar en el navegador — ábrela para confirmar antes de aplicar."
+
+msgid "Queue: %1$d never checked, %2$d broken (older than %5$d days), %3$d OK (older than %4$d days). Throughput: ~%6$d checks/day. Estimated time to clear queue: ~%7$d days."
+msgstr "Cola: %1$d sin comprobar, %2$d rotos (más de %5$d días), %3$d OK (más de %4$d días). Rendimiento: ~%6$d comprobaciones/día. Tiempo estimado para vaciar la cola: ~%7$d días."
+
+msgid "%d in check queue"
+msgstr "%d en cola de comprobación"
+
+msgid "Automatic HTTP checks"
+msgstr "Comprobaciones HTTP automáticas"
+
+msgid "Recheck OK links every (days)"
+msgstr "Recomprobar enlaces OK cada (días)"
+
+msgid "Working links are rechecked after this many days since their last HTTP test. Default: 7."
+msgstr "Los enlaces que funcionan se vuelven a comprobar tras estos días desde la última prueba HTTP. Por defecto: 7."
+
+msgid "Recheck broken links every (days)"
+msgstr "Recomprobar enlaces rotos cada (días)"
+
+msgid "Broken links (not manually locked) are rechecked sooner. Default: 7."
+msgstr "Los enlaces rotos (sin bloqueo manual) se recomprueban antes. Por defecto: 7."
+
+msgid "Links per hourly cron run"
+msgstr "Enlaces por ejecución horaria del cron"
+
+msgid "How many links WP-Cron tests each hour (5–100). At the current value, about %d checks per day."
+msgstr "Cuántos enlaces comprueba WP-Cron cada hora (5–100). Con el valor actual, unas %d comprobaciones al día."
+
+msgid "Send after two consecutive failed checks (fewer false alarms)"
+msgstr "Enviar tras dos comprobaciones fallidas consecutivas (menos falsos positivos)"
+
+msgid "%1$d link was confirmed broken after two failed checks on %2$s."
+msgid_plural "%1$d links were confirmed broken after two failed checks on %2$s."
+msgstr[0] "Se ha confirmado %1$d enlace roto tras dos comprobaciones fallidas en %2$s."
+msgstr[1] "Se han confirmado %1$d enlaces rotos tras dos comprobaciones fallidas en %2$s."
+
+msgid "HTTPS saved. This link now appears under Redirect."
+msgstr "HTTPS guardado. Este enlace ahora aparece en Redirección."
+
+msgid "Active links using HTTP instead of HTTPS. Links that also redirect are listed here first; after you switch to HTTPS they move to Redirect."
+msgstr "Enlaces activos con HTTP en lugar de HTTPS. Los que también redirigen aparecen aquí primero; al cambiar a HTTPS pasan a Redirección."
+
+msgid "Active links using HTTP. Redirecting HTTP links are listed here first; after HTTPS they move to Redirect."
+msgstr "Enlaces activos con HTTP. Los HTTP que redirigen aparecen aquí primero; al pasar a HTTPS pasan a Redirección."
+
+msgid "Converting to /path…"
+msgstr "Convirtiendo a /path…"
+
+msgid "links converted to /path."
+msgstr "enlaces convertidos a /path."
+
+msgid "Converting %1$d of %2$d..."
+msgstr "Convirtiendo %1$d de %2$d..."
+
+msgid "Delete the selected records from the list? The posts will not be changed."
+msgstr "¿Eliminar los registros seleccionados de la lista? Las entradas no se modificarán."
+
+msgid "Original URL not found in the source. Check whether the link was edited manually."
+msgstr "No se encontró la URL original en el origen. Comprueba si el enlace fue editado manualmente."
+
+msgid "View post at this comment"
+msgstr "Ver la entrada en este comentario"
+
+msgid "View post at this link"
+msgstr "Ver la entrada en este enlace"
+
+msgid "Internal WordPress keys (e.g. Yoast, Rank Math) are always excluded. Add extra keys below, one per line."
+msgstr "Las claves internas de WordPress (p. ej. Yoast, Rank Math) se excluyen siempre. Añade claves extra abajo, una por línea."
+
+msgid "Removed from list — link no longer found in content."
+msgstr "Eliminado de la lista: el enlace ya no está en el contenido."

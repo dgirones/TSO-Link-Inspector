@@ -87,14 +87,18 @@ class TSOLIIN_Cron {
 			}
 		}
 
+		if ( $this->scanner->is_scan_widgets_enabled() ) {
+			$this->scanner->scan_all_widgets();
+		}
+
 		update_option( 'tsoliin_last_full_scan', current_time( 'mysql', true ), false );
 	}
 
 	/** Hourly: check a batch of stale links. */
 	public function run_check_batch() {
-		$s          = get_option( 'tsoliin_settings', array() );
-		$stale_days = isset( $s['recheck_days'] ) ? max( 1, absint( $s['recheck_days'] ) ) : 7;
-		$links      = $this->db->get_links_for_cron_check( self::BG_BATCH, $stale_days );
+		$schedule   = TSOLIIN_Schedule::get_settings();
+		$batch      = $schedule['cron_check_batch'];
+		$links      = $this->db->get_links_for_cron_check( $batch, $schedule['recheck_days'], $schedule['broken_recheck_days'] );
 
 		if ( empty( $links ) ) {
 			// No links needed checking. Do NOT update last_check_batch timestamp
@@ -106,9 +110,10 @@ class TSOLIIN_Cron {
 		$checked        = 0;
 		$newly_detected = array();
 		foreach ( $links as $link ) {
-			$r = $this->http->check( $link->link_url, (int) $link->post_id );
-			$this->db->update_check_result( (int) $link->id, $r['status_code'], $r['redirect_url'], $r['is_broken'] );
-			$item = $this->build_new_hard_broken_item( $link, $r );
+			$r             = $this->http->check( $link->link_url, (int) $link->post_id );
+			$prev_failures = isset( $link->consecutive_failures ) ? (int) $link->consecutive_failures : 0;
+			$this->db->update_check_result( (int) $link->id, $r['status_code'], $r['redirect_url'], $r['is_broken'], isset( $r['redirect_chain'] ) ? $r['redirect_chain'] : '' );
+			$item = $this->build_new_hard_broken_item( $link, $r, $prev_failures );
 			if ( ! empty( $item ) ) {
 				$newly_detected[] = $item;
 			}
@@ -132,23 +137,31 @@ class TSOLIIN_Cron {
 	 * If $resume is true and there are unchecked links pending, resume from that point.
 	 * Otherwise start a fresh full check.
 	 *
-	 * @param bool $resume Whether to resume partial progress when possible.
+	 * @param bool $resume  Whether to resume partial progress when possible.
+	 * @param int  $post_id When > 0, only check links from this post.
 	 */
-	public function start_bg_check( $resume = true ) {
-		$resume = (bool) $resume;
-		$total  = (int) $this->db->get_stats()['total'];
+	public function start_bg_check( $resume = true, $post_id = 0 ) {
+		$resume  = (bool) $resume;
+		$post_id = absint( $post_id );
 
-		if ( $resume && $this->db->get_pending_check_count() > 0 ) {
-			$checked = max( 0, $total - $this->db->get_pending_check_count() );
+		if ( $post_id > 0 ) {
+			$total = (int) $this->db->get_stats_for_post( $post_id )['total'];
 		} else {
-			$this->db->reset_all_for_recheck();
+			$total = (int) $this->db->get_stats()['total'];
+		}
+
+		if ( $resume && $this->db->get_pending_check_count( $post_id ) > 0 ) {
+			$checked = max( 0, $total - $this->db->get_pending_check_count( $post_id ) );
+		} else {
+			$this->db->reset_for_recheck( $post_id );
 			$checked = 0;
 		}
 
 		update_option( 'tsoliin_bg_check_running', 1, false );
-		update_option( 'tsoliin_bg_check_total',   (int) $total, false );
+		update_option( 'tsoliin_bg_check_post_id', $post_id, false );
+		update_option( 'tsoliin_bg_check_total', (int) $total, false );
 		update_option( 'tsoliin_bg_check_checked', (int) $checked, false );
-		update_option( 'tsoliin_bg_check_started',  current_time( 'mysql', true ), false );
+		update_option( 'tsoliin_bg_check_started', current_time( 'mysql', true ), false );
 		update_option( self::OPT_IMMEDIATE_QUEUE, array(), false );
 
 		$ts = wp_next_scheduled( self::HOOK_BG_STEP );
@@ -162,6 +175,7 @@ class TSOLIIN_Cron {
 	/** Stop a running background check. */
 	public function stop_bg_check() {
 		update_option( 'tsoliin_bg_check_running', 0, false );
+		update_option( 'tsoliin_bg_check_post_id', 0, false );
 		$ts = wp_next_scheduled( self::HOOK_BG_STEP );
 		if ( $ts ) {
 			wp_unschedule_event( $ts, self::HOOK_BG_STEP );
@@ -173,7 +187,8 @@ class TSOLIIN_Cron {
 		if ( ! get_option( 'tsoliin_bg_check_running' ) ) {
 			return;
 		}
-		$links = $this->db->get_links_batch_for_check( self::BG_BATCH );
+		$post_id = absint( get_option( 'tsoliin_bg_check_post_id', 0 ) );
+		$links   = $this->db->get_links_batch_for_check( self::BG_BATCH, $post_id );
 		if ( empty( $links ) ) {
 			update_option( 'tsoliin_bg_check_running', 0, false );
 			update_option( 'tsoliin_last_check_batch', current_time( 'mysql', true ), false );
@@ -184,18 +199,26 @@ class TSOLIIN_Cron {
 			return;
 		}
 		foreach ( $links as $link ) {
-			$r = $this->http->check( $link->link_url, (int) $link->post_id );
-			$this->db->update_check_result( (int) $link->id, $r['status_code'], $r['redirect_url'], $r['is_broken'] );
-			$item = $this->build_new_hard_broken_item( $link, $r );
+			$r             = $this->http->check( $link->link_url, (int) $link->post_id );
+			$prev_failures = isset( $link->consecutive_failures ) ? (int) $link->consecutive_failures : 0;
+			$this->db->update_check_result( (int) $link->id, $r['status_code'], $r['redirect_url'], $r['is_broken'], isset( $r['redirect_chain'] ) ? $r['redirect_chain'] : '' );
+			$item = $this->build_new_hard_broken_item( $link, $r, $prev_failures );
 			if ( ! empty( $item ) ) {
 				$this->queue_immediate_broken_item( $item );
 			}
 		}
 		$total     = (int) get_option( 'tsoliin_bg_check_total', 0 );
-		$pending   = $this->db->get_pending_check_count();
+		$pending   = $this->db->get_pending_check_count( $post_id );
+		if ( $post_id > 0 ) {
+			$live_total = (int) $this->db->get_stats_for_post( $post_id )['total'];
+		} else {
+			$live_total = (int) $this->db->get_stats()['total'];
+		}
+		$total = max( $total, $live_total );
+		update_option( 'tsoliin_bg_check_total', $total, false );
 		update_option( 'tsoliin_bg_check_checked', max( 0, $total - $pending ), false );
 
-		$more = $this->db->get_links_batch_for_check( 1 );
+		$more = $this->db->get_links_batch_for_check( 1, $post_id );
 		if ( ! empty( $more ) ) {
 			wp_schedule_single_event( time() + 2, self::HOOK_BG_STEP );
 			spawn_cron();
@@ -217,24 +240,32 @@ class TSOLIIN_Cron {
 	/**
 	 * Get current background check progress.
 	 *
-	 * @return array { running: bool, checked: int, total: int, pct: int }
+	 * @return array { running: bool, checked: int, total: int, pct: int, post_id: int }
 	 */
 	public function get_bg_progress() {
 		$running = (bool) get_option( 'tsoliin_bg_check_running', 0 );
 		$checked = (int)  get_option( 'tsoliin_bg_check_checked', 0 );
 		$total   = (int)  get_option( 'tsoliin_bg_check_total',   0 );
 		$started = (string) get_option( 'tsoliin_bg_check_started', '' );
+		$post_id = absint( get_option( 'tsoliin_bg_check_post_id', 0 ) );
 
 		// Auto-clear stale running flag (> 30 min).
 		if ( $running && '' !== $started ) {
 			if ( ( time() - (int) strtotime( $started ) ) > 1800 ) {
 				$running = false;
 				update_option( 'tsoliin_bg_check_running', 0, false );
+				update_option( 'tsoliin_bg_check_post_id', 0, false );
 			}
 		}
 
 		if ( $running && $total > 0 ) {
-			$pending = $this->db->get_pending_check_count();
+			$pending = $this->db->get_pending_check_count( $post_id );
+			if ( $post_id > 0 ) {
+				$live_total = (int) $this->db->get_stats_for_post( $post_id )['total'];
+			} else {
+				$live_total = (int) $this->db->get_stats()['total'];
+			}
+			$total   = max( $total, $live_total );
 			$checked = max( 0, $total - $pending );
 		}
 
@@ -245,6 +276,7 @@ class TSOLIIN_Cron {
 			'checked' => $checked,
 			'total'   => $total,
 			'pct'     => $pct,
+			'post_id' => $post_id,
 		);
 	}
 
@@ -323,7 +355,7 @@ class TSOLIIN_Cron {
 	 */
 	private function get_email_mode() {
 		$s            = get_option( 'tsoliin_settings', array() );
-		$allowed_mode = array( 'none', 'immediate', 'digest_7', 'digest_15', 'digest_30' );
+		$allowed_mode = array( 'none', 'immediate', 'confirmed', 'digest_7', 'digest_15', 'digest_30' );
 		$mode         = isset( $s['broken_email_mode'] ) ? sanitize_key( (string) $s['broken_email_mode'] ) : 'none';
 		return in_array( $mode, $allowed_mode, true ) ? $mode : 'none';
 	}
@@ -349,14 +381,17 @@ class TSOLIIN_Cron {
 	/**
 	 * Build a queue item when link changed to hard-broken.
 	 *
-	 * @param object $link DB row before update.
-	 * @param array  $r    HTTP check result.
+	 * @param object $link          DB row before update.
+	 * @param array  $r             HTTP check result.
+	 * @param int    $prev_failures consecutive_failures before this check.
 	 * @return array|null
 	 */
-	private function build_new_hard_broken_item( $link, $r ) {
-		if ( 'immediate' !== $this->get_email_mode() ) {
+	private function build_new_hard_broken_item( $link, $r, $prev_failures = 0 ) {
+		$mode = $this->get_email_mode();
+		if ( ! in_array( $mode, array( 'immediate', 'confirmed' ), true ) ) {
 			return null;
 		}
+		$prev_failures = max( 0, (int) $prev_failures );
 		$was_hard_broken = $this->is_hard_broken_status(
 			! empty( $link->is_broken ),
 			isset( $link->redirect_url ) ? (string) $link->redirect_url : '',
@@ -367,7 +402,16 @@ class TSOLIIN_Cron {
 			isset( $r['redirect_url'] ) ? (string) $r['redirect_url'] : '',
 			isset( $r['status_code'] ) ? (int) $r['status_code'] : 0
 		);
-		if ( $was_hard_broken || ! $is_hard_broken ) {
+		if ( ! $is_hard_broken ) {
+			return null;
+		}
+
+		$new_failures = $prev_failures + 1;
+		if ( 'confirmed' === $mode ) {
+			if ( $new_failures < 2 || $prev_failures >= 2 ) {
+				return null;
+			}
+		} elseif ( $was_hard_broken ) {
 			return null;
 		}
 
@@ -412,7 +456,8 @@ class TSOLIIN_Cron {
 	 * @return void
 	 */
 	private function send_immediate_broken_summary_email( array $items ) {
-		if ( 'immediate' !== $this->get_email_mode() || empty( $items ) ) {
+		$mode = $this->get_email_mode();
+		if ( ! in_array( $mode, array( 'immediate', 'confirmed' ), true ) || empty( $items ) ) {
 			return;
 		}
 		$to = $this->get_notification_email();
@@ -430,17 +475,29 @@ class TSOLIIN_Cron {
 			$items_count
 		);
 
-		$intro = sprintf(
-			/* translators: 1: number of newly detected broken links, 2: site name */
-			_n(
-				'%1$d new broken link was detected on %2$s.',
-				'%1$d new broken links were detected on %2$s.',
+		$intro = ( 'confirmed' === $mode )
+			? sprintf(
+				/* translators: 1: number of confirmed broken links, 2: site name */
+				_n(
+					'%1$d link was confirmed broken after two failed checks on %2$s.',
+					'%1$d links were confirmed broken after two failed checks on %2$s.',
+					$items_count,
+					'tso-link-inspector'
+				),
 				$items_count,
-				'tso-link-inspector'
-			),
-			$items_count,
-			$site_name
-		);
+				$site_name
+			)
+			: sprintf(
+				/* translators: 1: number of newly detected broken links, 2: site name */
+				_n(
+					'%1$d new broken link was detected on %2$s.',
+					'%1$d new broken links were detected on %2$s.',
+					$items_count,
+					'tso-link-inspector'
+				),
+				$items_count,
+				$site_name
+			);
 
 		$normalized = array();
 		foreach ( $items as $item ) {

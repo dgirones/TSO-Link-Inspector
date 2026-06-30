@@ -80,6 +80,440 @@ class TSOLIIN_HTTP {
 	}
 
 	/**
+	 * Hostnames considered internal for this WordPress site (with www / non-www variants).
+	 *
+	 * @return string[] Lowercase hostnames.
+	 */
+	public static function get_site_hosts() {
+		$hosts = array();
+		foreach ( array( home_url(), site_url() ) as $base ) {
+			$host = wp_parse_url( $base, PHP_URL_HOST );
+			if ( ! is_string( $host ) || '' === $host ) {
+				continue;
+			}
+			$hosts = array_merge( $hosts, self::expand_site_host_variants( $host ) );
+		}
+		return array_values( array_unique( $hosts ) );
+	}
+
+	/**
+	 * www.example.com and example.com as the same site host.
+	 *
+	 * @param string $host Hostname.
+	 * @return string[] Lowercase variants.
+	 */
+	public static function expand_site_host_variants( $host ) {
+		$host = strtolower( trim( (string) $host ) );
+		if ( '' === $host ) {
+			return array();
+		}
+		$variants = array( $host );
+		if ( 0 === strpos( $host, 'www.' ) ) {
+			$variants[] = substr( $host, 4 );
+		} else {
+			$variants[] = 'www.' . $host;
+		}
+		return array_values( array_unique( array_filter( $variants ) ) );
+	}
+
+	/**
+	 * Normalize a hostname for same-site comparison (lowercase, no leading www.).
+	 *
+	 * @param string $host Hostname.
+	 * @return string
+	 */
+	public static function normalize_site_host( $host ) {
+		$host = strtolower( trim( (string) $host ) );
+		return (string) preg_replace( '/^www\./', '', $host );
+	}
+
+	/**
+	 * Whether a hostname belongs to this WordPress installation.
+	 *
+	 * @param string $host Link hostname.
+	 * @return bool
+	 */
+	public static function host_belongs_to_site( $host ) {
+		$host = self::normalize_site_host( $host );
+		if ( '' === $host ) {
+			return false;
+		}
+		foreach ( self::get_site_hosts() as $site_host ) {
+			if ( $host === self::normalize_site_host( $site_host ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * SQL fragment matching URLs that point to this site (for list scope filters).
+	 *
+	 * @param string $column SQL column reference, e.g. l.link_url.
+	 * @return array{sql:string,params:array}
+	 */
+	public static function build_internal_link_scope_sql( $column = 'l.link_url' ) {
+		$column = preg_replace( '/[^a-z0-9_.]/', '', (string) $column );
+		if ( '' === $column ) {
+			$column = 'l.link_url';
+		}
+
+		// Use %% so $wpdb->prepare() leaves a single SQL LIKE wildcard (%).
+		$parts  = array(
+			"( {$column} LIKE '/%%' OR {$column} LIKE './%%' OR {$column} LIKE '../%%' )",
+		);
+		$params = array();
+		foreach ( self::get_site_hosts() as $host ) {
+			foreach ( array( 'http://', 'https://', '//' ) as $scheme ) {
+				$parts[]  = "{$column} LIKE %s";
+				$params[] = $scheme . $host . '%';
+			}
+		}
+
+		return array(
+			'sql'    => '(' . implode( ' OR ', $parts ) . ')',
+			'params' => $params,
+		);
+	}
+
+	/**
+	 * SQL fragment for external links (De Morgan: AND of NOT LIKE, safe for $wpdb->prepare).
+	 *
+	 * @param string $column SQL column reference, e.g. l.link_url.
+	 * @return array{sql:string,params:array}
+	 */
+	public static function build_external_link_scope_sql( $column = 'l.link_url' ) {
+		$column = preg_replace( '/[^a-z0-9_.]/', '', (string) $column );
+		if ( '' === $column ) {
+			$column = 'l.link_url';
+		}
+
+		$parts = array(
+			"{$column} NOT LIKE '/%%'",
+			"{$column} NOT LIKE './%%'",
+			"{$column} NOT LIKE '../%%'",
+		);
+		$params = array();
+		foreach ( self::get_site_hosts() as $host ) {
+			foreach ( array( 'http://', 'https://', '//' ) as $scheme ) {
+				$parts[]  = "{$column} NOT LIKE %s";
+				$params[] = $scheme . $host . '%';
+			}
+		}
+
+		return array(
+			'sql'    => '(' . implode( ' AND ', $parts ) . ')',
+			'params' => $params,
+		);
+	}
+
+	/**
+	 * Whether a stored link URL points to this site (relative or same host).
+	 *
+	 * @param string $url     Link URL.
+	 * @param int    $post_id Optional post context (reserved).
+	 * @return bool
+	 */
+	public static function is_internal_link_url( $url, $post_id = 0 ) {
+		unset( $post_id );
+		$url = trim( str_replace( array( "\0", "\r", "\n" ), '', (string) $url ) );
+		if ( '' === $url ) {
+			return false;
+		}
+		if ( preg_match( '#^(?:/|\./|\.\./)#', $url ) ) {
+			return true;
+		}
+		if ( 0 === strpos( $url, '//' ) ) {
+			$url = ( is_ssl() ? 'https:' : 'http:' ) . $url;
+		}
+		if ( ! preg_match( '#^https?://#i', $url ) ) {
+			return false;
+		}
+		$host = wp_parse_url( $url, PHP_URL_HOST );
+		if ( ! is_string( $host ) || '' === $host ) {
+			return false;
+		}
+		return self::host_belongs_to_site( $host );
+	}
+
+	/**
+	 * Parse attachment_id from a WordPress attachment page URL.
+	 *
+	 * @param string $url Absolute or relative URL.
+	 * @return int Attachment post ID, or 0.
+	 */
+	public static function parse_attachment_id_from_url( $url ) {
+		$url = trim( (string) $url );
+		if ( '' === $url ) {
+			return 0;
+		}
+		$query = wp_parse_url( $url, PHP_URL_QUERY );
+		if ( ! is_string( $query ) || '' === $query ) {
+			return 0;
+		}
+		$qv = array();
+		wp_parse_str( $query, $qv );
+		return isset( $qv['attachment_id'] ) ? absint( $qv['attachment_id'] ) : 0;
+	}
+
+	/**
+	 * For ?attachment_id= URLs, return the wp-content/uploads file URL when available.
+	 *
+	 * Used only for optional suggestions — not for the primary check(), which must test
+	 * the URL visitors actually click (attachment pages can 404 while the file still exists).
+	 *
+	 * @param string $url Absolute URL.
+	 * @return string
+	 */
+	public static function prefer_attachment_file_url( $url ) {
+		$attachment_id = self::parse_attachment_id_from_url( $url );
+		if ( $attachment_id <= 0 ) {
+			return $url;
+		}
+		$post = get_post( $attachment_id );
+		if ( ! $post || 'attachment' !== $post->post_type || 'trash' === $post->post_status ) {
+			return $url;
+		}
+		$file_url = wp_get_attachment_url( $attachment_id );
+		return ( is_string( $file_url ) && '' !== $file_url ) ? $file_url : $url;
+	}
+
+	/**
+	 * Whether a local attachment_id target is missing or unusable on this WordPress site.
+	 *
+	 * @param int $attachment_id Attachment post ID.
+	 * @return bool
+	 */
+	public static function attachment_id_target_unavailable( $attachment_id ) {
+		$attachment_id = absint( $attachment_id );
+		if ( $attachment_id <= 0 ) {
+			return true;
+		}
+		$post = get_post( $attachment_id );
+		if ( ! $post || 'attachment' !== $post->post_type || 'trash' === $post->post_status ) {
+			return true;
+		}
+		$file_url = wp_get_attachment_url( $attachment_id );
+		return ! is_string( $file_url ) || '' === $file_url;
+	}
+
+	/**
+	 * Local 404 for internal ?attachment_id= links when the attachment no longer exists.
+	 *
+	 * @param string $url Absolute URL.
+	 * @return array{status_code:int,redirect_url:string,is_broken:int}|null
+	 */
+	private function maybe_local_attachment_id_check_result( $url ) {
+		$attachment_id = self::parse_attachment_id_from_url( $url );
+		if ( $attachment_id <= 0 || ! self::is_internal_link_url( $url ) ) {
+			return null;
+		}
+		if ( ! self::attachment_id_target_unavailable( $attachment_id ) ) {
+			return null;
+		}
+		return array(
+			'status_code'  => 404,
+			'redirect_url' => '',
+			'is_broken'    => 1,
+		);
+	}
+
+	/**
+	 * Same-site URL with www toggled on the host (scheme/path/query preserved).
+	 *
+	 * @param string $url Absolute URL.
+	 * @return string Empty when host cannot be parsed.
+	 */
+	public static function toggle_www_host_in_url( $url ) {
+		$parts = wp_parse_url( (string) $url );
+		if ( ! is_array( $parts ) || empty( $parts['host'] ) ) {
+			return '';
+		}
+		$host = (string) $parts['host'];
+		if ( 0 === stripos( $host, 'www.' ) ) {
+			$parts['host'] = substr( $host, 4 );
+		} else {
+			$parts['host'] = 'www.' . $host;
+		}
+		$scheme = isset( $parts['scheme'] ) ? $parts['scheme'] . '://' : '';
+		$port   = isset( $parts['port'] ) ? ':' . (int) $parts['port'] : '';
+		$path   = isset( $parts['path'] ) ? $parts['path'] : '';
+		$query  = isset( $parts['query'] ) ? '?' . $parts['query'] : '';
+		$frag   = isset( $parts['fragment'] ) ? '#' . $parts['fragment'] : '';
+		return $scheme . $parts['host'] . $port . $path . $query . $frag;
+	}
+
+	/**
+	 * Internal URL variants to try before marking a link broken (www, attachment permalink).
+	 *
+	 * @param string $url     Resolved absolute URL.
+	 * @param int    $post_id Post context.
+	 * @return string[]
+	 */
+	private function build_check_url_candidates( $url, $post_id = 0 ) {
+		$candidates = array( (string) $url );
+		if ( ! self::is_internal_link_url( $url, $post_id ) ) {
+			return $candidates;
+		}
+
+		$www_alt = self::toggle_www_host_in_url( $url );
+		if ( '' !== $www_alt && ! in_array( $www_alt, $candidates, true ) ) {
+			$candidates[] = $www_alt;
+		}
+
+		$attachment_id = self::parse_attachment_id_from_url( $url );
+		if ( $attachment_id > 0 ) {
+			$file_url = wp_get_attachment_url( $attachment_id );
+			if ( is_string( $file_url ) && '' !== $file_url ) {
+				foreach ( array( $file_url, self::toggle_www_host_in_url( $file_url ) ) as $extra ) {
+					if ( is_string( $extra ) && '' !== $extra && ! in_array( $extra, $candidates, true ) ) {
+						$candidates[] = $extra;
+					}
+				}
+			}
+			if ( function_exists( 'get_attachment_link' ) ) {
+				$permalink = get_attachment_link( $attachment_id );
+				if ( is_string( $permalink ) && '' !== $permalink ) {
+					foreach ( array( $permalink, self::toggle_www_host_in_url( $permalink ) ) as $extra ) {
+						if ( is_string( $extra ) && '' !== $extra && ! in_array( $extra, $candidates, true ) ) {
+							$candidates[] = $extra;
+						}
+					}
+				}
+			}
+		}
+
+		return array_values( array_unique( array_filter( $candidates ) ) );
+	}
+
+	/**
+	 * When ?attachment_id= page URLs fail HTTP but the media file still exists, treat as OK.
+	 *
+	 * @param string               $url      Original stored URL.
+	 * @param int                  $post_id  Post context.
+	 * @return array{status_code:int,redirect_url:string,is_broken:int}|null
+	 */
+	private function maybe_attachment_media_file_ok_result( $url, $post_id = 0 ) {
+		$attachment_id = self::parse_attachment_id_from_url( $url );
+		if ( $attachment_id <= 0 || ! self::is_internal_link_url( $url, $post_id ) ) {
+			return null;
+		}
+		if ( self::attachment_id_target_unavailable( $attachment_id ) ) {
+			return null;
+		}
+
+		$file_url = wp_get_attachment_url( $attachment_id );
+		if ( ! is_string( $file_url ) || '' === $file_url ) {
+			return null;
+		}
+
+		foreach ( array_unique( array_filter( array( $file_url, self::toggle_www_host_in_url( $file_url ) ) ) ) as $candidate ) {
+			$file_result = $this->check_request( $candidate, $post_id );
+			if ( empty( $file_result['is_broken'] ) ) {
+				return array(
+					'status_code'  => 200,
+					'redirect_url' => '',
+					'is_broken'    => 0,
+				);
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Whether a URL likely points at a static asset (HEAD often unreliable).
+	 *
+	 * @param string $url URL.
+	 * @return bool
+	 */
+	private function is_static_asset_url( $url ) {
+		return (bool) preg_match( '#\.(?:webp|avif|jpe?g|png|gif|svg|pdf|mp4|webm|mp3|css|js|zip)(?:\?|#|$)#i', (string) $url );
+	}
+
+	/**
+	 * Google Play app id from store URL or editor-relative /details?id=… href.
+	 *
+	 * @param string $url Link URL.
+	 * @return string Lowercase app id or empty.
+	 */
+	public static function parse_play_store_app_id( $url ) {
+		$url = trim( (string) $url );
+		if ( '' === $url ) {
+			return '';
+		}
+		$is_play = ( false !== stripos( $url, 'play.google.com' ) )
+			|| 0 === strpos( $url, '/details' )
+			|| 0 === strpos( $url, 'details?' );
+		if ( ! $is_play ) {
+			return '';
+		}
+		$query = wp_parse_url( $url, PHP_URL_QUERY );
+		if ( ! is_string( $query ) || '' === $query ) {
+			if ( false !== strpos( $url, '?' ) ) {
+				$query = substr( $url, (int) strpos( $url, '?' ) + 1 );
+			}
+		}
+		if ( ! is_string( $query ) || '' === $query ) {
+			return '';
+		}
+		$qv = array();
+		wp_parse_str( $query, $qv );
+		return ! empty( $qv['id'] ) ? strtolower( sanitize_text_field( (string) $qv['id'] ) ) : '';
+	}
+
+	/**
+	 * Whether an absolute internal URL can be converted to a site-relative path.
+	 *
+	 * @param string $url Link URL.
+	 * @return bool
+	 */
+	public static function can_convert_to_relative_url( $url ) {
+		$relative = self::absolute_internal_to_relative( $url );
+		return is_string( $relative ) && '' !== $relative;
+	}
+
+	/**
+	 * Convert an absolute same-site URL to a root-relative path.
+	 *
+	 * @param string $url Absolute http(s) URL on this site.
+	 * @return string|false Relative path or false.
+	 */
+	public static function absolute_internal_to_relative( $url ) {
+		$url = trim( str_replace( array( "\0", "\r", "\n" ), '', (string) $url ) );
+		if ( ! preg_match( '#^https?://#i', $url ) || ! self::is_internal_link_url( $url ) ) {
+			return false;
+		}
+		$parts = wp_parse_url( $url );
+		$path  = isset( $parts['path'] ) ? (string) $parts['path'] : '/';
+		if ( '' === $path ) {
+			$path = '/';
+		}
+		$relative = $path;
+		if ( ! empty( $parts['query'] ) ) {
+			$relative .= '?' . $parts['query'];
+		}
+		if ( ! empty( $parts['fragment'] ) ) {
+			$relative .= '#' . $parts['fragment'];
+		}
+		$url_norm = untrailingslashit( $url );
+		$bases    = array(
+			untrailingslashit( home_url( $relative ) ),
+			untrailingslashit( site_url( $relative ) ),
+		);
+		if ( in_array( $url_norm, $bases, true ) ) {
+			return $relative;
+		}
+		if ( function_exists( 'wp_make_link_relative' ) ) {
+			$made = wp_make_link_relative( $url );
+			if ( is_string( $made ) && '' !== $made && self::is_internal_link_url( $url ) ) {
+				return $made;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * Whether a URL matches the ignore list (domains or prefixes from settings).
 	 *
 	 * @param string $url URL to check.
@@ -157,6 +591,40 @@ class TSOLIIN_HTTP {
 	}
 
 	/**
+	 * Sanitize a URL stored in post/comment content (absolute or site-relative).
+	 *
+	 * @param string $url     Raw URL from the editor modal.
+	 * @param int    $post_id Post ID for context (relative resolution checks).
+	 * @return string|false Sanitized href or false when disallowed.
+	 */
+	public static function sanitize_editable_link_url( $url, $post_id = 0 ) {
+		$url = trim( str_replace( array( "\0", "\r", "\n", "\t" ), '', (string) $url ) );
+		if ( '' === $url ) {
+			return false;
+		}
+		if ( preg_match( '#^\s*(javascript|data|vbscript):#i', $url ) ) {
+			return false;
+		}
+		if ( preg_match( '#^https?://#i', $url ) ) {
+			return self::sanitize_external_http_url( $url );
+		}
+		if ( 0 === strpos( $url, '//' ) ) {
+			$probe = 'https:' . $url;
+			if ( ! self::is_safe_remote_url( $probe ) ) {
+				return false;
+			}
+			return $url;
+		}
+		if ( preg_match( '#^(?:/|\./|\.\./)#', $url ) ) {
+			return preg_replace( '#[\x00-\x1F\x7F]#', '', $url );
+		}
+		if ( preg_match( '#^[a-z0-9][a-z0-9._\-/]*(?:\?[^\s<>"\']*)?(?:#[^\s<>"\']*)?$#i', $url ) ) {
+			return preg_replace( '#[\x00-\x1F\x7F]#', '', $url );
+		}
+		return false;
+	}
+
+	/**
 	 * Whether an http(s) URL is safe to request from the server (SSRF mitigation).
 	 *
 	 * @param string $url Full URL.
@@ -185,11 +653,12 @@ class TSOLIIN_HTTP {
 			return self::is_public_ip( $host );
 		}
 		$ips = self::resolve_host_ips( $host );
-		if ( ! empty( $ips ) ) {
-			foreach ( $ips as $ip ) {
-				if ( ! self::is_public_ip( $ip ) ) {
-					return false;
-				}
+		if ( empty( $ips ) ) {
+			return false;
+		}
+		foreach ( $ips as $ip ) {
+			if ( ! self::is_public_ip( $ip ) ) {
+				return false;
 			}
 		}
 		return true;
@@ -237,6 +706,85 @@ class TSOLIIN_HTTP {
 			}
 		}
 		return array_unique( array_filter( $ips ) );
+	}
+
+	/**
+	 * Suggest an ignore-list entry (domain or URL prefix) from a link URL.
+	 *
+	 * @param string $url Link URL as stored in the database.
+	 * @return string Empty when no pattern can be derived.
+	 */
+	public static function suggest_ignore_pattern_from_url( $url ) {
+		$url = trim( str_replace( array( "\0", "\r", "\n" ), '', (string) $url ) );
+		if ( '' === $url ) {
+			return '';
+		}
+
+		$host = wp_parse_url( $url, PHP_URL_HOST );
+		if ( is_string( $host ) && '' !== $host ) {
+			return strtolower( $host );
+		}
+
+		if ( preg_match( '#^https?://#i', $url ) ) {
+			return '';
+		}
+
+		if ( 0 === strpos( $url, '/' ) || 0 === strpos( $url, './' ) || 0 === strpos( $url, '../' ) ) {
+			return untrailingslashit( strtolower( home_url( $url ) ) );
+		}
+
+		return '';
+	}
+
+	/**
+	 * Append a pattern to the ignore list in plugin settings.
+	 *
+	 * @param string $pattern Domain or URL prefix.
+	 * @return string|false `added`, `exists`, or false on invalid input.
+	 */
+	public static function add_ignore_pattern( $pattern ) {
+		$pattern = trim( strtolower( (string) $pattern ) );
+		if ( '' === $pattern ) {
+			return false;
+		}
+
+		$s = get_option( 'tsoliin_settings', array() );
+		if ( ! is_array( $s ) ) {
+			$s = array();
+		}
+		$list = isset( $s['ignore_list'] ) && is_array( $s['ignore_list'] ) ? $s['ignore_list'] : array();
+		foreach ( $list as $entry ) {
+			if ( strtolower( trim( (string) $entry ) ) === $pattern ) {
+				return 'exists';
+			}
+		}
+		$list[]           = $pattern;
+		$s['ignore_list'] = $list;
+		update_option( 'tsoliin_settings', $s );
+		return 'added';
+	}
+
+	/**
+	 * Resolve a stored link URL to an absolute URL suitable for opening in a browser.
+	 *
+	 * @param string $url Link URL.
+	 * @return string Empty when the URL cannot be opened.
+	 */
+	public static function resolve_link_open_url( $url ) {
+		$url = trim( str_replace( array( "\0", "\r", "\n" ), '', (string) $url ) );
+		if ( '' === $url || preg_match( '#^(mailto:|tel:|javascript:)#i', $url ) ) {
+			return '';
+		}
+		if ( 0 === strpos( $url, '//' ) ) {
+			return 'https:' . $url;
+		}
+		if ( 0 === strpos( $url, '/' ) || 0 === strpos( $url, './' ) || 0 === strpos( $url, '../' ) ) {
+			return home_url( $url );
+		}
+		if ( preg_match( '#^https?://#i', $url ) ) {
+			return $url;
+		}
+		return '';
 	}
 
 	/**
@@ -345,7 +893,69 @@ class TSOLIIN_HTTP {
 	}
 
 	/**
+	 * Hosts that often block server-side HTTP checks while the page works in a browser.
+	 *
+	 * X/Twitter in particular may answer crawlers with 404 for valid tweet URLs.
+	 *
+	 * @param string $url Full URL.
+	 * @return bool
+	 */
+	public static function is_bot_wall_host( $url ) {
+		$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+		if ( '' === $host ) {
+			return false;
+		}
+
+		$hosts = array(
+			'x.com',
+			'twitter.com',
+			'mobile.twitter.com',
+			't.co',
+			'facebook.com',
+			'fb.com',
+			'fb.me',
+			'instagram.com',
+			'threads.net',
+			'linkedin.com',
+		);
+
+		foreach ( $hosts as $known ) {
+			if ( $host === $known ) {
+				return true;
+			}
+			$suffix = '.' . $known;
+			if ( strlen( $host ) > strlen( $suffix ) && substr( $host, -strlen( $suffix ) ) === $suffix ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * When a social/bot-wall host returns 404 to our checker, treat as unverifiable — not broken.
+	 *
+	 * @param string $url  URL that was checked (original or final destination).
+	 * @param int    $code HTTP status from the server.
+	 * @return array{status_code:int,redirect_url:string,is_broken:int}|null
+	 */
+	private function maybe_bot_wall_check_result( $url, $code ) {
+		$code = (int) $code;
+		if ( 404 !== $code || ! self::is_bot_wall_host( $url ) ) {
+			return null;
+		}
+
+		return array(
+			'status_code'  => 403,
+			'redirect_url' => '',
+			'is_broken'    => 0,
+		);
+	}
+
+	/**
 	 * Check a URL and return status info.
+	 *
+	 * Tries same-site www/non-www (and attachment permalink) variants before reporting broken.
 	 *
 	 * @param string $url     URL to check (absolute or relative to the site).
 	 * @param int    $post_id Post ID for resolving relative internal links.
@@ -355,8 +965,50 @@ class TSOLIIN_HTTP {
 		$url = trim( str_replace( array( "\0", "\r", "\n" ), '', (string) $url ) );
 		$url = TSOLIIN_Scanner::resolve_to_absolute_url( $url, $post_id );
 
+		$candidates = $this->build_check_url_candidates( $url, $post_id );
+		$last       = null;
+
+		foreach ( $candidates as $candidate ) {
+			$result = $this->check_request( $candidate, $post_id );
+			if ( empty( $result['is_broken'] ) ) {
+				return $result;
+			}
+			$last = $result;
+		}
+
+		if ( null === $last ) {
+			return array(
+				'status_code'  => -8,
+				'redirect_url' => '',
+				'is_broken'    => 0,
+			);
+		}
+
+		$local_attachment = $this->maybe_local_attachment_id_check_result( $url );
+		if ( null !== $local_attachment ) {
+			return $local_attachment;
+		}
+
+		$media_ok = $this->maybe_attachment_media_file_ok_result( $url, $post_id );
+		if ( null !== $media_ok ) {
+			return $media_ok;
+		}
+
+		return $last;
+	}
+
+	/**
+	 * Single HTTP check for one absolute URL (no host-variant retries).
+	 *
+	 * @param string $url     Absolute http(s) URL.
+	 * @param int    $post_id Post ID for resolving relative internal links.
+	 * @return array { status_code: int, redirect_url: string, is_broken: int }
+	 */
+	private function check_request( $url, $post_id = 0 ) {
+		unset( $post_id );
+
 		if ( ! preg_match( '#^https?://#i', $url ) ) {
-			return array( 'status_code' => 0, 'redirect_url' => '', 'is_broken' => 0 );
+			return array( 'status_code' => -8, 'redirect_url' => '', 'is_broken' => 0 );
 		}
 
 		if ( self::is_action_url( $url ) ) {
@@ -368,6 +1020,11 @@ class TSOLIIN_HTTP {
 		}
 		if ( ! self::is_safe_remote_url( $url ) ) {
 			return $this->blocked_url_result();
+		}
+
+		$chrome_unavail = $this->maybe_chrome_webstore_unavailable_result( $url );
+		if ( null !== $chrome_unavail ) {
+			return $chrome_unavail;
 		}
 
 		// Strip URL fragment (#anchor) before HTTP check.
@@ -395,19 +1052,24 @@ class TSOLIIN_HTTP {
 		);
 
 		// Follow redirect chain manually (up to 8 hops).
-		$final_url   = $url;
-		$redirect_to = '';
-		$first_code  = 0;   // status code of the first redirect hop
-		$hops        = 0;
-		$max_hops    = 8;
+		$final_url      = $url;
+		$redirect_to    = '';
+		$first_code     = 0;   // status code of the first redirect hop
+		$hops           = 0;
+		$max_hops       = 8;
+		$redirect_chain = array();
 
 		do {
 			$response = wp_remote_head( $final_url, $args );
 			$code     = is_wp_error( $response ) ? 0 : (int) wp_remote_retrieve_response_code( $response );
 
 			// Retry with GET if HEAD returned error or blocking code.
-			// Some hosts (e.g. Facebook) return 401 to HEAD but a usable response to GET for the same URL.
-			if ( is_wp_error( $response ) || in_array( $code, array( 0, 401, 403, 405 ), true ) ) {
+			// Some hosts return 401 to HEAD but 200 to GET; same-site URLs may return 404 to HEAD only.
+			$retry_get_codes = array( 0, 401, 403, 405 );
+			if ( self::is_internal_link_url( $final_url ) || $this->is_static_asset_url( $final_url ) ) {
+				$retry_get_codes[] = 404;
+			}
+			if ( is_wp_error( $response ) || in_array( $code, $retry_get_codes, true ) ) {
 				$get_r    = wp_remote_get( $final_url, array_merge( $args, array( 'stream' => false ) ) );
 				if ( ! is_wp_error( $get_r ) ) {
 					$get_code = (int) wp_remote_retrieve_response_code( $get_r );
@@ -419,10 +1081,12 @@ class TSOLIIN_HTTP {
 			}
 
 			if ( is_wp_error( $response ) ) {
+				$error_code = $this->classify_error( $response );
 				return array(
-					'status_code'  => $this->classify_error( $response ),
-					'redirect_url' => $redirect_to,
-					'is_broken'    => 1,
+					'status_code'    => $error_code,
+					'redirect_url'   => $redirect_to,
+					'redirect_chain' => $redirect_chain,
+					'is_broken'      => ( -5 === $error_code ) ? 0 : 1,
 				);
 			}
 
@@ -447,6 +1111,10 @@ class TSOLIIN_HTTP {
 				if ( 0 === $hops ) {
 					$first_code = $code; // Capture first hop code (301, 302, etc.)
 				}
+				$redirect_chain[] = array(
+					'code' => $code,
+					'url'  => $loc,
+				);
 				$redirect_to = $loc;
 				$final_url   = $loc;
 				$hops++;
@@ -458,24 +1126,27 @@ class TSOLIIN_HTTP {
 		// A redirect chain was followed ONLY if the base URL (no fragment) changed.
 		if ( $final_url !== $url ) {
 
-			// Case 1: trivial redirect (only trailing slash added/removed).
-			// Treat as 200 OK — same content, no action needed.
+			// Chrome Web Store: human slug → empty-title with same extension ID = removed/unavailable.
+			$chrome_removed = $this->maybe_chrome_webstore_removed_redirect_result( $url, $final_url, $redirect_chain );
+			if ( null !== $chrome_removed ) {
+				return $chrome_removed;
+			}
+
+			$chrome_unavail = $this->maybe_chrome_webstore_unavailable_result( $final_url, $redirect_chain );
+			if ( null !== $chrome_unavail ) {
+				return $chrome_unavail;
+			}
+
+			// Case 1: trivial redirect (trailing slash, www variant, CDN hop, etc.).
+			// Still honour the final HTTP status — e.g. www → bare host 301 must not mask a 404.
 			if ( $this->is_trivial_redirect( $url, $final_url ) ) {
-				return array(
-					'status_code'  => 200,
-					'redirect_url' => '',
-					'is_broken'    => 0,
-				);
+				return $this->resolve_transparent_redirect_result( $final_url, (int) $code, $redirect_chain );
 			}
 
 			// Case 1c: same-site redirect that strips search/query intent (bot walls, empty search forms).
 			// e.g. filmaffinity search.php?stext=Actor → advsearch2.php?q= (empty) while the original URL works in a browser.
 			if ( $this->is_query_stripping_redirect( $url, $final_url ) ) {
-				return array(
-					'status_code'  => 200,
-					'redirect_url' => '',
-					'is_broken'    => 0,
-				);
+				return $this->resolve_transparent_redirect_result( $final_url, (int) $code, $redirect_chain );
 			}
 
 			// Case 2: auth/login wall (Facebook, Google etc. bot-block).
@@ -488,28 +1159,38 @@ class TSOLIIN_HTTP {
 				);
 			}
 
-			// Case 2b: original URL had a fragment (#anchor). HTTP never sends fragments;
-			// redirect targets omit them, so "301 without hash" is often a false alarm for
-			// same discussion / in-page anchors. If the final response is OK, treat as 200.
-			// If the chain lands on a real error page, surface that as broken.
-			if ( '' !== $fragment ) {
+			$had_fragment = ( '' !== $fragment );
+
+			// Case 2b: fragment (#anchor) — only collapse to 200 when the destination is the same page.
+			if ( $had_fragment ) {
 				$final_code = (int) $code;
+				$bot_wall   = $this->maybe_bot_wall_check_result( $final_url, $final_code );
+				if ( null !== $bot_wall ) {
+					return $bot_wall;
+				}
 				if ( $this->is_broken( $final_code ) ) {
 					return array(
-						'status_code'  => $final_code,
-						'redirect_url' => $final_url,
-						'is_broken'    => 1,
+						'status_code'    => $final_code,
+						'redirect_url'   => $final_url,
+						'redirect_chain' => $redirect_chain,
+						'is_broken'      => 1,
 					);
 				}
-				return array(
-					'status_code'  => 200,
-					'redirect_url' => '',
-					'is_broken'    => 0,
-				);
+				if ( $this->is_fragment_same_page_redirect( $url, $final_url ) ) {
+					return array(
+						'status_code'  => 200,
+						'redirect_url' => '',
+						'is_broken'    => 0,
+					);
+				}
 			}
 
 			// Case 2c: redirect chain resolved to an error page (e.g. 301 to www, then 404).
 			$final_code = (int) $code;
+			$bot_wall   = $this->maybe_bot_wall_check_result( $final_url, $final_code );
+			if ( null !== $bot_wall ) {
+				return $bot_wall;
+			}
 			if ( $this->is_broken( $final_code ) ) {
 				return array(
 					'status_code'  => $final_code,
@@ -520,17 +1201,74 @@ class TSOLIIN_HTTP {
 
 			// Case 3: real redirect to different content.
 			return array(
-				'status_code'  => $first_code, // first hop code (301, 302…)
-				'redirect_url' => $final_url,  // final destination
-				'is_broken'    => 0,
+				'status_code'    => $first_code, // first hop code (301, 302…)
+				'redirect_url'   => $final_url,  // final destination
+				'redirect_chain' => $redirect_chain,
+				'is_broken'      => 0,
 			);
 		}
 
 		// No real redirect (or only fragment differed): return final code.
+		$bot_wall = $this->maybe_bot_wall_check_result( $final_url, (int) $code );
+		if ( null !== $bot_wall ) {
+			return $bot_wall;
+		}
+
+		$chrome_unavail = $this->maybe_chrome_webstore_unavailable_result( $final_url );
+		if ( null !== $chrome_unavail ) {
+			return $chrome_unavail;
+		}
+
 		return array(
-			'status_code'  => $code,
-			'redirect_url' => '',
-			'is_broken'    => $this->is_broken( $code ) ? 1 : 0,
+			'status_code'    => $code,
+			'redirect_url'   => '',
+			'redirect_chain' => array(),
+			'is_broken'      => $this->is_broken( $code ) ? 1 : 0,
+		);
+	}
+
+	/**
+	 * Build check() output for a “transparent” redirect (www, trailing slash, CDN hop).
+	 *
+	 * Uses the real final HTTP status after the chain — must not report 200 when the destination is 404.
+	 *
+	 * @param string $final_url      Final URL after redirects.
+	 * @param int    $final_code     HTTP status at the final hop.
+	 * @param array  $redirect_chain Collected redirect hops.
+	 * @return array
+	 */
+	private function resolve_transparent_redirect_result( $final_url, $final_code, $redirect_chain = array() ) {
+		$chrome_unavail = $this->maybe_chrome_webstore_unavailable_result( $final_url, $redirect_chain );
+		if ( null !== $chrome_unavail ) {
+			return $chrome_unavail;
+		}
+
+		$final_code = (int) $final_code;
+		$bot_wall   = $this->maybe_bot_wall_check_result( $final_url, $final_code );
+		if ( null !== $bot_wall ) {
+			return $bot_wall;
+		}
+		if ( $this->is_broken( $final_code ) ) {
+			return array(
+				'status_code'    => $final_code,
+				'redirect_url'   => '',
+				'redirect_chain' => $redirect_chain,
+				'is_broken'      => 1,
+			);
+		}
+		if ( in_array( $final_code, array( 301, 302, 303, 307, 308 ), true ) ) {
+			return array(
+				'status_code'    => $final_code,
+				'redirect_url'   => $final_url,
+				'redirect_chain' => $redirect_chain,
+				'is_broken'      => 0,
+			);
+		}
+		return array(
+			'status_code'    => 200,
+			'redirect_url'   => '',
+			'redirect_chain' => $redirect_chain,
+			'is_broken'      => 0,
 		);
 	}
 
@@ -582,7 +1320,7 @@ class TSOLIIN_HTTP {
 	 */
 	public static function is_hard_broken_status( $code ) {
 		$code = (int) $code;
-		if ( in_array( $code, array( -1, -6, -7 ), true ) ) {
+		if ( in_array( $code, array( -1, -5, -6, -7 ), true ) ) {
 			return false;
 		}
 		if ( $code <= 0 ) {
@@ -613,6 +1351,16 @@ class TSOLIIN_HTTP {
 	}
 
 	/**
+	 * HTTP codes that mean the target resource no longer exists (www toggles cannot fix these).
+	 *
+	 * @param int $code HTTP status code.
+	 * @return bool
+	 */
+	public static function is_resource_not_found_status( $code ) {
+		return in_array( (int) $code, array( 404, 410 ), true );
+	}
+
+	/**
 	 * Whether a URL is safe to offer with an Apply button (confirmed 2xx from the server, not a bot-block).
 	 *
 	 * @param array $check_result Result from check(): status_code, is_broken, redirect_url.
@@ -633,6 +1381,36 @@ class TSOLIIN_HTTP {
 	}
 
 	/**
+	 * Whether a candidate URL is a verified fix for the original (re-checked HTTP, 2xx, not broken).
+	 *
+	 * @param array $original_check Result from check() on the stored URL.
+	 * @param array $candidate_check Result from check() on the proposed URL.
+	 * @return bool
+	 */
+	public static function suggestion_fixes_broken_link( $original_check, $candidate_check, $stored_original_code = 0 ) {
+		if ( ! is_array( $candidate_check ) ) {
+			return false;
+		}
+		if ( ! self::is_actionable_suggestion_result( $candidate_check ) ) {
+			return false;
+		}
+		if ( ! is_array( $original_check ) ) {
+			return true;
+		}
+		$orig_code   = isset( $original_check['status_code'] ) ? (int) $original_check['status_code'] : 0;
+		$orig_broken = ! empty( $original_check['is_broken'] ) || self::is_hard_broken_status( $orig_code );
+		if ( ! $orig_broken && $stored_original_code && self::is_hard_broken_status( (int) $stored_original_code ) ) {
+			$orig_broken = true;
+			$orig_code   = (int) $stored_original_code;
+		}
+		if ( ! $orig_broken ) {
+			return true;
+		}
+		// Original is broken: candidate must be a confirmed working URL, not merely “not flagged broken”.
+		return self::is_actionable_suggestion_result( $candidate_check );
+	}
+
+	/**
 	 * Smart URL suggestion: tests https, follows redirects, tries www.
 	 *
 	 * @param string $url     Original URL.
@@ -647,25 +1425,22 @@ class TSOLIIN_HTTP {
 		}
 		$suggestions = array();
 		$tested      = array( $url );
+		$r_orig      = $this->check( $url, $post_id );
 
 		// 1. Final destination after following redirects from the original URL (e.g. twitter.com → x.com).
-		$r_orig = $this->check( $url, $post_id );
 		if ( ! empty( $r_orig['redirect_url'] ) && ! $this->is_trivial_redirect( $url, $r_orig['redirect_url'] ) ) {
 			$final = trim( (string) $r_orig['redirect_url'] );
 			if ( '' !== $final && ! in_array( $final, $tested, true ) ) {
 				$r_final = $this->check( $final, $post_id );
-				if ( ! $r_final['is_broken'] ) {
+				if ( self::suggestion_fixes_broken_link( $r_orig, $r_final ) ) {
 					$final_status = (int) $r_final['status_code'];
-					if ( $final_status <= 0 ) {
-						$final_status = (int) $r_orig['status_code'];
-					}
 					$suggestions[] = array(
 						'url'         => $final,
 						'status_code' => $final_status,
 						'label'       => self::status_label( $final_status, $final ),
 						'reason'      => __( 'Final URL after redirects', 'tso-link-inspector' ),
 						'confidence'  => 'high',
-						'actionable'  => self::is_actionable_suggestion_result( $r_final ),
+						'actionable'  => true,
 					);
 				}
 				$tested[] = $final;
@@ -678,25 +1453,20 @@ class TSOLIIN_HTTP {
 			$https = preg_replace( '#^http://#i', 'https://', $url );
 			if ( $https && ! in_array( $https, $tested, true ) ) {
 				$r = $this->check( $https, $post_id );
-				if ( ! $r['is_broken'] ) {
+				if ( self::suggestion_fixes_broken_link( $r_orig, $r ) ) {
 					$target  = $https;
 					$reason  = __( 'Secure HTTPS version available', 'tso-link-inspector' );
 					$status  = (int) $r['status_code'];
-					$action  = self::is_actionable_suggestion_result( $r );
 
 					// HTTPS URL may itself redirect (e.g. legacy host); suggest the real destination, not the hop.
 					if ( ! empty( $r['redirect_url'] ) && ! $this->is_trivial_redirect( $https, $r['redirect_url'] ) ) {
 						$target = trim( (string) $r['redirect_url'] );
 						$reason = __( 'Final URL after redirects', 'tso-link-inspector' );
 						$r2     = $this->check( $target, $post_id );
-						if ( $r2['is_broken'] ) {
+						if ( ! self::suggestion_fixes_broken_link( $r_orig, $r2 ) ) {
 							$target = '';
 						} else {
 							$status = (int) $r2['status_code'];
-							if ( $status <= 0 ) {
-								$status = (int) $r['status_code'];
-							}
-							$action = self::is_actionable_suggestion_result( $r2 );
 						}
 					}
 
@@ -707,7 +1477,7 @@ class TSOLIIN_HTTP {
 							'label'       => self::status_label( $status, $target ),
 							'reason'      => $reason,
 							'confidence'  => 'high',
-							'actionable'  => $action,
+							'actionable'  => true,
 						);
 						$tested[] = $target;
 					}
@@ -716,8 +1486,8 @@ class TSOLIIN_HTTP {
 			}
 		}
 
-		// 3. www variant — only for HTTPS URLs (for http://, toggling www stays insecure and confuses users).
-		if ( ! self::is_plain_http_url( $url ) ) {
+		// 3. www variant — never for dead resources (404/410); toggling www cannot restore missing files.
+		if ( ! self::is_plain_http_url( $url ) && ! self::is_resource_not_found_status( (int) $r_orig['status_code'] ) ) {
 			$parts = wp_parse_url( $url );
 			if ( $parts && isset( $parts['host'] ) ) {
 				$host   = (string) $parts['host'];
@@ -732,14 +1502,17 @@ class TSOLIIN_HTTP {
 				$alt_url = $scheme . '://' . $alt_host . $path . $query;
 				if ( ! in_array( $alt_url, $tested, true ) ) {
 					$r = $this->check( $alt_url, $post_id );
-					if ( ! $r['is_broken'] ) {
+					if (
+						self::suggestion_fixes_broken_link( $r_orig, $r )
+						&& self::is_http_same_resource_bar_www( $url, $alt_url )
+					) {
 						$suggestions[] = array(
 							'url'         => $alt_url,
-							'status_code' => $r['status_code'],
-							'label'       => self::status_label( $r['status_code'], $alt_url ),
+							'status_code' => (int) $r['status_code'],
+							'label'       => self::status_label( (int) $r['status_code'], $alt_url ),
 							'reason'      => __( 'www / non-www variant (HTTPS)', 'tso-link-inspector' ),
 							'confidence'  => 'medium',
-							'actionable'  => self::is_actionable_suggestion_result( $r ),
+							'actionable'  => true,
 						);
 					}
 				}
@@ -771,26 +1544,37 @@ class TSOLIIN_HTTP {
 			);
 		}
 
-		return $dedup;
-	}
+		// Canonical HTTPS URLs for plain HTTP links (Facebook etc. may return 401 to bots).
+		if ( self::is_plain_http_url( $url ) ) {
+			foreach ( $this->build_secure_canonical_candidates( $url ) as $candidate ) {
+				if ( in_array( $candidate, $tested, true ) ) {
+					continue;
+				}
+				if ( ! self::is_trusted_canonical_upgrade( $url, $candidate ) ) {
+					continue;
+				}
+				$r          = $this->check( $candidate, $post_id );
+				$code       = (int) $r['status_code'];
+				$unverified = self::is_bot_wall_host( $candidate ) && self::is_bot_block_status( $code );
+				if ( ! $unverified && ! self::suggestion_fixes_broken_link( $r_orig, $r ) ) {
+					continue;
+				}
+				$dedup[]  = array(
+					'url'         => $candidate,
+					'status_code' => $code,
+					'label'       => self::status_label( $code, $candidate ),
+					'reason'      => $unverified
+						? __( 'Canonical HTTPS URL (server cannot verify — check in browser)', 'tso-link-inspector' )
+						: __( 'Secure HTTPS canonical URL', 'tso-link-inspector' ),
+					'confidence'  => 'high',
+					'actionable'  => true,
+					'unverified'  => $unverified,
+				);
+				$tested[] = $candidate;
+			}
+		}
 
-	/**
-	 * Follow redirects and return the final URL.
-	 *
-	 * @param string $url     Starting URL.
-	 * @param int    $post_id Post ID for relative resolution.
-	 * @return string|null
-	 */
-	private function get_final_url( $url, $post_id = 0 ) {
-		$url = TSOLIIN_Scanner::resolve_to_absolute_url( $url, $post_id );
-		if ( ! preg_match( '#^https?://#i', $url ) || ! self::is_safe_remote_url( $url ) ) {
-			return null;
-		}
-		$r = $this->check( $url, $post_id );
-		if ( ! empty( $r['redirect_url'] ) && ! $this->is_trivial_redirect( $url, $r['redirect_url'] ) ) {
-			return trim( (string) $r['redirect_url'] );
-		}
-		return null;
+		return $dedup;
 	}
 
 	/**
@@ -841,6 +1625,92 @@ class TSOLIIN_HTTP {
 	}
 
 	/**
+	 * Host without leading www (lowercase).
+	 *
+	 * @param string $host Hostname.
+	 * @return string
+	 */
+	public static function normalize_registrable_host( $host ) {
+		return strtolower( preg_replace( '#^www\.#i', '', (string) $host ) );
+	}
+
+	/**
+	 * Trusted http→https or www canonicalization on the same site (path unchanged).
+	 *
+	 * @param string $original Stored URL.
+	 * @param string $target   Proposed URL.
+	 * @return bool
+	 */
+	public static function is_trusted_canonical_upgrade( $original, $target ) {
+		$original = trim( (string) $original );
+		$target   = trim( (string) $target );
+		if ( '' === $original || '' === $target || $original === $target ) {
+			return false;
+		}
+		$orig_parts = wp_parse_url( $original );
+		$tgt_parts  = wp_parse_url( $target );
+		if ( empty( $orig_parts['host'] ) || empty( $tgt_parts['host'] ) ) {
+			return false;
+		}
+		if ( self::normalize_registrable_host( $orig_parts['host'] ) !== self::normalize_registrable_host( $tgt_parts['host'] ) ) {
+			return false;
+		}
+		$orig_path = isset( $orig_parts['path'] ) ? rtrim( (string) $orig_parts['path'], '/' ) : '';
+		$tgt_path  = isset( $tgt_parts['path'] ) ? rtrim( (string) $tgt_parts['path'], '/' ) : '';
+		if ( strtolower( $orig_path ) !== strtolower( $tgt_path ) ) {
+			return false;
+		}
+		$orig_query = isset( $orig_parts['query'] ) ? (string) $orig_parts['query'] : '';
+		$tgt_query  = isset( $tgt_parts['query'] ) ? (string) $tgt_parts['query'] : '';
+		if ( $orig_query !== $tgt_query ) {
+			return false;
+		}
+		$tgt_scheme = isset( $tgt_parts['scheme'] ) ? strtolower( (string) $tgt_parts['scheme'] ) : '';
+		if ( 'https' !== $tgt_scheme ) {
+			return false;
+		}
+		$orig_scheme = isset( $orig_parts['scheme'] ) ? strtolower( (string) $orig_parts['scheme'] ) : '';
+		if ( 'http' === $orig_scheme ) {
+			return true;
+		}
+		if ( 'https' === $orig_scheme ) {
+			return 0 !== stripos( (string) $orig_parts['host'], 'www.' ) && 0 === stripos( (string) $tgt_parts['host'], 'www.' );
+		}
+		return false;
+	}
+
+	/**
+	 * HTTPS canonical URL candidates (scheme + optional www) for the same path.
+	 *
+	 * @param string $url Original URL.
+	 * @return string[]
+	 */
+	public function build_secure_canonical_candidates( $url ) {
+		$url   = trim( (string) $url );
+		$parts = wp_parse_url( $url );
+		if ( ! $parts || empty( $parts['host'] ) ) {
+			return array();
+		}
+		$path  = isset( $parts['path'] ) ? (string) $parts['path'] : '/';
+		$query = isset( $parts['query'] ) ? '?' . $parts['query'] : '';
+		$bare  = self::normalize_registrable_host( $parts['host'] );
+		$hosts = array();
+		if ( in_array( $bare, array( 'facebook.com', 'instagram.com', 'linkedin.com' ), true ) ) {
+			$hosts[] = 'www.' . $bare;
+		}
+		$hosts[] = $bare;
+		if ( 0 !== stripos( (string) $parts['host'], 'www.' ) ) {
+			$hosts[] = 'www.' . $bare;
+		}
+		$hosts      = array_values( array_unique( array_filter( $hosts ) ) );
+		$candidates = array();
+		foreach ( $hosts as $host ) {
+			$candidates[] = 'https://' . $host . $path . $query;
+		}
+		return array_values( array_unique( $candidates ) );
+	}
+
+	/**
 	 * Whether replacing $original with $target is a useful fix (HTTPS upgrade or canonical domain move).
 	 *
 	 * @param string $original Original URL.
@@ -879,6 +1749,12 @@ class TSOLIIN_HTTP {
 	public static function status_label( $code, $link_url = '' ) {
 		$code     = (int) $code;
 		$link_url = trim( (string) $link_url );
+		if ( $link_url && self::is_bot_wall_host( $link_url ) && self::is_bot_block_status( $code ) ) {
+			return __( 'Unverifiable (site blocks bots)', 'tso-link-inspector' );
+		}
+		if ( $link_url && self::is_chrome_webstore_unavailable_url( $link_url ) ) {
+			return __( 'Extension unavailable', 'tso-link-inspector' );
+		}
 		if ( $link_url && self::is_plain_http_url( $link_url ) && $code >= 200 && $code < 300 ) {
 			if ( 200 === $code ) {
 				return __( 'OK (HTTP — use HTTPS)', 'tso-link-inspector' );
@@ -898,7 +1774,7 @@ class TSOLIIN_HTTP {
 			-2   => __( 'Domain does not exist (DNS)', 'tso-link-inspector' ),
 			-3   => __( 'Timed out', 'tso-link-inspector' ),
 			-4   => __( 'Connection refused', 'tso-link-inspector' ),
-			-5   => __( 'SSL error', 'tso-link-inspector' ),
+			-5   => __( 'SSL error (server cannot verify)', 'tso-link-inspector' ),
 			2    => __( 'Domain does not exist (DNS)', 'tso-link-inspector' ),
 			3    => __( 'Timed out', 'tso-link-inspector' ),
 			4    => __( 'Connection refused', 'tso-link-inspector' ),
@@ -952,6 +1828,9 @@ class TSOLIIN_HTTP {
 
 		if ( in_array( $code, array( -1, -6, -7 ), true ) && ! $is_broken ) {
 			return 'tsoliin-status--skipped';
+		}
+		if ( -5 === $code && ! $is_broken ) {
+			return 'tsoliin-status--warning';
 		}
 		if ( 0 === $code && ! $is_broken ) {
 			return 'tsoliin-status--unknown';
@@ -1172,15 +2051,49 @@ class TSOLIIN_HTTP {
 		if ( '' === $orig_path || '' === $final_path || $orig_path === $final_path ) {
 			return false;
 		}
+		return $this->path_looks_like_search_endpoint( $orig_path )
+			&& $this->path_looks_like_search_endpoint( $final_path );
+	}
+
+	/**
+	 * Whether a URL path segment looks like a site search endpoint.
+	 *
+	 * @param string $path Lowercased URL path.
+	 * @return bool
+	 */
+	private function path_looks_like_search_endpoint( $path ) {
 		$patterns = array( 'search', 'find', 'buscar', 'busqueda', 'advsearch', 'lookup' );
-		foreach ( array( $orig_path, $final_path ) as $path ) {
-			foreach ( $patterns as $needle ) {
-				if ( false !== strpos( $path, $needle ) ) {
-					return true;
-				}
+		foreach ( $patterns as $needle ) {
+			if ( false !== strpos( $path, $needle ) ) {
+				return true;
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Whether a redirect from a #fragment URL stayed on the same page (path + host).
+	 *
+	 * @param string $original Original URL (fragment already stripped for HTTP).
+	 * @param string $final    Final URL after redirects.
+	 * @return bool
+	 */
+	private function is_fragment_same_page_redirect( $original, $final ) {
+		$orig_parts  = wp_parse_url( $original );
+		$final_parts = wp_parse_url( $final );
+		if ( ! $orig_parts || ! $final_parts || empty( $orig_parts['host'] ) || empty( $final_parts['host'] ) ) {
+			return false;
+		}
+		$orig_host = strtolower( preg_replace( '#^www\.#i', '', (string) $orig_parts['host'] ) );
+		$fin_host  = strtolower( preg_replace( '#^www\.#i', '', (string) $final_parts['host'] ) );
+		if ( $orig_host !== $fin_host ) {
+			return false;
+		}
+		$orig_path = isset( $orig_parts['path'] ) ? rtrim( rawurldecode( (string) $orig_parts['path'] ), '/' ) : '';
+		$fin_path  = isset( $final_parts['path'] ) ? rtrim( rawurldecode( (string) $final_parts['path'] ), '/' ) : '';
+		$orig_q    = isset( $orig_parts['query'] ) ? (string) $orig_parts['query'] : '';
+		$fin_q     = isset( $final_parts['query'] ) ? (string) $final_parts['query'] : '';
+		return strtolower( $orig_path ) === strtolower( $fin_path ) && $orig_q === $fin_q;
 	}
 
 	/**
@@ -1408,6 +2321,134 @@ class TSOLIIN_HTTP {
 			return $this->is_trivial_redirect( $link, $a );
 		}
 		return false;
+	}
+
+	/**
+	 * Whether a URL belongs to the Google Chrome Web Store (current or legacy host).
+	 *
+	 * @param string $url URL to test.
+	 * @return bool
+	 */
+	public static function is_chrome_webstore_host( $url ) {
+		$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+		return in_array( $host, array( 'chromewebstore.google.com', 'chrome.google.com' ), true );
+	}
+
+	/**
+	 * Extract a Chrome Web Store extension ID from a store URL path.
+	 *
+	 * @param string $url Store URL.
+	 * @return string 32-character extension ID, or empty string.
+	 */
+	public static function extract_chrome_webstore_extension_id( $url ) {
+		$path = self::normalize_chrome_webstore_path( (string) wp_parse_url( $url, PHP_URL_PATH ) );
+		if ( preg_match( '#/detail/(?:empty-title|[^/]+)/([a-p]{32})(?:/|$)#i', $path, $matches ) ) {
+			return strtolower( $matches[1] );
+		}
+		if ( preg_match( '#/detail/([a-p]{32})(?:/error)?/?$#i', $path, $matches ) ) {
+			return strtolower( $matches[1] );
+		}
+		return '';
+	}
+
+	/**
+	 * Normalize legacy /webstore/ prefix on Chrome Web Store paths.
+	 *
+	 * @param string $path URL path.
+	 * @return string
+	 */
+	public static function normalize_chrome_webstore_path( $path ) {
+		return (string) preg_replace( '#^/webstore(?=/|$)#', '', (string) $path );
+	}
+
+	/**
+	 * Whether the store URL is Google's placeholder for a removed/unavailable extension.
+	 *
+	 * @param string $url URL to test.
+	 * @return bool
+	 */
+	public static function is_chrome_webstore_empty_title_url( $url ) {
+		$path = self::normalize_chrome_webstore_path( (string) wp_parse_url( $url, PHP_URL_PATH ) );
+		return false !== stripos( $path, '/detail/empty-title/' );
+	}
+
+	/**
+	 * Whether the store URL is the client-side “item not available” error route.
+	 *
+	 * @param string $url URL to test.
+	 * @return bool
+	 */
+	public static function is_chrome_webstore_error_url( $url ) {
+		$path = self::normalize_chrome_webstore_path( (string) wp_parse_url( $url, PHP_URL_PATH ) );
+		return (bool) preg_match( '#/detail/[a-p]{32}/error/?$#i', $path );
+	}
+
+	/**
+	 * Whether a Chrome Web Store URL points to an unavailable extension (soft 404).
+	 *
+	 * @param string $url URL to test.
+	 * @return bool
+	 */
+	public static function is_chrome_webstore_unavailable_url( $url ) {
+		if ( ! self::is_chrome_webstore_host( $url ) ) {
+			return false;
+		}
+		return self::is_chrome_webstore_empty_title_url( $url ) || self::is_chrome_webstore_error_url( $url );
+	}
+
+	/**
+	 * Whether a redirect replaced the human slug with Google's empty-title placeholder (same extension ID).
+	 *
+	 * @param string $original Original request URL.
+	 * @param string $final    Final URL after redirects.
+	 * @return bool
+	 */
+	private function is_chrome_webstore_removed_extension_redirect( $original, $final ) {
+		if ( ! self::is_chrome_webstore_host( $original ) || ! self::is_chrome_webstore_host( $final ) ) {
+			return false;
+		}
+		$orig_id  = self::extract_chrome_webstore_extension_id( $original );
+		$final_id = self::extract_chrome_webstore_extension_id( $final );
+		if ( '' === $orig_id || $orig_id !== $final_id ) {
+			return false;
+		}
+		return self::is_chrome_webstore_empty_title_url( $final ) && ! self::is_chrome_webstore_empty_title_url( $original );
+	}
+
+	/**
+	 * Build a broken check result for unavailable Chrome Web Store extensions.
+	 *
+	 * Google often returns HTTP 200 on /detail/empty-title/{id} even though the item is gone.
+	 *
+	 * @param string $url            URL that is unavailable.
+	 * @param array  $redirect_chain Optional redirect hops.
+	 * @return array|null Check result, or null when the URL is not an unavailable store item.
+	 */
+	private function maybe_chrome_webstore_unavailable_result( $url, $redirect_chain = array() ) {
+		if ( ! self::is_chrome_webstore_unavailable_url( $url ) ) {
+			return null;
+		}
+		return array(
+			'status_code'    => 404,
+			'redirect_url'   => '',
+			'redirect_chain' => $redirect_chain,
+			'is_broken'      => 1,
+		);
+	}
+
+	/**
+	 * Detect redirect from a named extension page to empty-title (removed from store).
+	 *
+	 * @param string $original       Original request URL.
+	 * @param string $final          Final URL after redirects.
+	 * @param array  $redirect_chain Redirect hops.
+	 * @return array|null
+	 */
+	private function maybe_chrome_webstore_removed_redirect_result( $original, $final, $redirect_chain = array() ) {
+		if ( ! $this->is_chrome_webstore_removed_extension_redirect( $original, $final ) ) {
+			return null;
+		}
+		return $this->maybe_chrome_webstore_unavailable_result( $final, $redirect_chain );
 	}
 
 	/**
@@ -1711,7 +2752,8 @@ class TSOLIIN_HTTP {
 			'login.microsoftonline.com',
 		);
 		foreach ( $auth_hosts as $auth_host ) {
-			if ( $host === $auth_host || ( '' !== $host && str_ends_with( $host, '.' . $auth_host ) ) ) {
+			$suffix = '.' . $auth_host;
+			if ( $host === $auth_host || ( '' !== $host && strlen( $host ) > strlen( $suffix ) && substr( $host, -strlen( $suffix ) ) === $suffix ) ) {
 				return true;
 			}
 		}
@@ -1736,11 +2778,15 @@ class TSOLIIN_HTTP {
 			return false;
 		}
 
-		$auth_query_keys = array( 'redirect_to', 'returnurl', 'redirect', 'return_to', 'continue' );
+		$auth_query_keys = array( 'redirect_to', 'returnurl', 'return_to' );
 		foreach ( $auth_query_keys as $key ) {
-			if ( isset( $query[ $key ] ) ) {
+			if ( isset( $query[ $key ] ) && $this->url_path_looks_like_auth( $path ) ) {
 				return true;
 			}
+		}
+
+		if ( ( isset( $query['redirect'] ) || isset( $query['continue'] ) ) && $this->url_path_looks_like_auth( $path ) ) {
+			return true;
 		}
 
 		if ( isset( $query['next'] ) && preg_match( '#/(?:login|signin|sign-in|auth|oauth)(?:/|$|\.)#', $path ) ) {
@@ -1748,6 +2794,20 @@ class TSOLIIN_HTTP {
 		}
 
 		return false;
+	}
+
+	/**
+	 * Whether a URL path resembles a login/oauth endpoint.
+	 *
+	 * @param string $path URL path (lowercase recommended).
+	 * @return bool
+	 */
+	private function url_path_looks_like_auth( $path ) {
+		$path = strtolower( (string) $path );
+		if ( false !== strpos( $path, '/wp-login.php' ) ) {
+			return true;
+		}
+		return (bool) preg_match( '#/(?:login|signin|sign-in|auth|oauth)(?:/|$|\.)#', $path );
 	}
 
 }

@@ -5,7 +5,7 @@ Tags: broken links, link checker, seo, maintenance, links
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 1.9.7
+Stable tag: 2.1.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -19,12 +19,22 @@ Find and fix broken links across your entire WordPress site without opening each
 
 * **Scans** posts, pages, and any custom post type.
 * **Detects** HTTP errors: 404, 410, 500, DNS failures, SSL errors, timeouts, and redirects.
-* **Edit URLs inline** directly from the admin panel, no need to open the editor.
+* **Edit URLs inline** for post content from the admin panel, or **Go to edit** for comments, widgets, menus, and terms in their native WordPress screens.
 * **Smart URL Suggester**: automatically tests HTTPS upgrade, follows redirect chains, and tries www/non-www variants.
 * **Unlink**: removes the `<a>` tag but keeps the visible text.
 * **Bulk actions**: re-check, unlink, mark as OK, or delete multiple links at once.
 * **Export CSV**: export any filtered view to a spreadsheet.
 * **Per-article view**: click any article to see all its links in one place.
+* **Posts with issues**: summary of articles that contain broken, redirected, or unchecked links.
+* **Internal / External** scope tabs to separate same-site and outbound links.
+* **Quality filters**: empty anchor text, generic anchors (“click here”), and links to unpublished posts.
+* **View post at link**: open the front end with the matching link highlighted (post content, plain-text URLs, and comments).
+* **Plain-text URLs** in post content are listed separately (not treated as hyperlinks) with **Go to edit** to open the post.
+* **Convert to /path**: optional row and bulk action to replace same-site absolute URLs with site-relative paths.
+* **Dashboard widget** with broken/unchecked counts and shortcuts.
+* **Export CSV and PDF** for any filtered view.
+* **Settings Help tab** with full documentation.
+* **Configurable automatic checks**: recheck intervals for OK and broken links, plus hourly batch size.
 * **HTTP insecure detection**: flags active links still using HTTP instead of HTTPS.
 * **Ignore list**: add domains or URL prefixes to never scan or check.
 * **Scan images and iframes**: optionally detect broken `<img src>` and embedded videos.
@@ -89,6 +99,71 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 2. Filter tabs: All, Broken, Redirect, OK, HTTP insecure, Manual locks, Not checked.
 
 == Changelog ==
+
+= 2.1.0 =
+* New: **Go to edit** row action for comments, widgets, navigation menus, and taxonomy terms — edit at the source instead of the inline modal.
+* Fix: Gallery and image block URLs are classified as **image**, not plain text (Gutenberg JSON is no longer scanned as bare URLs).
+* Fix: WordPress media-library images (including `-150x150` thumbnails in galleries) are no longer misclassified as plain-text URLs.
+* Fix: Automatic DB cleanup reclassifies existing `plain` rows under `/uploads/` with image extensions to `image`.
+* Fix: **Recheck** re-reads WordPress sources (post, comment, menu, widget, term, template) before HTTP — works after editing in native WP screens.
+* New: **Go to edit comment** opens the WordPress comment editor (replaces inline Edit link for all comment rows).
+* New: **Plain-text URL** link type for bare `http(s)://` strings in post content (distinct icon and list behaviour).
+* New: **Go to edit** with deep-link (`tsoliin_link`) for post-stored links and plain-text URLs; front-end highlight on **View post at link**.
+* Improvement: Widget edit links include sidebar/widget query args; menu rows open the correct menu screen.
+* Improvement: Coloured **type icons** in the link list (post, comment, menu, widget, plain text, etc.).
+* Improvement: URLs inside `<a href>` are stored as **links** even when the target is an image file (e.g. `.webp` downloads).
+* Improvement: Widget scan removes stale rows when widgets or URLs disappear; widget rows can be rescanned on Recheck.
+* Improvement: Fewer duplicate database schema checks on admin load.
+* Fix: Comment author website URLs support **Unlink** (clears `comment_author_url`) with clearer Delete tooltips.
+* Fix: Editor focus assets are not loaded on the block widgets screen (avoids `wp-editor` conflicts).
+* Fix: Post title in the link list opens the editor without unwanted deep-link focus; gallery images open in visual mode.
+* Fix: Smart Suggest **Apply** works for comment links.
+* Improvement: Catalan and Spanish translations updated.
+
+= 2.0.0 =
+* New: WordPress **dashboard widget** with broken/unchecked counts and quick links.
+* New: **Posts with issues** view — articles grouped by link problems.
+* New: **Internal / External** scope tabs and sortable link type column.
+* New: **Quality filters** — empty anchor, generic anchor, unpublished target.
+* New: Settings **Help** tab with full documentation (Scan, cron, filters, actions, ACF, export).
+* New: Dismissible **getting-started** banner on the main screen.
+* New: **Open URL** and **Ignore domain** row actions.
+* New: **View post at this link** — highlights the matching link on the front end (post content and comments).
+* New: Optional **Convert to /path** (row action and bulk) for same-site absolute URLs.
+* New: **Export report (PDF)** alongside CSV.
+* New: Configurable **automatic HTTP checks** — OK/broken recheck intervals and hourly batch size.
+* New: Optional WordPress **revision** before Edit link or Convert to /path.
+* Improvement: ACF/Meta scanning — Link fields, relative URLs, recursive meta search, default SEO key exclusions.
+* Improvement: Bulk actions with progress, delete confirmation, external-filter pagination, and list-table refresh fixes.
+* Improvement: HTTP checks and scans handle www variants, HEAD→GET, `?attachment_id=` URLs, and relative paths without duplicating subfolder paths.
+* Fix: Edit link static-method fatal, front-end focus links (`TSOLIIN_Support` bootstrap), and edit-link fixes from 1.9.9 (images, Manual locks UX, version badge).
+
+= 1.9.9 =
+* Fix: Edit link on images updates alt text (not anchor text inside `<a>` tags).
+* Fix: URL save no longer reports failure when only link text could not be updated; partial success saves the URL and refreshes the modal.
+* Fix: Edit link modal keeps the saved URL in the row after save (no stale absolute URL until hard reload).
+* Fix: Relative URL edits also update matching URLs inside `srcset` attributes.
+* Improvement: Edit modal shows “Alt text” for images and hides link text for iframes.
+* Improvement: “Not broken” explains Manual locks (confirmation dialog, tooltips, success notice).
+* Improvement: Current plugin version shown next to the admin page title.
+
+= 1.9.8 =
+* New: Edit link modal — change URL and anchor text inline; supports site-relative URLs (/path, ./, ../).
+* Fix: Search across post titles works with filter tabs and bulk actions (SQL join fix).
+* Fix: Filter tabs remove or refresh rows without F5 after edit, recheck, Smart Suggest, mark-as-OK, bulk unlink/recheck, and HTTP insecure filter.
+* Fix: Bulk unlink/delete reload list and pagination; accurate unlink progress counts.
+* Fix: Export CSV respects the current search query.
+* Fix: Check now runs a full recheck instead of resuming unchecked rows only.
+* Fix: Comment edit/unlink finds comments by URL equivalence, not exact SQL match.
+* Fix: Redirect tab excludes transparent redirects on load; AJAX status matches normalized DB values.
+* Fix: PHP 8.5 admin compatibility (nullable HTTP dependency in list table).
+* Fix: Stat and tab counts use localized number formatting (no raw `&nbsp;` in UI).
+* Fix: Background check progress when nonce fails; recheck button restores label on error.
+* Fix: PHP 7.4 compatibility for host suffix matching in HTTP checks.
+* Improvement: Catalan and Spanish translations updated (filter tabs, edit link strings).
+* Improvement: On-screen help explaining Scan (find links) vs Check (HTTP test); Stop scan/check buttons; confirmation before full-site Check.
+* Improvement: Check this post on a single article’s link list (only that post’s URLs).
+* Fix: Edit link URL replacement limited to href/src attributes (prevents corrupting closing HTML tags when trailing slash differs).
 
 = 1.9.7 =
 * New: Widget sidebar scanning (Text, Custom HTML, and block widgets).
@@ -270,6 +345,18 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 * Initial release.
 
 == Upgrade Notice ==
+
+= 2.1.0 =
+Recommended update. External sources use **Go to edit**; gallery images classify correctly; **Recheck** syncs from WordPress before HTTP. Run **Scan now** after updating to refresh link types.
+
+= 2.0.0 =
+Major update: dashboard widget, Posts with issues, internal/external and quality filters, Help tab, view-post-at-link highlight, Convert to /path, PDF export, configurable cron schedule, ACF/meta improvements, and many admin fixes. Run **Scan now** after updating, then **Check now** once.
+
+= 1.9.9 =
+Recommended update. Edit link fixes for images and relative URLs, clearer Manual locks (“Not broken”) flow, and version badge in the admin header.
+
+= 1.9.8 =
+Recommended update. Clearer Scan vs Check UI with Stop buttons, per-post checking, plus anchor editing, search/filter fixes, and PHP 8.5/7.4 compatibility.
 
 = 1.9.7 =
 Recommended update. Extended scanning (widgets, terms, FSE, meta plain URLs, third-party API), many admin and redirect fixes, and automatic list refresh after bulk actions. Run **Scan now** after updating, then **Check now** once to normalize existing rows.

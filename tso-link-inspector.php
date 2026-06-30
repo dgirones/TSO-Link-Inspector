@@ -2,12 +2,12 @@
 /**
  * Plugin Name:       TSO Link Inspector
  * Description:       Find and fix broken links across your entire WordPress site without opening each post.
- * Version:           1.9.7
+ * Version:           2.1.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Tested up to:       7.0
  * Author:            Tu Soporte Online
- * Author URI:        https://tusoporteonline.es
+ * Author URI:        https://www.tusoporteonline.es/blog
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain:       tso-link-inspector
@@ -20,7 +20,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'TSOLIIN_VERSION',    '1.9.7' );
+define( 'TSOLIIN_VERSION',    '2.1.0' );
 define( 'TSOLIIN_PLUGIN_FILE', __FILE__ );
 define( 'TSOLIIN_PLUGIN_DIR',  plugin_dir_path( __FILE__ ) );
 define( 'TSOLIIN_PLUGIN_URL',  plugin_dir_url( __FILE__ ) );
@@ -82,16 +82,20 @@ final class TSOLIIN_Link_Inspector {
 	 * Load required PHP files.
 	 */
 	private function load_files() {
+		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-quality.php';
 		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-db.php';
 		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-http.php';
 		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-email.php';
 		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-scanner.php';
 		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-sources.php';
+		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-schedule.php';
 		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-cron.php';
+		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-support.php';
 		if ( is_admin() ) {
-			require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-support.php';
+			require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-reports.php';
 			require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-list-table.php';
 			require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-admin.php';
+			require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-dashboard.php';
 		}
 	}
 
@@ -105,6 +109,7 @@ final class TSOLIIN_Link_Inspector {
 		$this->cron    = new TSOLIIN_Cron( $this->db, $this->scanner, $this->http );
 		if ( is_admin() ) {
 			$this->admin = new TSOLIIN_Admin( $this->db, $this->scanner, $this->http, $this->cron );
+			new TSOLIIN_Dashboard( $this->db );
 		}
 	}
 
@@ -128,6 +133,10 @@ final class TSOLIIN_Link_Inspector {
 		if ( ! empty( $s['nofollow_broken'] ) ) {
 			add_filter( 'the_content', array( $this, 'add_nofollow_to_broken' ), 20 );
 		}
+		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_link_focus_assets' ) );
+		add_action( 'enqueue_block_editor_assets', array( $this, 'enqueue_editor_link_focus_assets' ) );
+		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_post_editor_focus' ) );
+		add_filter( 'block_editor_settings_all', array( $this, 'filter_block_editor_focus_settings' ), 10, 2 );
 		register_activation_hook( TSOLIIN_PLUGIN_FILE,   array( $this, 'on_activate' ) );
 		register_deactivation_hook( TSOLIIN_PLUGIN_FILE, array( $this, 'on_deactivate' ) );
 	}
@@ -381,10 +390,13 @@ final class TSOLIIN_Link_Inspector {
 			$this->db->cleanup_transparent_redirects();
 			$this->db->cleanup_action_url_rows();
 			$this->db->cleanup_mislabeled_skip_rows( true, 15 );
+			$this->db->cleanup_misclassified_plain_image_rows();
 			$this->cron->schedule();
 			update_option( 'tsoliin_version', TSOLIIN_VERSION, false );
 		} else {
 			$this->db->ensure_table_exists();
+			// Re-register cron hooks if they were removed externally (e.g. cache flush, cron plugin).
+			$this->cron->schedule();
 		}
 	}
 
@@ -442,6 +454,203 @@ final class TSOLIIN_Link_Inspector {
 	}
 
 	/**
+	 * Scroll to a link/image on the public post when opened from the inspector list.
+	 *
+	 * @return void
+	 */
+	public function enqueue_link_focus_assets() {
+		if ( is_admin() || ! is_singular() ) {
+			return;
+		}
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- public deep-link to visible content only.
+		$link_id = isset( $_GET['tsoliin_link'] ) ? absint( wp_unslash( $_GET['tsoliin_link'] ) ) : 0;
+		if ( $link_id <= 0 ) {
+			return;
+		}
+		$post_id = (int) get_queried_object_id();
+		$link    = $this->db->get_link( $link_id );
+		if ( ! $link || (int) $link->post_id !== $post_id || ! TSOLIIN_Support::should_focus_link_in_post_content( $link ) ) {
+			return;
+		}
+		$variants = TSOLIIN_Scanner::get_href_match_variants( (string) $link->link_url, $post_id );
+		if ( empty( $variants ) ) {
+			return;
+		}
+		wp_enqueue_style(
+			'tsoliin-focus-link',
+			TSOLIIN_PLUGIN_URL . 'assets/css/focus-link.css',
+			array(),
+			TSOLIIN_VERSION
+		);
+		wp_enqueue_script(
+			'tsoliin-focus-link',
+			TSOLIIN_PLUGIN_URL . 'assets/js/focus-link.js',
+			array(),
+			TSOLIIN_VERSION,
+			true
+		);
+		wp_localize_script(
+			'tsoliin-focus-link',
+			'tsoliinFocusLink',
+			TSOLIIN_Support::get_focus_link_localize_data( $link, $post_id )
+		);
+	}
+
+	/**
+	 * Resolve link focus request on post edit screens.
+	 *
+	 * @return array{link:object,post_id:int}|null
+	 */
+	private function get_editor_focus_request() {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- deep-link to editable content only.
+		$link_id = isset( $_GET['tsoliin_link'] ) ? absint( wp_unslash( $_GET['tsoliin_link'] ) ) : 0;
+		if ( $link_id <= 0 ) {
+			return null;
+		}
+
+		global $post;
+		$post_id = 0;
+		if ( $post instanceof WP_Post ) {
+			$post_id = (int) $post->ID;
+		}
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only admin editor deep-link post ID.
+		if ( $post_id <= 0 && isset( $_GET['post'] ) ) {
+			$post_id = absint( wp_unslash( $_GET['post'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		}
+		if ( $post_id <= 0 ) {
+			return null;
+		}
+
+		$link = $this->db->get_link( $link_id );
+		if ( ! $link || (int) $link->post_id !== $post_id || ! TSOLIIN_Support::should_focus_link_in_post_content( $link ) ) {
+			return null;
+		}
+
+		$variants = TSOLIIN_Scanner::get_href_match_variants( (string) $link->link_url, $post_id );
+		if ( empty( $variants ) ) {
+			return null;
+		}
+
+		return array(
+			'link'    => $link,
+			'post_id' => $post_id,
+		);
+	}
+
+	/**
+	 * Whether the current admin request is the block-based widgets editor.
+	 *
+	 * @return bool
+	 */
+	private function is_widgets_block_editor_screen() {
+		if ( function_exists( 'get_current_screen' ) ) {
+			$screen = get_current_screen();
+			if ( $screen && in_array( $screen->id, array( 'widgets', 'customize' ), true ) ) {
+				return true;
+			}
+		}
+		if ( wp_script_is( 'wp-edit-widgets', 'enqueued' ) || wp_script_is( 'wp-customize-widgets', 'enqueued' ) ) {
+			return true;
+		}
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- screen detection only.
+		$page = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : '';
+		return in_array( $page, array( 'gutenberg-edit-widgets', 'gutenberg-edit-site' ), true );
+	}
+
+	/**
+	 * Pass focus data into the block editor settings object.
+	 *
+	 * @param array                   $settings Block editor settings.
+	 * @param WP_Block_Editor_Context $context  Editor context.
+	 * @return array
+	 */
+	public function filter_block_editor_focus_settings( $settings, $context ) {
+		if ( $context instanceof WP_Block_Editor_Context && isset( $context->name ) && 'core/edit-post' !== (string) $context->name ) {
+			return $settings;
+		}
+		if ( $this->is_widgets_block_editor_screen() ) {
+			return $settings;
+		}
+		$request = $this->get_editor_focus_request();
+		if ( ! $request ) {
+			return $settings;
+		}
+		$settings['tsoliinFocusLink'] = TSOLIIN_Support::get_focus_link_localize_data( $request['link'], $request['post_id'] );
+		return $settings;
+	}
+
+	/**
+	 * Enqueue editor focus assets on post edit screens (block + classic).
+	 *
+	 * @param string $hook Current admin screen hook suffix.
+	 * @return void
+	 */
+	public function enqueue_admin_post_editor_focus( $hook ) {
+		if ( 'post.php' !== $hook && 'post-new.php' !== $hook ) {
+			return;
+		}
+		$this->enqueue_editor_link_focus_shared();
+	}
+
+	/**
+	 * Highlight a link in the block editor when opened from the inspector list.
+	 *
+	 * @return void
+	 */
+	public function enqueue_editor_link_focus_assets() {
+		if ( $this->is_widgets_block_editor_screen() ) {
+			return;
+		}
+		$this->enqueue_editor_link_focus_shared();
+	}
+
+	/**
+	 * Shared assets for editor deep-link focus (block or classic).
+	 *
+	 * @return void
+	 */
+	private function enqueue_editor_link_focus_shared() {
+		if ( $this->is_widgets_block_editor_screen() ) {
+			return;
+		}
+		$request = $this->get_editor_focus_request();
+		if ( ! $request ) {
+			return;
+		}
+		$link    = $request['link'];
+		$post_id = $request['post_id'];
+		wp_enqueue_style(
+			'tsoliin-focus-link',
+			TSOLIIN_PLUGIN_URL . 'assets/css/focus-link.css',
+			array(),
+			TSOLIIN_VERSION
+		);
+		$deps = array();
+		if ( wp_script_is( 'wp-data', 'registered' ) ) {
+			$deps[] = 'wp-data';
+		}
+		if ( wp_script_is( 'wp-dom-ready', 'registered' ) ) {
+			$deps[] = 'wp-dom-ready';
+		}
+		if ( wp_script_is( 'wp-blocks', 'registered' ) ) {
+			$deps[] = 'wp-blocks';
+		}
+		$focus_ver = TSOLIIN_VERSION . '.' . (string) filemtime( TSOLIIN_PLUGIN_DIR . 'assets/js/focus-editor.js' );
+		wp_enqueue_script(
+			'tsoliin-focus-editor',
+			TSOLIIN_PLUGIN_URL . 'assets/js/focus-editor.js',
+			$deps,
+			$focus_ver,
+			true
+		);
+		wp_localize_script(
+			'tsoliin-focus-editor',
+			'tsoliinFocusLink',
+			TSOLIIN_Support::get_focus_link_localize_data( $link, $post_id )
+		);
+	}
+
+	/**
 	 * Add rel="nofollow" to broken links in post content (frontend only).
 	 *
 	 * @param string $content Post content.
@@ -467,27 +676,33 @@ final class TSOLIIN_Link_Inspector {
 			return $content;
 		}
 		// Add rel="nofollow" to each broken link.
+		$matched = array();
 		foreach ( $broken_urls as $url ) {
-			$url     = (string) $url;
-			$escaped = preg_quote( $url, '#' );
-			$content = preg_replace_callback(
-				'#<a(\s[^>]*href=["\']{1}' . $escaped . '["\']{1}[^>]*)>#i',
-				function ( $m ) {
-					$attrs = $m[1];
-					// Add nofollow to existing rel or create new one.
-					if ( preg_match( '/rel=["\'](.*?)["\']/i', $attrs, $rm ) ) {
-						$rels = array_filter( array_map( 'trim', explode( ' ', $rm[1] ) ) );
-						if ( ! in_array( 'nofollow', $rels, true ) ) {
-							$rels[] = 'nofollow';
+			foreach ( TSOLIIN_Scanner::get_href_match_variants( (string) $url, $post_id ) as $variant ) {
+				if ( '' === $variant || isset( $matched[ $variant ] ) ) {
+					continue;
+				}
+				$matched[ $variant ] = true;
+				$escaped = preg_quote( $variant, '#' );
+				$content = preg_replace_callback(
+					'#<a(\s[^>]*href=["\']{1}' . $escaped . '["\']{1}[^>]*)>#i',
+					function ( $m ) {
+						$attrs = $m[1];
+						// Add nofollow to existing rel or create new one.
+						if ( preg_match( '/rel=["\'](.*?)["\']/i', $attrs, $rm ) ) {
+							$rels = array_filter( array_map( 'trim', explode( ' ', $rm[1] ) ) );
+							if ( ! in_array( 'nofollow', $rels, true ) ) {
+								$rels[] = 'nofollow';
+							}
+							$attrs = preg_replace( '/rel=["\'](.*?)["\']/i', 'rel="' . implode( ' ', $rels ) . '"', $attrs );
+						} else {
+							$attrs .= ' rel="nofollow"';
 						}
-						$attrs = preg_replace( '/rel=["\'](.*?)["\']/i', 'rel="' . implode( ' ', $rels ) . '"', $attrs );
-					} else {
-						$attrs .= ' rel="nofollow"';
-					}
-					return '<a' . $attrs . '>';
-				},
-				$content
-			);
+						return '<a' . $attrs . '>';
+					},
+					$content
+				);
+			}
 		}
 		return $content;
 	}

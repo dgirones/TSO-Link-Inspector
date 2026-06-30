@@ -14,6 +14,8 @@
 		// State
 		// ---------------------------------------------------------------
 		scanning    : false,
+		scanAborted : false,
+		scanXhr     : null,
 		currentPage : 1,
 		polling     : false,
 		pollTimer   : null,
@@ -22,6 +24,11 @@
 		editLinkId  : 0,
 		editOldUrl  : '',
 		editPostId  : 0,
+		editLinkType: 'link',
+		previewTimer: null,
+		searchTimer   : null,
+		searchXhr     : null,
+		lastSearchVal : '',
 
 		/**
 		 * Escape text for safe HTML insertion.
@@ -68,6 +75,7 @@
 		init: function () {
 			this.$form         = $( '#tsoliin-list-form' );
 			this.$startBtn     = $( '#tsoliin-start-scan' );
+			this.$stopScanBtn  = $( '#tsoliin-stop-scan' );
 			this.$checkBtn     = $( '#tsoliin-start-check' );
 			this.$stopBtn      = $( '#tsoliin-stop-check' );
 			this.$progress     = $( '#tsoliin-scan-progress' );
@@ -79,17 +87,28 @@
 			this.$modal        = $( '#tsoliin-modal' );
 			this.$modalOldUrl  = $( '#tsoliin-modal-old-url' );
 			this.$newUrlInput  = $( '#tsoliin-new-url' );
+			this.$newAnchorInput = $( '#tsoliin-new-anchor' );
+			this.$anchorRow      = $( '#tsoliin-modal-anchor-row' );
+			this.$anchorLabel    = $( '#tsoliin-modal-anchor-label' );
+			this.$anchorNote     = $( '#tsoliin-modal-anchor-note' );
 			this.$modalSave    = $( '#tsoliin-modal-save' );
 			this.$modalCancel  = $( '#tsoliin-modal-cancel' );
 			this.$modalSpinner = $( '.tsoliin-modal__spinner' );
 			this.$feedback     = $( '#tsoliin-modal-feedback' );
+			this.$previewPanel = $( '#tsoliin-modal-preview' );
+			this.$revisionNote = $( '#tsoliin-modal-revision-note' );
+			this.$previewBefore = $( '#tsoliin-preview-before' );
+			this.$previewAfter  = $( '#tsoliin-preview-after' );
 
 			this.bindEvents();
+			this.bindLiveSearch();
 
 			// Resume polling if a check was running before page load.
 			if ( parseInt( tsoliinData.bgRunning, 10 ) === 1 ) {
 				this.$checkProg.show();
 				this.$checkBtn.prop( 'disabled', true );
+				this.$startBtn.prop( 'disabled', true );
+				this.$stopBtn.show();
 				this.startPolling();
 			} else {
 				// Not running: ensure progress bar is hidden.
@@ -116,11 +135,21 @@
 
 			this.$startBtn.on( 'click', function () {
 				if ( self.scanning ) { return; }
+				if ( parseInt( tsoliinData.bgRunning, 10 ) === 1 && ! window.confirm( tsoliinData.i18n.confirmScanWhileCheck ) ) {
+					return;
+				}
 				self.startScan();
+			} );
+
+			this.$stopScanBtn.on( 'click', function () {
+				self.stopScan();
 			} );
 
 			this.$checkBtn.on( 'click', function () {
 				if ( $( this ).prop( 'disabled' ) ) { return; }
+				if ( self.scanning && ! window.confirm( tsoliinData.i18n.confirmCheckWhileScan ) ) {
+					return;
+				}
 				self.startBgCheck();
 			} );
 
@@ -135,10 +164,26 @@
 				}
 			} );
 
+			$( document ).on( 'click', '.tsoliin-toggle-chain', function ( e ) {
+				e.preventDefault();
+				var $btn  = $( this );
+				var $list = $btn.siblings( '.tsoliin-redirect-chain' );
+				var open  = 'true' === $btn.attr( 'aria-expanded' );
+				$btn.attr( 'aria-expanded', open ? 'false' : 'true' );
+				$list.prop( 'hidden', open );
+			} );
+
 			$( document ).on( 'click', '.tsoliin-edit-link', function ( e ) {
 				e.preventDefault();
 				var $a = $( this );
-				self.openModal( parseInt( $a.data( 'id' ), 10 ), $a.data( 'url' ), parseInt( $a.data( 'post' ), 10 ) );
+				self.openModal(
+					parseInt( $a.data( 'id' ), 10 ),
+					$a.data( 'url' ),
+					parseInt( $a.data( 'post' ), 10 ),
+					$a.data( 'anchor' ) || '',
+					$a.data( 'type' ) || 'link',
+					'1' === String( $a.data( 'anchor-editable' ) || $a.attr( 'data-anchor-editable' ) || '1' )
+				);
 			} );
 
 			$( document ).on( 'click', '.tsoliin-recheck', function ( e ) {
@@ -154,7 +199,24 @@
 
 			$( document ).on( 'click', '.tsoliin-not-broken', function ( e ) {
 				e.preventDefault();
+				if ( ! window.confirm( tsoliinData.i18n.confirmNotBroken ) ) { return; }
 				self.markNotBroken( parseInt( $( this ).data( 'id' ), 10 ), $( this ) );
+			} );
+
+			$( document ).on( 'click', '.tsoliin-add-ignore', function ( e ) {
+				e.preventDefault();
+				self.addToIgnoreList( $( this ) );
+			} );
+
+			$( document ).on( 'click', '.tsoliin-onboarding-dismiss', function ( e ) {
+				e.preventDefault();
+				self.dismissOnboarding( $( '#tsoliin-onboarding' ) );
+			} );
+
+			$( document ).on( 'click', '.tsoliin-make-relative', function ( e ) {
+				e.preventDefault();
+				if ( ! window.confirm( tsoliinData.i18n.confirmMakeRelative ) ) { return; }
+				self.makeRelative( parseInt( $( this ).data( 'id' ), 10 ), $( this ) );
 			} );
 
 			$( document ).on( 'click', '.tsoliin-delete', function ( e ) {
@@ -192,6 +254,7 @@
 
 			this.$modalSave.on( 'click', function () { self.saveLink(); } );
 			this.$modalCancel.on( 'click', function () { self.closeModal(); } );
+			this.$newUrlInput.on( 'input', function () { self.scheduleLinkPreview(); } );
 			$( document ).on( 'click', '.tsoliin-modal__overlay', function () { self.closeModal(); } );
 			$( document ).on( 'keydown', function ( e ) {
 				if ( 27 === e.which && self.$modal.is( ':visible' ) ) { self.closeModal(); }
@@ -205,6 +268,9 @@
 					action = self.$form.find( 'select[name="action2"]' ).val();
 				}
 				var managed = [ 'recheck', 'delete', 'unlink', 'not_broken' ];
+				if ( parseInt( tsoliinData.relativeUrlTool, 10 ) === 1 ) {
+					managed.push( 'make_relative' );
+				}
 				if ( -1 !== managed.indexOf( action ) ) {
 					e.preventDefault();
 					self.doBulkAction( action );
@@ -223,23 +289,71 @@
 		// ---------------------------------------------------------------
 		// Scan (browser-driven)
 		// ---------------------------------------------------------------
+		resetScanButton: function () {
+			this.$startBtn.prop( 'disabled', false ).html(
+				'<span class="dashicons dashicons-search"></span> ' + tsoliinData.i18n.scanNow
+			);
+		},
+
+		resetCheckButton: function () {
+			var label = parseInt( tsoliinData.viewPostId, 10 ) > 0
+				? tsoliinData.i18n.checkThisPost
+				: tsoliinData.i18n.checkNow;
+			this.$checkBtn.prop( 'disabled', false ).html(
+				'<span class="dashicons dashicons-yes-alt"></span> ' + label
+			);
+		},
+
 		startScan: function () {
+			var self = this;
 			this.scanning    = true;
+			this.scanAborted = false;
 			this.currentPage = 1;
-			this.$startBtn.prop( 'disabled', true ).text( tsoliinData.i18n.scanning );
+			this.$startBtn.hide();
+			this.$stopScanBtn.show();
+			this.$checkBtn.prop( 'disabled', true );
 			this.$progress.show().attr( 'aria-valuenow', 0 );
 			this.updateProgress( 0, tsoliinData.i18n.scanning );
 			this.scanBatch( 1 );
 		},
 
+		stopScan: function () {
+			this.scanAborted = true;
+			this.scanning    = false;
+			if ( this.scanXhr && this.scanXhr.readyState !== 4 ) {
+				this.scanXhr.abort();
+			}
+			this.scanXhr = null;
+			this.$stopScanBtn.hide();
+			this.resetScanButton();
+			this.$startBtn.show();
+			if ( ! parseInt( tsoliinData.bgRunning, 10 ) ) {
+				this.$checkBtn.prop( 'disabled', false );
+			}
+			this.updateProgress( 0, tsoliinData.i18n.scanStopped );
+			var self = this;
+			setTimeout( function () {
+				self.$progress.fadeOut( 400 );
+			}, 2000 );
+		},
+
 		scanBatch: function ( pageNum ) {
 			var self = this;
-			$.ajax( {
+			if ( self.scanAborted ) {
+				return;
+			}
+			self.scanXhr = $.ajax( {
 				url    : tsoliinData.ajaxUrl,
 				method : 'POST',
 				data   : { action: 'tsoliin_scan_batch', nonce: tsoliinData.nonce, page_num: pageNum },
 				success: function ( r ) {
-					if ( ! r.success ) { self.scanError( r.data ? r.data.message : tsoliinData.i18n.error ); return; }
+					if ( self.scanAborted ) {
+						return;
+					}
+					if ( ! r.success ) {
+						self.scanError( r.data ? r.data.message : tsoliinData.i18n.error );
+						return;
+					}
 					self.updateProgress( r.data.progress, r.data.message );
 					if ( r.data.done ) {
 						self.scanDone();
@@ -247,7 +361,15 @@
 						self.scanBatch( r.data.next_page );
 					}
 				},
-				error: function () { self.scanError( tsoliinData.i18n.error ); }
+				error: function ( xhr, status ) {
+					if ( self.scanAborted || 'abort' === status ) {
+						return;
+					}
+					self.scanError( tsoliinData.i18n.error );
+				},
+				complete: function () {
+					self.scanXhr = null;
+				}
 			} );
 		},
 
@@ -259,25 +381,35 @@
 		},
 
 		scanDone: function () {
+			if ( this.scanAborted ) {
+				return;
+			}
 			this.scanning = false;
+			this.$stopScanBtn.hide();
+			this.$startBtn.show();
 			this.updateProgress( 100, tsoliinData.i18n.scanDone );
-			this.$startBtn.prop( 'disabled', false ).html(
-				'<span class="dashicons dashicons-search"></span> ' + tsoliinData.i18n.scanDone
-			);
+			this.resetScanButton();
 			var self = this;
 			setTimeout( function () {
-				self.$progress.hide();
-				// Reset and hide any stale check progress bar before starting new check.
+				if ( self.scanAborted ) {
+					return;
+				}
+				self.showNotice( '✅ ' + tsoliinData.i18n.scanThenCheck, 'success' );
 				self.$checkProg.hide();
 				self.$checkBar.css( 'width', '0%' );
 				self.$checkLbl.text( '' );
-				self.startBgCheck();
+				self.startBgCheck( true );
 			}, 800 );
 		},
 
 		scanError: function ( msg ) {
 			this.scanning = false;
-			this.$startBtn.prop( 'disabled', false );
+			this.$stopScanBtn.hide();
+			this.$startBtn.show();
+			this.resetScanButton();
+			if ( ! parseInt( tsoliinData.bgRunning, 10 ) ) {
+				this.$checkBtn.prop( 'disabled', false );
+			}
 			this.$progressLbl.text( msg );
 			this.$progressBar.css( { 'width': '100%', 'background': '#cc1818' } );
 		},
@@ -285,32 +417,52 @@
 		// ---------------------------------------------------------------
 		// Background check – server does the work, browser just polls
 		// ---------------------------------------------------------------
-		startBgCheck: function () {
+		startBgCheck: function ( skipConfirm ) {
 			var self = this;
+			var postId = parseInt( tsoliinData.viewPostId, 10 ) || 0;
+
+			if ( ! skipConfirm ) {
+				if ( postId <= 0 && ! window.confirm( tsoliinData.i18n.confirmFullCheck ) ) {
+					return;
+				}
+			}
+
 			this.completed = false;
 
 			this.$checkBtn.prop( 'disabled', true );
+			this.$startBtn.prop( 'disabled', true );
+			this.$stopBtn.show();
 			this.$checkProg.show();
 			this.updateCheckProgress( 0, tsoliinData.i18n.checking );
 
 			$.ajax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
-				data  : { action: 'tsoliin_start_bg_check', nonce: tsoliinData.nonce, resume: '1' },
+				data  : {
+					action   : 'tsoliin_start_bg_check',
+					nonce    : tsoliinData.nonce,
+					resume   : '0',
+					post_id  : postId
+				},
 				success: function ( r ) {
 					if ( r.success ) {
+						tsoliinData.bgRunning = 1;
 						self.showNotice(
-							'✅ ' + tsoliinData.i18n.checkStarted,
+							'✅ ' + ( r.data.message || tsoliinData.i18n.checkStarted ),
 							'success'
 						);
 						self.startPolling();
 					} else {
-						self.$checkBtn.prop( 'disabled', false );
+						self.resetCheckButton();
+						self.$startBtn.prop( 'disabled', false );
+						self.$stopBtn.hide();
 						alert( r.data ? r.data.message : tsoliinData.i18n.error );
 					}
 				},
 				error: function () {
-					self.$checkBtn.prop( 'disabled', false );
+					self.resetCheckButton();
+					self.$startBtn.prop( 'disabled', false );
+					self.$stopBtn.hide();
 					alert( tsoliinData.i18n.error );
 				}
 			} );
@@ -319,7 +471,10 @@
 		stopBgCheck: function () {
 			var self = this;
 			this.stopPolling();
-			this.$checkBtn.prop( 'disabled', false );
+			tsoliinData.bgRunning = 0;
+			this.resetCheckButton();
+			this.$startBtn.prop( 'disabled', false );
+			this.$stopBtn.hide();
 			$.ajax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
@@ -360,6 +515,7 @@
 						self.stopPolling();
 						if ( ! r.success ) {
 							self.$checkBtn.prop( 'disabled', false );
+							self.showNotice( tsoliinData.i18n.error, 'error' );
 						}
 						return;
 					}
@@ -378,7 +534,10 @@
 					} else {
 						// Server stopped (manual stop or error), don't reload.
 						self.stopPolling();
-						self.$checkBtn.prop( 'disabled', false );
+						tsoliinData.bgRunning = 0;
+						self.$stopBtn.hide();
+						self.resetCheckButton();
+						self.$startBtn.prop( 'disabled', false );
 					}
 				},
 				error: function () {
@@ -400,6 +559,9 @@
 		checkDone: function () {
 			// Guard: only execute once even if called multiple times.
 			if ( ! this.completed ) { return; }
+			tsoliinData.bgRunning = 0;
+			this.$stopBtn.hide();
+			this.$startBtn.prop( 'disabled', false );
 			this.updateCheckProgress( 100, tsoliinData.i18n.checkDone );
 			this.$checkBtn.prop( 'disabled', false ).html(
 				'<span class="dashicons dashicons-yes-alt"></span> ' + tsoliinData.i18n.checkDone
@@ -418,26 +580,65 @@
 				return;
 			}
 			var tabMap = {
-				all            : 'total',
-				broken         : 'broken',
-				redirect       : 'redirect',
-				ok             : 'ok',
-				unchecked      : 'unchecked',
-				http_insecure  : 'http_insecure',
-				manual_locked  : 'manual_locked'
+				all                : 'total',
+				broken             : 'broken',
+				redirect           : 'redirect',
+				ok                 : 'ok',
+				unchecked          : 'unchecked',
+				http_insecure      : 'http_insecure',
+				manual_locked      : 'manual_locked',
+				empty_anchor       : 'empty_anchor',
+				generic_anchor     : 'generic_anchor',
+				unpublished_target : 'unpublished_target'
 			};
-			$.each( tabMap, function ( filterKey, statKey ) {
-				if ( undefined === stats[ statKey ] ) {
-					return;
+			var qualityKeys = {
+				empty_anchor       : true,
+				generic_anchor     : true,
+				unpublished_target : true
+			};
+			var getFilterKeyFromHref = function ( href ) {
+				if ( ! href || href.indexOf( 'filter=' ) === -1 ) {
+					return 'all';
 				}
-				var count = ( display && display[ statKey ] ) ? display[ statKey ] : stats[ statKey ];
-				$( '.tsoliin-filter-tabs a' ).each( function () {
-					var href = $( this ).attr( 'href' ) || '';
-					if ( href.indexOf( 'filter=' + filterKey ) !== -1 ) {
-						$( this ).text( $( this ).text().replace( /\([\d,.]+\)/, '(' + count + ')' ) );
+				var match = href.match( /[?&]filter=([^&]+)/ );
+				return match ? match[1] : 'all';
+			};
+			var getQualityKeyFromHref = function ( href ) {
+				if ( ! href || href.indexOf( 'quality_filter=' ) === -1 ) {
+					return '';
+				}
+				var match = href.match( /[?&]quality_filter=([^&]+)/ );
+				return match ? match[1] : '';
+			};
+			var updateTabLabels = function ( selector, templateMap, mode ) {
+				$.each( tabMap, function ( filterKey, statKey ) {
+					if ( undefined === stats[ statKey ] ) {
+						return;
 					}
+					var count = ( display && display[ statKey ] ) ? display[ statKey ] : stats[ statKey ];
+					$( selector + ' a' ).each( function () {
+						var href = $( this ).attr( 'href' ) || '';
+						if ( 'quality' === mode ) {
+							if ( getQualityKeyFromHref( href ) !== filterKey ) {
+								return;
+							}
+						} else if ( qualityKeys[ filterKey ] ) {
+							return;
+						} else if ( getFilterKeyFromHref( href ) !== filterKey ) {
+							return;
+						}
+						var template = templateMap && templateMap[ filterKey ];
+						if ( template ) {
+							$( this ).text( template.replace( '%s', count ) );
+						} else {
+							var label = $( this ).text().replace( /\([^)]*\)/, '(' + count + ')' );
+							$( this ).text( label );
+						}
+					} );
 				} );
-			} );
+			};
+			updateTabLabels( '.tsoliin-filter-tabs', tsoliinData.filterTabs, 'status' );
+			updateTabLabels( '.tsoliin-quality-tabs', tsoliinData.qualityFilterTabs, 'quality' );
 
 			var cardMap = {
 				total          : '.tsoliin-stats > .tsoliin-stat:first .tsoliin-stat__number',
@@ -513,21 +714,35 @@
 		},
 
 		listFilterParam: function () {
-			return { list_filter: tsoliinData.listFilter || 'all' };
+			var params = { list_filter: tsoliinData.listFilter || 'all' };
+			if ( tsoliinData.listQualityFilter ) {
+				params.list_quality_filter = tsoliinData.listQualityFilter;
+			}
+			if ( tsoliinData.listScope && 'all' !== tsoliinData.listScope ) {
+				params.list_scope = tsoliinData.listScope;
+			}
+			return params;
 		},
 
-		removeRowIfFilterMismatch: function ( $row, data ) {
+		removeRowIfFilterMismatch: function ( $row, data, skipReload ) {
 			if ( ! $row || ! $row.length || ! data || false !== data.matches_filter ) {
 				return false;
 			}
-			if ( 'all' === ( tsoliinData.listFilter || 'all' ) ) {
+			if ( 'all' === ( tsoliinData.listFilter || 'all' ) && ! tsoliinData.listQualityFilter ) {
 				return false;
 			}
 			var self = this;
 			self.removeSuggestPanelsForRow( $row );
 			$row.fadeOut( 300, function () {
 				$( this ).remove();
-				self.maybeReloadEmptyList();
+				if ( skipReload ) {
+					return;
+				}
+				if ( 'all' !== ( tsoliinData.listFilter || 'all' ) || tsoliinData.listQualityFilter ) {
+					self.scheduleListReload( 800 );
+				} else {
+					self.maybeReloadEmptyList();
+				}
 			} );
 			return true;
 		},
@@ -551,18 +766,32 @@
 				success: function ( r ) {
 					if ( ! r.success ) {
 						$status.html( '<span class="tsoliin-status tsoliin-status--broken">' + tsoliinData.i18n.error + '</span>' );
+						$trigger.text( tsoliinData.i18n.recheck );
 						return;
 					}
 					var d = r.data;
+					if ( d.removed ) {
+						$row.fadeOut( 300, function () {
+							$( this ).remove();
+							self.refreshStats();
+							self.maybeReloadEmptyList();
+						} );
+						return;
+					}
 					if ( self.removeRowIfFilterMismatch( $row, d ) ) {
 						self.refreshStats();
 						$trigger.text( tsoliinData.i18n.recheck );
 						return;
 					}
-					if ( d.status_html ) {
+					if ( d.new_url ) {
+						self.applyLinkEditToRow( $row, d );
+					} else if ( d.status_html ) {
 						$status.html( d.status_html );
 					} else {
 						$status.html( '<span class="tsoliin-status ' + d.css_class + '">' + d.status_code + ' ' + d.label + '</span>' );
+					}
+					if ( d.link_id && parseInt( d.link_id, 10 ) !== linkId ) {
+						$row.find( '[data-id="' + linkId + '"]' ).attr( 'data-id', d.link_id );
 					}
 					$chk.text( d.last_checked );
 					$trigger.text( tsoliinData.i18n.recheck );
@@ -579,25 +808,163 @@
 		// ---------------------------------------------------------------
 		// Edit modal
 		// ---------------------------------------------------------------
-		openModal: function ( linkId, oldUrl, postId ) {
-			this.editLinkId = linkId;
-			this.editOldUrl = oldUrl;
-			this.editPostId = postId;
+		openModal: function ( linkId, oldUrl, postId, anchorText, linkType, anchorEditable ) {
+			this.editLinkId   = linkId;
+			this.editOldUrl   = oldUrl;
+			this.editPostId   = postId;
+			this.editLinkType = linkType || 'link';
+			this.editAnchorEditable = false !== anchorEditable;
 			this.$modalOldUrl.text( oldUrl );
 			this.$newUrlInput.val( oldUrl );
-			this.$feedback.text( '' ).removeClass( 'is-error is-success' );
+			if ( this.$anchorRow.length ) {
+				if ( 'iframe' === this.editLinkType ) {
+					this.$anchorRow.hide();
+				} else {
+					this.$anchorRow.show();
+					if ( this.editAnchorEditable ) {
+						this.$anchorLabel.text(
+							'image' === this.editLinkType
+								? ( tsoliinData.i18n.altText || 'Alt text:' )
+								: ( tsoliinData.i18n.linkText || 'Link text:' )
+						);
+						this.$newAnchorInput.prop( 'readonly', false ).removeClass( 'tsoliin-input--readonly' );
+						if ( this.$anchorNote.length ) {
+							this.$anchorNote.text( '' ).hide();
+						}
+					} else {
+						this.$anchorLabel.text( tsoliinData.i18n.commentLabel || 'Inspector label (read-only):' );
+						this.$newAnchorInput.prop( 'readonly', true ).addClass( 'tsoliin-input--readonly' );
+						if ( this.$anchorNote.length ) {
+							this.$anchorNote.text( tsoliinData.i18n.commentLabelNote || '' ).show();
+						}
+					}
+				}
+			}
+			if ( this.$newAnchorInput.length ) {
+				this.$newAnchorInput.val( anchorText || '' );
+			}
+			this.$feedback.text( '' ).removeClass( 'is-error is-success is-warning' );
+			if ( this.canPreviewLinkEdit() ) {
+				this.$previewPanel.show();
+				this.scheduleLinkPreview();
+			} else if ( this.$previewPanel.length ) {
+				this.$previewPanel.hide();
+			}
+			if ( this.$revisionNote.length ) {
+				if ( tsoliinData.createRevision && this.editPostId > 0 && -1 !== [ 'link', 'image', 'iframe' ].indexOf( this.editLinkType ) ) {
+					this.$revisionNote.text( tsoliinData.i18n.revisionModalNote || '' ).show();
+				} else {
+					this.$revisionNote.text( '' ).hide();
+				}
+			}
 			this.$modal.show();
 			this.$newUrlInput.trigger( 'focus' );
 		},
 
 		closeModal: function () {
+			if ( this.previewTimer ) {
+				window.clearTimeout( this.previewTimer );
+				this.previewTimer = null;
+			}
 			this.$modal.hide();
 			this.editLinkId = 0;
 		},
 
-		saveLink: function () {
+		canPreviewLinkEdit: function () {
+			return this.$previewPanel.length
+				&& this.editPostId > 0
+				&& -1 !== [ 'link', 'image', 'iframe' ].indexOf( this.editLinkType );
+		},
+
+		scheduleLinkPreview: function () {
+			var self = this;
+			if ( ! this.canPreviewLinkEdit() || ! this.editLinkId ) {
+				return;
+			}
+			if ( this.previewTimer ) {
+				window.clearTimeout( this.previewTimer );
+			}
+			this.$previewBefore.text( tsoliinData.i18n.previewLoading || 'Loading preview...' );
+			this.$previewAfter.text( '' );
+			this.previewTimer = window.setTimeout( function () {
+				self.fetchLinkPreview();
+			}, 350 );
+		},
+
+		fetchLinkPreview: function () {
 			var self   = this;
 			var newUrl = this.$newUrlInput.val().trim();
+			if ( ! newUrl ) {
+				return;
+			}
+			$.ajax( {
+				url   : tsoliinData.ajaxUrl,
+				method: 'POST',
+				data  : {
+					action  : 'tsoliin_link_preview',
+					nonce   : tsoliinData.nonce,
+					link_id : self.editLinkId,
+					new_url : newUrl
+				},
+				success: function ( r ) {
+					if ( ! r.success || ! r.data ) {
+						self.$previewBefore.text( r.data && r.data.message ? r.data.message : tsoliinData.i18n.error );
+						self.$previewAfter.text( '' );
+						return;
+					}
+					if ( ! r.data.found ) {
+						self.$previewBefore.text( tsoliinData.i18n.previewNotFound || 'No matching HTML tag found in the post for this URL.' );
+						self.$previewAfter.text( '' );
+						return;
+					}
+					self.$previewBefore.text( r.data.before || '' );
+					if ( r.data.after ) {
+						self.$previewAfter.text( r.data.after );
+					} else if ( r.data.before ) {
+						self.$previewAfter.text( newUrl );
+					} else {
+						self.$previewAfter.text( '' );
+					}
+				},
+				error: function () {
+					self.$previewBefore.text( tsoliinData.i18n.error );
+					self.$previewAfter.text( '' );
+				}
+			} );
+		},
+
+		applyLinkEditToRow: function ( $row, d ) {
+			if ( ! $row.length || ! d ) {
+				return;
+			}
+			if ( d.new_url ) {
+				var display = d.new_url.length > 110 ? d.new_url.substring( 0, 107 ) + '...' : d.new_url;
+				var $link   = $row.find( '.tsoliin-url a' );
+				var $icon   = $link.find( '.dashicons' ).detach();
+				$link.attr( 'href', d.new_url ).attr( 'title', d.new_url );
+				$link.text( display + ' ' );
+				$link.append( $icon );
+				$row.find( '.tsoliin-edit-link' ).attr( 'data-url', d.new_url );
+				this.editOldUrl = d.new_url;
+			}
+			if ( d.new_anchor ) {
+				$row.find( '.column-anchor_text' ).text( d.new_anchor );
+				$row.find( '.tsoliin-edit-link' ).attr( 'data-anchor', d.new_anchor );
+			}
+			if ( d.status_html ) {
+				$row.find( '.column-status_code' ).html( d.status_html );
+			} else if ( undefined !== d.status_code && undefined !== d.css_class && undefined !== d.label ) {
+				$row.find( '.column-status_code' ).html( '<span class="tsoliin-status ' + d.css_class + '">' + parseInt( d.status_code, 10 ) + ' ' + this.escapeHtml( d.label ) + '</span>' );
+			}
+			if ( undefined !== d.is_broken ) {
+				$row.toggleClass( 'tsoliin-row--broken', 1 === d.is_broken );
+			}
+		},
+
+		saveLink: function () {
+			var self       = this;
+			var newUrl     = this.$newUrlInput.val().trim();
+			var newAnchor  = this.$newAnchorInput.length ? this.$newAnchorInput.val().trim() : '';
 			if ( ! newUrl ) {
 				this.$feedback.text( tsoliinData.i18n.urlRequired ).addClass( 'is-error' );
 				return;
@@ -610,7 +977,13 @@
 			$.ajax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
-				data  : $.extend( { action: 'tsoliin_update_link', nonce: tsoliinData.nonce, link_id: self.editLinkId, new_url: newUrl }, self.listFilterParam() ),
+				data  : $.extend( {
+					action     : 'tsoliin_update_link',
+					nonce      : tsoliinData.nonce,
+					link_id    : self.editLinkId,
+					new_url    : newUrl,
+					new_anchor : newAnchor
+				}, self.listFilterParam() ),
 				success: function ( r ) {
 					self.$modalSave.prop( 'disabled', false ).text( tsoliinData.i18n.save );
 					self.$modalSpinner.removeClass( 'is-active' );
@@ -618,23 +991,25 @@
 						self.$feedback.text( r.data ? r.data.message : tsoliinData.i18n.error ).addClass( 'is-error' );
 						return;
 					}
-					self.$feedback.text( '✓ ' + tsoliinData.i18n.urlSaved ).addClass( 'is-success' );
-					var d   = r.data;
+					var d    = r.data || {};
+					var msg  = d.filter_promotion_message || ( d.warning ? d.warning : ( '✓ ' + tsoliinData.i18n.urlSaved ) );
+					if ( ! d.warning && tsoliinData.createRevision && self.editPostId > 0 && -1 !== [ 'link', 'image', 'iframe' ].indexOf( self.editLinkType ) ) {
+						msg += ' ' + ( tsoliinData.i18n.revisionSaved || '' );
+					}
 					var $row = $( 'tr' ).filter( function () {
 						return $( this ).find( '.tsoliin-edit-link[data-id="' + self.editLinkId + '"]' ).length > 0;
 					} );
 					if ( $row.length ) {
 						if ( self.removeRowIfFilterMismatch( $row, d ) ) {
+							self.$feedback.text( msg ).addClass( d.warning ? 'is-warning' : 'is-success' );
 							setTimeout( function () { self.closeModal(); }, 800 );
 							self.refreshStats();
 							return;
 						}
-						$row.find( '.column-status_code' ).html( '<span class="tsoliin-status ' + d.css_class + '">' + parseInt( d.status_code, 10 ) + ' ' + self.escapeHtml( d.label ) + '</span>' );
-						$row.find( '.tsoliin-url a' ).attr( 'href', d.new_url ).text( d.new_url.substring( 0, 57 ) );
-						$row.find( '.tsoliin-edit-link' ).attr( 'data-url', d.new_url );
-						$row.toggleClass( 'tsoliin-row--broken', 1 === d.is_broken );
+						self.applyLinkEditToRow( $row, d );
 					}
-					setTimeout( function () { self.closeModal(); }, 1200 );
+					self.$feedback.text( msg ).addClass( d.warning ? 'is-warning' : 'is-success' );
+					setTimeout( function () { self.closeModal(); }, d.warning ? 1800 : 1200 );
 					self.refreshStats();
 				},
 				error: function () {
@@ -674,6 +1049,104 @@
 		},
 
 		// ---------------------------------------------------------------
+		// Ignore list (row action)
+		// ---------------------------------------------------------------
+		addToIgnoreList: function ( $trigger ) {
+			var self     = this;
+			var linkId   = parseInt( $trigger.data( 'id' ), 10 );
+			var pattern  = $trigger.data( 'pattern' ) || '';
+			var $row     = $trigger.closest( 'tr' );
+			var confirmT = ( tsoliinData.i18n.confirmAddIgnore || 'Add %s to the ignore list?' ).replace( '%s', pattern );
+
+			if ( ! window.confirm( confirmT ) ) {
+				return;
+			}
+
+			$trigger.text( tsoliinData.i18n.saving || 'Saving...' );
+			$.ajax( {
+				url   : tsoliinData.ajaxUrl,
+				method: 'POST',
+				data  : $.extend( {
+					action  : 'tsoliin_add_ignore',
+					nonce   : tsoliinData.nonce,
+					link_id : linkId,
+					pattern : pattern
+				}, self.listFilterParam() ),
+				success: function ( r ) {
+					if ( ! r.success ) {
+						self.showNotice( r.data ? r.data.message : tsoliinData.i18n.error, 'error' );
+						$trigger.text( tsoliinData.i18n.addIgnore || 'Ignore domain' );
+						return;
+					}
+					var d = r.data || {};
+					if ( self.removeRowIfFilterMismatch( $row, d ) ) {
+						self.showNotice( d.message, 'success' );
+						self.refreshStats();
+						return;
+					}
+					if ( d.status_html ) {
+						$row.find( '.column-status_code' ).html( d.status_html );
+					}
+					$row.removeClass( 'tsoliin-row--broken' );
+					$trigger.closest( 'span' ).remove();
+					self.showNotice( d.message, 'success' );
+					self.refreshStats();
+				},
+				error: function () {
+					self.showNotice( tsoliinData.i18n.error, 'error' );
+					$trigger.text( tsoliinData.i18n.addIgnore || 'Ignore domain' );
+				}
+			} );
+		},
+
+		dismissOnboarding: function ( $banner ) {
+			var self = this;
+			if ( $banner && $banner.length ) {
+				$banner.fadeOut( 200, function () { $banner.remove(); } );
+			}
+			$.post( tsoliinData.ajaxUrl, {
+				action: 'tsoliin_dismiss_onboarding',
+				nonce : tsoliinData.nonce
+			} );
+		},
+
+		makeRelative: function ( linkId, $trigger ) {
+			var self = this;
+			var $row = $trigger.closest( 'tr' );
+			$trigger.text( tsoliinData.i18n.saving );
+			$.ajax( {
+				url   : tsoliinData.ajaxUrl,
+				method: 'POST',
+				data  : $.extend( {
+					action  : 'tsoliin_make_relative',
+					nonce   : tsoliinData.nonce,
+					link_id : linkId
+				}, self.listFilterParam() ),
+				success: function ( r ) {
+					if ( ! r.success ) {
+						alert( r.data ? r.data.message : tsoliinData.i18n.error );
+						$trigger.text( tsoliinData.i18n.makeRelative || 'Convert to /path' );
+						return;
+					}
+					var d = r.data || {};
+					if ( self.removeRowIfFilterMismatch( $row, d ) ) {
+						self.showNotice( d.message, 'success' );
+						self.refreshStats();
+						return;
+					}
+					self.applyLinkEditToRow( $row, d );
+					$trigger.closest( 'span' ).remove();
+					self.showNotice( d.message, 'success' );
+					self.refreshStats();
+				},
+				error: function () {
+					alert( tsoliinData.i18n.error );
+					$trigger.text( tsoliinData.i18n.makeRelative || 'Use relative URL' );
+				}
+			} );
+		},
+
+		// ---------------------------------------------------------------
 		// Mark as not broken
 		// ---------------------------------------------------------------
 		markNotBroken: function ( linkId, $trigger ) {
@@ -687,6 +1160,7 @@
 				success: function ( r ) {
 					if ( r.success ) {
 						if ( self.removeRowIfFilterMismatch( $row, r.data ) ) {
+							$trigger.text( tsoliinData.i18n.notBroken );
 							self.refreshStats();
 							return;
 						}
@@ -698,6 +1172,9 @@
 						$row.removeClass( 'tsoliin-row--broken' );
 						$row.find( '.tsoliin-not-broken' ).closest( 'span' ).remove();
 						$row.find( '.tsoliin-suggest' ).closest( 'span' ).remove();
+						if ( r.data && r.data.message ) {
+							self.showNotice( r.data.message, 'success' );
+						}
 						self.refreshStats();
 					} else {
 						alert( r.data ? r.data.message : tsoliinData.i18n.error );
@@ -745,10 +1222,17 @@
 			if ( 'unlink' === action && ! window.confirm( tsoliinData.i18n.confirmUnlink ) ) {
 				return;
 			}
+			if ( 'delete' === action && ! window.confirm( tsoliinData.i18n.confirmDeleteBulk || tsoliinData.i18n.confirmDelete ) ) {
+				return;
+			}
 
-			if ( 'recheck' === action || 'unlink' === action ) {
+			if ( 'recheck' === action || 'unlink' === action || 'make_relative' === action ) {
+				if ( 'make_relative' === action && ! window.confirm( tsoliinData.i18n.confirmMakeRelativeBulk ) ) {
+					return;
+				}
 				self.bulkRecheckStep( linkIds, 0, action );
 			} else if ( 'not_broken' === action ) {
+				if ( ! window.confirm( tsoliinData.i18n.confirmNotBrokenBulk ) ) { return; }
 				$.ajax( {
 					url   : tsoliinData.ajaxUrl,
 					method: 'POST',
@@ -770,11 +1254,10 @@
 					error: function () { alert( tsoliinData.i18n.error ); }
 				} );
 			} else {
-				// Delete: single AJAX call.
 				$.ajax( {
 					url   : tsoliinData.ajaxUrl,
 					method: 'POST',
-					data  : { action: 'tsoliin_bulk_action', nonce: tsoliinData.nonce, bulk_action: action, link_ids: linkIds, index: 0 },
+					data  : $.extend( { action: 'tsoliin_bulk_action', nonce: tsoliinData.nonce, bulk_action: action, link_ids: linkIds, index: 0 }, self.listFilterParam() ),
 					success: function ( r ) {
 						if ( r.success ) {
 							self.$form.find( 'input[name="link_ids[]"]:checked' ).closest( 'tr' ).fadeOut( 300, function () { $( this ).remove(); } );
@@ -797,8 +1280,14 @@
 
 			// Show progress notice on first call.
 			if ( 0 === index ) {
-				self._bulkStats = { unlinked: 0, skipped: 0, failed: 0 };
-				var initMsg = 'unlink' === act ? tsoliinData.i18n.unlinking : tsoliinData.i18n.checking;
+				self._bulkStats = { unlinked: 0, skipped: 0, failed: 0, converted: 0 };
+				self._bulkFilterRemoved = 0;
+				var initMsg = tsoliinData.i18n.checking;
+				if ( 'unlink' === act ) {
+					initMsg = tsoliinData.i18n.unlinking;
+				} else if ( 'make_relative' === act ) {
+					initMsg = tsoliinData.i18n.convertingRelative || 'Converting to /path…';
+				}
 				self.$bulkProgress = $( '<div class="notice notice-info tsoliin-notice"><p><strong id="tsoliin-bulk-msg">' + initMsg + '</strong> <progress id="tsoliin-bulk-bar" max="100" value="0" style="width:200px;vertical-align:middle;"></progress></p></div>' );
 				$( '.tsoliin-toolbar' ).after( self.$bulkProgress );
 			}
@@ -817,12 +1306,26 @@
 						parts.push( '❌ ' + self._bulkStats.failed + ' ' + tsoliinData.i18n.itemsFailed );
 					}
 					doneMsg = parts.length ? parts.join( ' ' ) : ( '✅ 0 ' + tsoliinData.i18n.itemsUnlinked );
+				} else if ( 'make_relative' === act ) {
+					var relParts = [];
+					if ( self._bulkStats.converted > 0 ) {
+						relParts.push( '✅ ' + self._bulkStats.converted + ' ' + ( tsoliinData.i18n.itemsConverted || 'links converted to /path.' ) );
+					}
+					if ( self._bulkStats.skipped > 0 ) {
+						relParts.push( '⚠ ' + self._bulkStats.skipped + ' ' + tsoliinData.i18n.itemsSkipped );
+					}
+					if ( self._bulkStats.failed > 0 ) {
+						relParts.push( '❌ ' + self._bulkStats.failed + ' ' + tsoliinData.i18n.itemsFailed );
+					}
+					doneMsg = relParts.length ? relParts.join( ' ' ) : ( '✅ 0 ' + ( tsoliinData.i18n.itemsConverted || 'links converted to /path.' ) );
 				} else {
 					doneMsg = '✅ ' + total + ' ' + tsoliinData.i18n.itemsChecked;
 				}
 				$( '#tsoliin-bulk-msg' ).text( doneMsg );
 				$( '#tsoliin-bulk-bar' ).val( 100 );
-				if ( 'unlink' === act ) {
+				if ( 'unlink' === act || 'make_relative' === act ) {
+					self.scheduleListReload( 1500 );
+				} else if ( 'recheck' === act && 'all' !== ( tsoliinData.listFilter || 'all' ) && self._bulkFilterRemoved > 0 ) {
 					self.scheduleListReload( 1500 );
 				} else {
 					self.refreshStats();
@@ -836,8 +1339,13 @@
 				return;
 			}
 
-			var progressLabel = 'unlink' === act ? tsoliinData.i18n.unlinking : tsoliinData.i18n.checking;
-			var pct = Math.round( ( index / total ) * 100 );
+			var progressLabel = tsoliinData.i18n.checking;
+			if ( 'unlink' === act ) {
+				progressLabel = tsoliinData.i18n.unlinking;
+			} else if ( 'make_relative' === act ) {
+				progressLabel = tsoliinData.i18n.convertingRelative || 'Converting to /path…';
+			}
+			var pct = Math.round( ( ( index + 1 ) / total ) * 100 );
 			$( '#tsoliin-bulk-msg' ).text( progressLabel + ' ' + ( index + 1 ) + '/' + total );
 			$( '#tsoliin-bulk-bar' ).val( pct );
 
@@ -854,7 +1362,7 @@
 				}, self.listFilterParam() ),
 				success: function ( r ) {
 					if ( ! r.success ) {
-						if ( 'unlink' === act ) {
+						if ( 'unlink' === act || 'make_relative' === act ) {
 							self._bulkStats.failed++;
 						}
 						alert( r.data ? r.data.message : tsoliinData.i18n.error );
@@ -868,7 +1376,13 @@
 								return $( this ).find( 'input[value="' + d.link_id + '"]' ).length > 0;
 							} );
 							if ( $tr.length ) {
-								if ( self.removeRowIfFilterMismatch( $tr, d ) ) {
+								if ( d.removed ) {
+									self.removeSuggestPanelsForRow( $tr );
+									$tr.fadeOut( 200, function () { $( this ).remove(); } );
+									self._bulkFilterRemoved++;
+									self.refreshStats();
+								} else if ( self.removeRowIfFilterMismatch( $tr, d, true ) ) {
+									self._bulkFilterRemoved++;
 									self.refreshStats();
 								} else {
 									if ( d.status_html ) {
@@ -895,17 +1409,144 @@
 							} else {
 								self._bulkStats.failed++;
 							}
+						} else if ( 'make_relative' === act && r.data.link_id ) {
+							if ( r.data.skipped ) {
+								self._bulkStats.skipped++;
+							} else if ( r.data.converted ) {
+								self._bulkStats.converted++;
+								var $tr3 = $( 'tr' ).filter( function () {
+									return $( this ).find( 'input[value="' + r.data.link_id + '"]' ).length > 0;
+								} );
+								if ( $tr3.length && r.data.row ) {
+									if ( self.removeRowIfFilterMismatch( $tr3, r.data.row, true ) ) {
+										self._bulkFilterRemoved++;
+									} else {
+										self.applyLinkEditToRow( $tr3, r.data.row );
+									}
+								}
+							} else {
+								self._bulkStats.failed++;
+							}
 						}
 					self.bulkRecheckStep( linkIds, index + 1, act );
 				},
 				error: function () {
-					if ( 'unlink' === act ) {
+					if ( 'unlink' === act || 'make_relative' === act ) {
 						self._bulkStats.failed++;
 					}
 					alert( tsoliinData.i18n.error );
 					self.bulkRecheckStep( linkIds, index + 1, act );
 				}
 			} );
+		},
+
+		// ---------------------------------------------------------------
+		// Live search (filter list as you type)
+		// ---------------------------------------------------------------
+		bindLiveSearch: function () {
+			var self   = this;
+			var $input = $( '.tsoliin-search-input' );
+			var $form  = $( '#tsoliin-search-form' );
+			if ( ! $input.length || ! $form.length ) {
+				return;
+			}
+
+			self.lastSearchVal = $input.val();
+
+			$input.on( 'input', function () {
+				var term = $.trim( $( this ).val() );
+				window.clearTimeout( self.searchTimer );
+				self.searchTimer = window.setTimeout( function () {
+					if ( term === self.lastSearchVal ) {
+						return;
+					}
+					self.lastSearchVal = term;
+					self.runLiveSearch( term );
+				}, 400 );
+			} );
+
+			$form.on( 'submit', function ( e ) {
+				e.preventDefault();
+				var term = $.trim( $input.val() );
+				window.clearTimeout( self.searchTimer );
+				self.lastSearchVal = term;
+				self.runLiveSearch( term );
+			} );
+		},
+
+		runLiveSearch: function ( searchTerm ) {
+			var self    = this;
+			var $region = $( '#tsoliin-list-table-region' );
+			var $btn    = $( '#tsoliin-search-form button[type="submit"]' );
+
+			if ( ! $region.length ) {
+				$( '#tsoliin-search-form' )[0].submit();
+				return;
+			}
+
+			if ( self.searchXhr && self.searchXhr.readyState !== 4 ) {
+				self.searchXhr.abort();
+			}
+
+			$region.addClass( 'tsoliin-list-table-region--loading' );
+			$region.attr( 'aria-busy', 'true' );
+			if ( $btn.length ) {
+				$btn.prop( 'disabled', true ).text( tsoliinData.i18n.searching );
+			}
+
+			self.searchXhr = $.ajax( {
+				url    : tsoliinData.ajaxUrl,
+				method : 'POST',
+				timeout: 60000,
+				data   : {
+					action         : 'tsoliin_search_list',
+					nonce          : tsoliinData.nonce,
+					s              : searchTerm,
+					filter         : tsoliinData.listFilter || 'all',
+					quality_filter : tsoliinData.listQualityFilter || '',
+					scope          : tsoliinData.listScope || 'all',
+					post_id : tsoliinData.viewPostId || 0,
+					paged   : 1,
+					orderby : tsoliinData.listOrderby || 'date_found',
+					order   : tsoliinData.listOrder || 'DESC'
+				},
+				success: function ( r ) {
+					if ( r.success && r.data && r.data.html ) {
+						$region.html( r.data.html );
+						self.updateSearchUrl( searchTerm );
+					}
+				},
+				error: function ( xhr, status ) {
+					if ( 'abort' !== status ) {
+						alert( tsoliinData.i18n.error );
+					}
+				},
+				complete: function () {
+					$region.removeClass( 'tsoliin-list-table-region--loading' );
+					$region.attr( 'aria-busy', 'false' );
+					if ( $btn.length ) {
+						$btn.prop( 'disabled', false ).text( tsoliinData.i18n.searchBtn || 'Search' );
+					}
+				}
+			} );
+		},
+
+		updateSearchUrl: function ( searchTerm ) {
+			if ( ! window.history || ! window.history.replaceState ) {
+				return;
+			}
+			try {
+				var url    = new URL( window.location.href );
+				if ( searchTerm ) {
+					url.searchParams.set( 's', searchTerm );
+				} else {
+					url.searchParams.delete( 's' );
+				}
+				url.searchParams.delete( 'paged' );
+				window.history.replaceState( null, '', url.toString() );
+			} catch ( e ) {
+				// Ignore URL API errors on very old browsers.
+			}
 		},
 
 		// ---------------------------------------------------------------
@@ -1006,7 +1647,7 @@
 						var d = r.data;
 						if ( self.removeRowIfFilterMismatch( $row, d ) ) {
 							$btn.closest( '.tsoliin-suggest-row' ).fadeOut( 300, function () { $( this ).remove(); } );
-							self.showNotice( '✅ ' + tsoliinData.i18n.urlUpdated + ' ' + d.new_url, 'success' );
+							self.showNotice( d.filter_promotion_message || ( '✅ ' + tsoliinData.i18n.urlUpdated + ' ' + d.new_url ), 'success' );
 							self.refreshStats();
 							return;
 						}
@@ -1036,25 +1677,45 @@
 			var self   = this;
 			var $panel = $( '#tsoliin-diagnose-panel' );
 			var $btn   = $( '#tsoliin-diagnose' );
+			var btnHtml = '<span class="dashicons dashicons-info"></span> ' + tsoliinData.i18n.diagnosi;
 
-			$btn.prop( 'disabled', true ).text( tsoliinData.i18n.diagChecking );
+			if ( $panel.is( ':visible' ) ) {
+				if ( self._diagXhr ) {
+					self._diagXhr.abort();
+					self._diagXhr = null;
+				}
+				$panel.hide().empty();
+				$btn.prop( 'disabled', false ).attr( 'aria-expanded', 'false' ).html( btnHtml );
+				return;
+			}
+
+			$btn.prop( 'disabled', true ).attr( 'aria-expanded', 'true' ).text( tsoliinData.i18n.diagChecking );
 			$panel.html( '<p><em>' + tsoliinData.i18n.diagChecking + '</em></p>' ).show();
 
-			$.ajax( {
+			self._diagXhr = $.ajax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
 				data  : { action: 'tsoliin_diagnose', nonce: tsoliinData.nonce },
 				success: function ( r ) {
-					$btn.prop( 'disabled', false ).html( '<span class="dashicons dashicons-info"></span> ' + tsoliinData.i18n.diagnosi );
+					$btn.prop( 'disabled', false ).html( btnHtml );
+					if ( ! $panel.is( ':visible' ) ) {
+						return;
+					}
 					if ( r.success ) {
 						$panel.html( '<strong>' + self.escapeHtml( tsoliinData.i18n.diagResult ) + '</strong><br><code style="display:block;white-space:pre-wrap;margin-top:8px;">' + self.escapeHtml( r.data.lines.join( '\n' ) ) + '</code>' );
 					} else {
 						$panel.html( '<p style="color:red;">' + ( r.data ? r.data.message : 'Error' ) + '</p>' );
 					}
 				},
-				error: function () {
-					$btn.prop( 'disabled', false );
+				error: function ( _jqXHR, textStatus ) {
+					$btn.prop( 'disabled', false ).html( btnHtml );
+					if ( 'abort' === textStatus || ! $panel.is( ':visible' ) ) {
+						return;
+					}
 					$panel.html( '<p style="color:red;">' + tsoliinData.i18n.error + '</p>' );
+				},
+				complete: function () {
+					self._diagXhr = null;
 				}
 			} );
 		}

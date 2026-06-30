@@ -18,6 +18,9 @@ class TSOLIIN_Scanner {
 	/** @var TSOLIIN_DB */
 	private $db;
 
+	/** @var array<int,bool> Post IDs that already received a pre-edit revision this request. */
+	private $revision_saved_for_posts = array();
+
 	public function __construct( TSOLIIN_DB $db ) {
 		$this->db = $db;
 	}
@@ -46,6 +49,11 @@ class TSOLIIN_Scanner {
 	/** @return bool */
 	public function is_scan_comments_enabled() {
 		return $this->opt( 'scan_comments' );
+	}
+
+	/** @return bool */
+	public function is_scan_widgets_enabled() {
+		return $this->opt( 'scan_widgets', true );
 	}
 
 	// -------------------------------------------------------------------------
@@ -141,6 +149,15 @@ class TSOLIIN_Scanner {
 			$anchor = ( 'textContent' === $text_key )
 				? sanitize_text_field( wp_strip_all_tags( trim( (string) $node->textContent ) ) )
 				: sanitize_text_field( trim( (string) $node->getAttribute( $text_key ) ) );
+			if ( '' === $anchor && 'a' === $tag ) {
+				$anchor = sanitize_text_field( trim( (string) $node->getAttribute( 'title' ) ) );
+			}
+			if ( '' === $anchor && 'a' === $tag ) {
+				$anchor = $this->anchor_from_link_child_image( $node );
+			}
+			if ( '' === $anchor && 'img' === $tag ) {
+				$anchor = $this->enrich_image_anchor_from_attachment_url( $url, '' );
+			}
 			$items[] = array( 'url' => $url, 'anchor' => $anchor, 'type' => $type );
 		}
 		return $this->dedup( $items );
@@ -185,21 +202,333 @@ class TSOLIIN_Scanner {
 		if ( '' === trim( $text ) ) {
 			return array();
 		}
-		$items = array();
-		if ( preg_match_all( '#https?://[^\s<>"\'\)\]\}]+#i', $text, $matches ) ) {
+		$scan_text = $this->strip_embedded_url_markup( $text );
+		$items     = array();
+		if ( preg_match_all( '#https?://[^\s<>"\']+#i', $scan_text, $matches ) ) {
 			foreach ( $matches[0] as $raw ) {
 				$url = $this->clean_url( rtrim( (string) $raw, '.,;:!?)' ) );
 				if ( '' === $url || $this->skip_url( $url ) ) {
 					continue;
 				}
+				if ( $this->url_should_never_be_plain_text( $url ) ) {
+					continue;
+				}
 				$items[] = array(
 					'url'    => $url,
 					'anchor' => '',
-					'type'   => 'link',
+					'type'   => 'plain',
 				);
 			}
 		}
 		return $this->dedup( $items );
+	}
+
+	/**
+	 * Remove HTML regions that already embed URLs (href, src, etc.) before plain-text scan.
+	 *
+	 * @param string $text Raw content.
+	 * @return string
+	 */
+	private function strip_embedded_url_markup( $text ) {
+		$text = (string) $text;
+		if ( '' === $text ) {
+			return '';
+		}
+		// Gutenberg block JSON is not plain text — URLs there are handled by block/image scanners.
+		$text = preg_replace( '/<!--\s*\/?wp:[^>]*-->/s', ' ', $text );
+		$text = preg_replace( '/<a\s[^>]*href=["\'][^"\']+["\'][^>]*>.*?<\/a>/is', ' ', $text );
+		$text = preg_replace( '/<img\s[^>]*>/is', ' ', $text );
+		$text = preg_replace( '/<(?:picture|source|video|audio|embed|object)\b[^>]*>.*?<\/(?:picture|video|audio|object)>/is', ' ', $text );
+		$text = preg_replace( '/<(?:picture|source|video|audio|embed|object)\b[^>]*\/?>/is', ' ', $text );
+		$text = preg_replace( '/\s(?:href|src|srcset|cite|poster|action|data-src|data-lazy-src|data-original|data-full-url|data-thumb|data-image|data-bg|data-background)\s*=\s*["\'][^"\']+["\']/i', ' ', $text );
+		$text = preg_replace( '/url\s*\(\s*["\']?(https?:\/\/[^"\')\s]+)["\']?\s*\)/i', ' ', $text );
+		return is_string( $text ) ? $text : '';
+	}
+
+	/**
+	 * Whether a URL appears inside an HTML hyperlink (a[href]) in content.
+	 *
+	 * @param string $content Raw or rendered HTML.
+	 * @param string $url     Target URL.
+	 * @param int    $post_id Post context.
+	 * @return bool
+	 */
+	private function url_in_html_hyperlink( $content, $url, $post_id = 0 ) {
+		$content = (string) $content;
+		$url_key = $this->scan_url_key( (string) $url, $post_id );
+		if ( '' === $content || '' === $url_key ) {
+			return false;
+		}
+		foreach ( $this->extract_links( $content ) as $item ) {
+			if ( $this->scan_url_key( $item['url'], $post_id ) === $url_key ) {
+				return true;
+			}
+		}
+		if ( false !== stripos( $content, 'href=' ) ) {
+			foreach ( $this->regex_links( $content ) as $item ) {
+				if ( $this->scan_url_key( $item['url'], $post_id ) === $url_key ) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a URL is only present as visible text, not inside an HTML link tag.
+	 *
+	 * @param string $content post_content.
+	 * @param string $url     Target URL.
+	 * @param int    $post_id Post context.
+	 * @return bool
+	 */
+	private function url_is_plain_text_only_in_content( $content, $url, $post_id = 0 ) {
+		if ( $this->url_in_html_hyperlink( $content, $url, $post_id ) ) {
+			return false;
+		}
+		if ( $this->url_in_html_media_markup( $content, $url, $post_id ) ) {
+			return false;
+		}
+		if ( $this->url_in_gutenberg_media_block( $content, $url, $post_id ) ) {
+			return false;
+		}
+		foreach ( $this->extract_plain_urls( $content ) as $item ) {
+			if ( $this->scan_url_key( $item['url'], $post_id ) === $this->scan_url_key( (string) $url, $post_id ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a URL is used as img/src/srcset/poster markup (not plain text).
+	 *
+	 * @param string $content HTML or block markup.
+	 * @param string $url     Target URL.
+	 * @param int    $post_id Post context.
+	 * @return bool
+	 */
+	private function url_in_html_media_markup( $content, $url, $post_id = 0 ) {
+		$content = (string) $content;
+		$url_key = $this->scan_url_key( (string) $url, $post_id );
+		if ( '' === $content || '' === $url_key ) {
+			return false;
+		}
+		foreach ( array( 'src', 'srcset', 'poster' ) as $attr ) {
+			if ( '' !== $this->extract_matching_tag_snippet( $content, (string) $url, $post_id, $attr ) ) {
+				return true;
+			}
+		}
+		foreach ( $this->extract_images( $content ) as $item ) {
+			if ( $this->scan_url_key( $item['url'], $post_id ) === $url_key ) {
+				return true;
+			}
+		}
+		foreach ( $this->extract_responsive_media_urls( $content ) as $item ) {
+			if ( $this->scan_url_key( $item['url'], $post_id ) === $url_key ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a URL belongs to a Gutenberg image/gallery/media block (block attrs JSON).
+	 *
+	 * @param string $raw     Raw post_content.
+	 * @param string $url     Target URL.
+	 * @param int    $post_id Post context.
+	 * @return bool
+	 */
+	private function url_in_gutenberg_media_block( $raw, $url, $post_id = 0 ) {
+		if ( ! function_exists( 'parse_blocks' ) ) {
+			return false;
+		}
+		$raw = (string) $raw;
+		if ( '' === trim( $raw ) ) {
+			return false;
+		}
+		$url_key = $this->scan_url_key( (string) $url, $post_id );
+		if ( '' === $url_key ) {
+			return false;
+		}
+		return $this->block_tree_has_media_url( parse_blocks( $raw ), $url_key, $post_id );
+	}
+
+	/**
+	 * @param array[] $blocks  Parsed blocks.
+	 * @param string  $url_key Normalized URL key.
+	 * @param int     $post_id Post context.
+	 * @return bool
+	 */
+	private function block_tree_has_media_url( array $blocks, $url_key, $post_id ) {
+		$media_blocks = array(
+			'core/image',
+			'core/gallery',
+			'core/cover',
+			'core/media-text',
+			'core/file',
+			'core/video',
+			'core/audio',
+			'core/post-featured-image',
+		);
+		foreach ( $blocks as $block ) {
+			if ( ! is_array( $block ) ) {
+				continue;
+			}
+			$name = isset( $block['blockName'] ) ? (string) $block['blockName'] : '';
+			$urls = array();
+			if ( ! empty( $block['attrs'] ) && is_array( $block['attrs'] ) ) {
+				foreach ( $this->urls_from_array( $block['attrs'] ) as $candidate ) {
+					$urls[] = $this->scan_url_key( $candidate, $post_id );
+				}
+			}
+			$is_media_block = in_array( $name, $media_blocks, true )
+				|| ( '' !== $name && false !== strpos( $name, 'gallery' ) );
+			if ( $is_media_block ) {
+				foreach ( $urls as $key ) {
+					if ( $key === $url_key ) {
+						return true;
+					}
+				}
+			}
+			if ( ! empty( $block['innerBlocks'] ) && is_array( $block['innerBlocks'] ) ) {
+				if ( $this->block_tree_has_media_url( $block['innerBlocks'], $url_key, $post_id ) ) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * @param string $url URL.
+	 * @return bool
+	 */
+	private function url_looks_like_image_file( $url ) {
+		$path = wp_parse_url( (string) $url, PHP_URL_PATH );
+		if ( ! is_string( $path ) || '' === $path ) {
+			return false;
+		}
+		return (bool) preg_match( '/\.(?:jpe?g|png|gif|webp|avif|svg|bmp|ico)(?:\?|$)/i', $path );
+	}
+
+	/**
+	 * Whether a URL points at the WordPress media library (full size or -WxH thumbnail).
+	 *
+	 * @param string $url URL.
+	 * @return bool
+	 */
+	private function url_is_wordpress_media_image( $url ) {
+		$url = $this->clean_url( (string) $url );
+		if ( '' === $url || ! $this->url_looks_like_image_file( $url ) ) {
+			return false;
+		}
+		if ( ! function_exists( 'attachment_url_to_postid' ) ) {
+			return $this->url_looks_like_wp_uploads_image( $url );
+		}
+		if ( attachment_url_to_postid( $url ) > 0 ) {
+			return true;
+		}
+		$full = preg_replace( '/-\d+x\d+(?=\.(?:jpe?g|png|gif|webp|avif|bmp|ico))/i', '', $url );
+		if ( is_string( $full ) && $full !== $url && attachment_url_to_postid( $full ) > 0 ) {
+			return true;
+		}
+		return $this->url_looks_like_wp_uploads_image( $url );
+	}
+
+	/**
+	 * @param string $url URL.
+	 * @return bool
+	 */
+	private function url_looks_like_wp_uploads_image( $url ) {
+		if ( ! $this->url_looks_like_image_file( $url ) ) {
+			return false;
+		}
+		$path = wp_parse_url( $url, PHP_URL_PATH );
+		if ( ! is_string( $path ) || '' === $path ) {
+			return false;
+		}
+		return (bool) preg_match( '#/(?:wp-content/)?uploads/#i', $path );
+	}
+
+	/**
+	 * Image and media-library URLs must never be stored as plain text.
+	 *
+	 * @param string $url URL.
+	 * @return bool
+	 */
+	private function url_should_never_be_plain_text( $url ) {
+		return $this->url_is_wordpress_media_image( $url );
+	}
+
+	/**
+	 * @param string   $url      URL.
+	 * @param string[] $sources  Content sources to inspect.
+	 * @param int      $post_id  Post context.
+	 * @return bool
+	 */
+	private function url_should_be_image_type( $url, array $sources, $post_id = 0 ) {
+		$url = (string) $url;
+		if ( '' === $url ) {
+			return false;
+		}
+		if ( $this->url_is_wordpress_media_image( $url ) ) {
+			return true;
+		}
+		if ( ! $this->url_looks_like_image_file( $url ) ) {
+			return false;
+		}
+		foreach ( $sources as $src ) {
+			if ( $this->url_in_html_media_markup( $src, $url, $post_id )
+				|| $this->url_in_gutenberg_media_block( $src, $url, $post_id ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Choose link vs image for a URL taken from Gutenberg block attrs.
+	 *
+	 * @param array  $attrs Block attrs.
+	 * @param string $url   Resolved URL.
+	 * @return string link|image
+	 */
+	private function block_attr_url_type( array $attrs, $url ) {
+		$destination = isset( $attrs['linkDestination'] ) ? (string) $attrs['linkDestination'] : '';
+		if ( 'custom' === $destination ) {
+			$wrap = $this->pick_url_from_assoc( array( 'link' => $attrs['link'] ?? '', 'href' => $attrs['href'] ?? '' ) );
+			if ( '' === $wrap && ! empty( $attrs['link'] ) && is_array( $attrs['link'] ) ) {
+				$wrap = $this->pick_url_from_assoc( $attrs['link'] );
+			}
+			if ( '' !== $wrap && $this->scan_url_key( $wrap, 0 ) === $this->scan_url_key( $url, 0 ) ) {
+				return 'link';
+			}
+		}
+		if ( ! empty( $attrs['id'] ) || $this->url_looks_like_image_file( $url ) ) {
+			return 'image';
+		}
+		return 'link';
+	}
+
+	/**
+	 * Prefer real markup types over plain text when the same URL is detected twice.
+	 *
+	 * @param string $existing Existing item type.
+	 * @param string $incoming Incoming item type.
+	 * @return string
+	 */
+	private function prefer_scan_item_type( $existing, $incoming ) {
+		$rank = array(
+			'iframe' => 5,
+			'link'   => 4,
+			'image'  => 3,
+			'plain'  => 1,
+		);
+		$existing = isset( $rank[ $existing ] ) ? $existing : 'link';
+		$incoming = isset( $rank[ $incoming ] ) ? $incoming : 'link';
+		return ( $rank[ $incoming ] ?? 0 ) >= ( $rank[ $existing ] ?? 0 ) ? $incoming : $existing;
 	}
 
 	/**
@@ -242,14 +571,531 @@ class TSOLIIN_Scanner {
 			return array();
 		}
 		$items = array();
-		foreach ( $this->collect_block_urls( parse_blocks( $raw ) ) as $url ) {
+		foreach ( parse_blocks( $raw ) as $block ) {
+			foreach ( $this->extract_block_link_items( $block ) as $item ) {
+				$items[] = $item;
+			}
+		}
+		return $this->dedup_prefer_anchor( $items );
+	}
+
+	/**
+	 * Extract links (with anchor text) from a parsed Gutenberg block tree.
+	 *
+	 * @param array $block Parsed block.
+	 * @return array[]
+	 */
+	private function extract_block_link_items( $block ) {
+		$items = array();
+		if ( ! is_array( $block ) ) {
+			return $items;
+		}
+
+		if ( ! empty( $block['attrs'] ) && is_array( $block['attrs'] ) ) {
+			foreach ( $this->extract_block_attr_link_items( $block['attrs'] ) as $item ) {
+				$items[] = $item;
+			}
+		}
+
+		if ( ! empty( $block['innerHTML'] ) ) {
+			$inner = (string) $block['innerHTML'];
+		} else {
+			$inner = $this->get_block_html_snippet( $block );
+		}
+		if ( '' !== $inner ) {
+			$found = $this->extract_links( $inner );
+			if ( empty( $found ) && false !== stripos( $inner, 'href=' ) ) {
+				$found = $this->regex_links( $inner );
+			}
+			foreach ( $found as $item ) {
+				$items[] = $item;
+			}
+		}
+
+		if ( ! empty( $block['innerBlocks'] ) && is_array( $block['innerBlocks'] ) ) {
+			foreach ( $block['innerBlocks'] as $inner_block ) {
+				foreach ( $this->extract_block_link_items( $inner_block ) as $item ) {
+					$items[] = $item;
+				}
+			}
+		}
+
+		$known_urls = array();
+		foreach ( $items as $item ) {
+			$known_urls[ $this->scan_url_key( (string) $item['url'], 0 ) ] = true;
+		}
+		foreach ( $this->collect_block_urls( array( $block ) ) as $url ) {
+			if ( isset( $known_urls[ $this->scan_url_key( $url, 0 ) ] ) ) {
+				continue;
+			}
 			$items[] = array(
 				'url'    => $url,
 				'anchor' => '',
-				'type'   => 'link',
+				'type'   => $this->url_looks_like_image_file( $url ) ? 'image' : 'link',
 			);
 		}
-		return $this->dedup( $items );
+
+		return $items;
+	}
+
+	/**
+	 * HTML snippet from a parsed block (innerHTML or innerContent).
+	 *
+	 * @param array $block Parsed block.
+	 * @return string
+	 */
+	private function get_block_html_snippet( $block ) {
+		if ( ! is_array( $block ) ) {
+			return '';
+		}
+		if ( ! empty( $block['innerHTML'] ) ) {
+			return (string) $block['innerHTML'];
+		}
+		if ( empty( $block['innerContent'] ) || ! is_array( $block['innerContent'] ) ) {
+			return '';
+		}
+		$parts = array();
+		foreach ( $block['innerContent'] as $part ) {
+			if ( is_string( $part ) && '' !== trim( $part ) ) {
+				$parts[] = $part;
+			}
+		}
+		return implode( '', $parts );
+	}
+
+	/**
+	 * Fill missing anchors from raw post HTML and attachment metadata.
+	 *
+	 * @param array[] $items   Scanned items.
+	 * @param string  $raw     Raw post_content.
+	 * @param int     $post_id Post ID.
+	 * @return array[]
+	 */
+	private function enrich_scan_item_anchors( array $items, $raw, $post_id = 0, $rendered = '' ) {
+		$sources = array_unique(
+			array_filter(
+				array(
+					(string) $raw,
+					(string) $rendered,
+				)
+			)
+		);
+		foreach ( $items as &$item ) {
+			$anchor = isset( $item['anchor'] ) ? trim( (string) $item['anchor'] ) : '';
+			$url    = isset( $item['url'] ) ? (string) $item['url'] : '';
+			$type   = isset( $item['type'] ) ? (string) $item['type'] : 'link';
+
+			if ( '' === $anchor ) {
+				foreach ( $sources as $src ) {
+					$anchor = $this->find_anchor_for_url_in_raw( $src, $url, $post_id );
+					if ( '' !== $anchor ) {
+						break;
+					}
+				}
+			}
+			if ( '' === $anchor && in_array( $type, array( 'image', 'link' ), true ) ) {
+				$anchor = $this->enrich_image_anchor_from_attachment_url( $url, '' );
+			}
+			if ( '' !== $anchor ) {
+				$item['anchor'] = sanitize_text_field( $anchor );
+			}
+		}
+		unset( $item );
+		return $items;
+	}
+
+	/**
+	 * Find visible link text for a URL inside raw post HTML.
+	 *
+	 * @param string $raw     post_content.
+	 * @param string $url     Target URL.
+	 * @param int    $post_id Post context.
+	 * @return string
+	 */
+	private function find_anchor_for_url_in_raw( $raw, $url, $post_id = 0 ) {
+		$raw = (string) $raw;
+		$url = trim( (string) $url );
+		if ( '' === $raw || '' === $url ) {
+			return '';
+		}
+
+		$needles = array( $url );
+		$abs     = self::resolve_to_absolute_url( $url, $post_id );
+		if ( '' !== $abs && $abs !== $url ) {
+			$needles[] = $abs;
+		}
+		$play_id = TSOLIIN_HTTP::parse_play_store_app_id( $url );
+		if ( '' !== $play_id ) {
+			$needles[] = 'id=' . $play_id;
+			$needles[] = $play_id;
+		}
+
+		$haystacks = array( $raw );
+		$decoded     = html_entity_decode( $raw, ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+		if ( $decoded !== $raw ) {
+			$haystacks[] = $decoded;
+		}
+
+		foreach ( array_unique( array_filter( $needles ) ) as $needle ) {
+			foreach ( $haystacks as $haystack ) {
+				$pattern = '#<a\s[^>]*href\s*=\s*["\'][^"\']*' . preg_quote( $needle, '#' ) . '[^"\']*["\'][^>]*>(.*?)</a>#is';
+				if ( ! preg_match( $pattern, $haystack, $match ) ) {
+					continue;
+				}
+				$text = sanitize_text_field( wp_strip_all_tags( trim( (string) $match[1] ) ) );
+				if ( '' === $text && preg_match( '/<img\b[^>]*\salt\s*=\s*["\']([^"\']*)["\']/i', (string) $match[1], $img ) ) {
+					$text = sanitize_text_field( trim( (string) $img[1] ) );
+				}
+				if ( '' !== $text ) {
+					return $text;
+				}
+			}
+		}
+		return '';
+	}
+
+	/**
+	 * Visible text for a link that wraps an image (gallery / image blocks).
+	 *
+	 * @param DOMElement $node Anchor element.
+	 * @return string
+	 */
+	private function anchor_from_link_child_image( $node ) {
+		if ( ! $node instanceof DOMElement ) {
+			return '';
+		}
+		foreach ( $node->getElementsByTagName( 'img' ) as $img ) {
+			if ( ! $img instanceof DOMElement ) {
+				continue;
+			}
+			$alt = sanitize_text_field( trim( (string) $img->getAttribute( 'alt' ) ) );
+			if ( '' !== $alt ) {
+				return $alt;
+			}
+			$src = trim( (string) $img->getAttribute( 'src' ) );
+			if ( '' !== $src ) {
+				$from_lib = $this->enrich_image_anchor_from_attachment_url( $src, '' );
+				if ( '' !== $from_lib ) {
+					return $from_lib;
+				}
+			}
+		}
+		return '';
+	}
+
+	/**
+	 * URL + label pairs from Gutenberg block attrs (button, image link, etc.).
+	 *
+	 * @param array $attrs Block attrs.
+	 * @return array[]
+	 */
+	private function extract_block_attr_link_items( $attrs ) {
+		$items = array();
+		if ( ! is_array( $attrs ) ) {
+			return $items;
+		}
+
+		$url = $this->pick_url_from_assoc( $attrs );
+		if ( '' !== $url ) {
+			$label = $this->pick_label_from_assoc( $attrs );
+			if ( '' === $label && ! empty( $attrs['id'] ) ) {
+				$label = $this->attachment_label( absint( $attrs['id'] ) );
+			}
+			$items[] = array(
+				'url'    => $url,
+				'anchor' => $label,
+				'type'   => $this->block_attr_url_type( $attrs, $url ),
+			);
+		}
+
+		if ( ! empty( $attrs['id'] ) && empty( $url ) ) {
+			$attachment_id = absint( $attrs['id'] );
+			$file_url      = $attachment_id ? wp_get_attachment_url( $attachment_id ) : false;
+			if ( is_string( $file_url ) && '' !== $file_url ) {
+				$items[] = array(
+					'url'    => $file_url,
+					'anchor' => $this->attachment_label( $attachment_id ),
+					'type'   => 'image',
+				);
+			}
+		}
+
+		return $items;
+	}
+
+	/**
+	 * @param array $data Associative array from block attrs.
+	 * @return string
+	 */
+	private function pick_url_from_assoc( $data ) {
+		if ( ! is_array( $data ) ) {
+			return '';
+		}
+		$url_keys = array( 'url', 'link', 'href', 'linkurl', 'buttonurl', 'fileurl', 'mediaurl' );
+		foreach ( $url_keys as $key ) {
+			if ( empty( $data[ $key ] ) || ! is_string( $data[ $key ] ) ) {
+				continue;
+			}
+			$candidate = $this->clean_url( trim( $data[ $key ] ) );
+			if ( '' !== $candidate && ! $this->skip_url( $candidate ) ) {
+				return $candidate;
+			}
+		}
+		if ( ! empty( $data['link'] ) && is_array( $data['link'] ) ) {
+			return $this->pick_url_from_assoc( $data['link'] );
+		}
+		return '';
+	}
+
+	/**
+	 * @param array $data Associative array from block attrs.
+	 * @return string
+	 */
+	private function pick_label_from_assoc( $data ) {
+		if ( ! is_array( $data ) ) {
+			return '';
+		}
+		$label_keys = array( 'text', 'title', 'linktitle', 'label', 'content', 'alt' );
+		foreach ( $label_keys as $key ) {
+			if ( empty( $data[ $key ] ) || ! is_string( $data[ $key ] ) ) {
+				continue;
+			}
+			$label = sanitize_text_field( trim( $data[ $key ] ) );
+			if ( '' !== $label ) {
+				return $label;
+			}
+		}
+		return '';
+	}
+
+	/**
+	 * Alt → title → caption for a media-library attachment.
+	 *
+	 * @param int $attachment_id Attachment post ID.
+	 * @return string
+	 */
+	private function attachment_label( $attachment_id ) {
+		$attachment_id = absint( $attachment_id );
+		if ( ! $attachment_id ) {
+			return '';
+		}
+		$file_url = wp_get_attachment_url( $attachment_id );
+		if ( is_string( $file_url ) && '' !== $file_url ) {
+			return $this->enrich_image_anchor_from_attachment_url( $file_url, '' );
+		}
+		return '';
+	}
+
+	/**
+	 * Alt / title / caption from the media library for an uploads URL.
+	 *
+	 * @param string $url            Image or file URL.
+	 * @param string $current_anchor Existing anchor.
+	 * @return string
+	 */
+	private function enrich_image_anchor_from_attachment_url( $url, $current_anchor = '' ) {
+		if ( '' !== trim( (string) $current_anchor ) ) {
+			return (string) $current_anchor;
+		}
+		$url = trim( (string) $url );
+		if ( '' === $url || ! function_exists( 'attachment_url_to_postid' ) ) {
+			return '';
+		}
+
+		$attachment_id = attachment_url_to_postid( $url );
+		if ( ! $attachment_id && preg_match( '#-\d+x\d+(\.[a-z0-9]+)$#i', $url, $m ) ) {
+			$attachment_id = attachment_url_to_postid( preg_replace( '#-\d+x\d+(\.[a-z0-9]+)$#i', '$1', $url ) );
+		}
+		if ( ! $attachment_id ) {
+			return '';
+		}
+
+		$alt = get_post_meta( $attachment_id, '_wp_attachment_image_alt', true );
+		if ( is_string( $alt ) && '' !== trim( $alt ) ) {
+			return sanitize_text_field( $alt );
+		}
+
+		$attachment = get_post( $attachment_id );
+		if ( ! $attachment ) {
+			return '';
+		}
+		if ( '' !== trim( (string) $attachment->post_title ) ) {
+			return sanitize_text_field( (string) $attachment->post_title );
+		}
+		if ( '' !== trim( (string) $attachment->post_excerpt ) ) {
+			return sanitize_text_field( (string) $attachment->post_excerpt );
+		}
+		return '';
+	}
+
+	/**
+	 * Collapse alias URLs (e.g. Play Store id) into one row with the best anchor.
+	 *
+	 * @param array[] $items   Items.
+	 * @param int     $post_id Post ID.
+	 * @return array[]
+	 */
+	private function finalize_scan_items( array $items, $post_id ) {
+		$out  = array();
+		$seen = array();
+		foreach ( $items as $item ) {
+			$key = $this->scan_url_key( $item['url'], $post_id );
+			if ( isset( $seen[ $key ] ) ) {
+				$idx        = (int) $seen[ $key ];
+				$new_anchor = isset( $item['anchor'] ) ? trim( (string) $item['anchor'] ) : '';
+				$old_anchor = isset( $out[ $idx ]['anchor'] ) ? trim( (string) $out[ $idx ]['anchor'] ) : '';
+				if ( '' !== $new_anchor && '' === $old_anchor ) {
+					$out[ $idx ]['anchor'] = $item['anchor'];
+				}
+				if ( strlen( (string) $item['url'] ) > strlen( (string) $out[ $idx ]['url'] ) ) {
+					$out[ $idx ]['url'] = $item['url'];
+				}
+				$existing_type       = isset( $out[ $idx ]['type'] ) ? (string) $out[ $idx ]['type'] : 'link';
+				$incoming_type       = isset( $item['type'] ) ? (string) $item['type'] : 'link';
+				$out[ $idx ]['type'] = $this->prefer_scan_item_type( $existing_type, $incoming_type );
+				continue;
+			}
+			$seen[ $key ] = count( $out );
+			$out[]        = $item;
+		}
+		return $out;
+	}
+
+	/**
+	 * Mark rows as link when the URL is used in an HTML hyperlink (a[href]), not only as img src.
+	 *
+	 * @param array[] $items    Scanned items.
+	 * @param string  $content  post_content.
+	 * @param int     $post_id  Post ID.
+	 * @param string  $rendered Rendered post HTML.
+	 * @return array[]
+	 */
+	private function reclassify_hyperlink_items( array $items, $content, $post_id, $rendered = '' ) {
+		$sources = array_unique(
+			array_filter(
+				array(
+					(string) $content,
+					(string) $rendered,
+				)
+			)
+		);
+		foreach ( $items as &$item ) {
+			$url = isset( $item['url'] ) ? (string) $item['url'] : '';
+			if ( '' === $url ) {
+				continue;
+			}
+			foreach ( $sources as $src ) {
+				if ( $this->url_in_html_hyperlink( $src, $url, $post_id ) ) {
+					$item['type'] = 'link';
+					break;
+				}
+			}
+		}
+		unset( $item );
+		return $items;
+	}
+
+	/**
+	 * Mark link rows as plain when the URL is only visible text (no <a href>).
+	 *
+	 * @param array[] $items   Scanned items.
+	 * @param string  $content post_content.
+	 * @param int     $post_id Post ID.
+	 * @return array[]
+	 */
+	private function reclassify_plain_text_items( array $items, $content, $post_id ) {
+		if ( ! $this->opt( 'scan_plain_urls', true ) ) {
+			return $items;
+		}
+		$sources = array_unique(
+			array_filter(
+				array(
+					(string) $content,
+				)
+			)
+		);
+		foreach ( $items as &$item ) {
+			$type = isset( $item['type'] ) ? (string) $item['type'] : 'link';
+			$url  = isset( $item['url'] ) ? (string) $item['url'] : '';
+			if ( ! in_array( $type, array( 'link', 'plain' ), true ) || '' === $url ) {
+				continue;
+			}
+			if ( $this->url_should_never_be_plain_text( $url ) ) {
+				$item['type'] = 'image';
+				continue;
+			}
+			$is_plain = false;
+			foreach ( $sources as $src ) {
+				if ( $this->url_is_plain_text_only_in_content( $src, $url, $post_id ) ) {
+					$is_plain = true;
+					break;
+				}
+			}
+			$item['type'] = $is_plain ? 'plain' : ( 'plain' === $type ? 'link' : $type );
+		}
+		unset( $item );
+		return $items;
+	}
+
+	/**
+	 * Ensure image/gallery block URLs and img src rows are stored as image, not plain/link.
+	 *
+	 * @param array[] $items    Scanned items.
+	 * @param string  $content  post_content.
+	 * @param int     $post_id  Post ID.
+	 * @param string  $rendered Rendered post HTML.
+	 * @return array[]
+	 */
+	private function reclassify_image_items( array $items, $content, $post_id, $rendered = '' ) {
+		$sources = array_unique(
+			array_filter(
+				array(
+					(string) $content,
+					(string) $rendered,
+				)
+			)
+		);
+		foreach ( $items as &$item ) {
+			$type = isset( $item['type'] ) ? (string) $item['type'] : 'link';
+			$url  = isset( $item['url'] ) ? (string) $item['url'] : '';
+			if ( 'iframe' === $type || '' === $url ) {
+				continue;
+			}
+			if ( 'image' === $type ) {
+				continue;
+			}
+			if ( $this->url_should_be_image_type( $url, $sources, $post_id ) ) {
+				$item['type'] = 'image';
+			}
+		}
+		unset( $item );
+		return $items;
+	}
+
+	/**
+	 * Deduplicate items keeping the first non-empty anchor for each URL.
+	 *
+	 * @param array[] $items Scanned items.
+	 * @return array[]
+	 */
+	private function dedup_prefer_anchor( $items ) {
+		$by_url = array();
+		foreach ( $items as $item ) {
+			$url = isset( $item['url'] ) ? (string) $item['url'] : '';
+			if ( '' === $url ) {
+				continue;
+			}
+			if ( ! isset( $by_url[ $url ] ) ) {
+				$by_url[ $url ] = $item;
+				continue;
+			}
+			$new_anchor = isset( $item['anchor'] ) ? trim( (string) $item['anchor'] ) : '';
+			$old_anchor = isset( $by_url[ $url ]['anchor'] ) ? trim( (string) $by_url[ $url ]['anchor'] ) : '';
+			if ( '' !== $new_anchor && '' === $old_anchor ) {
+				$by_url[ $url ]['anchor'] = $item['anchor'];
+			}
+		}
+		return array_values( $by_url );
 	}
 
 	/**
@@ -403,19 +1249,52 @@ class TSOLIIN_Scanner {
 	}
 
 	/**
+	 * Normalized key for deduplicating the same target under different URL forms.
+	 *
+	 * @param string $url     Raw URL.
+	 * @param int    $post_id Post context.
+	 * @return string
+	 */
+	private function scan_url_key( $url, $post_id = 0 ) {
+		$url = $this->clean_url( (string) $url );
+		$play_id = TSOLIIN_HTTP::parse_play_store_app_id( $url );
+		if ( '' !== $play_id ) {
+			return 'play.google.com:' . $play_id;
+		}
+		$abs = self::resolve_to_absolute_url( $url, $post_id );
+		$key = strtolower( rtrim( $abs ? $abs : $url, '/' ) );
+		return $key;
+	}
+
+	/**
 	 * Add a scanned item when its URL is not already in the batch.
 	 *
-	 * @param array[]  $items  Items list (by ref).
-	 * @param string[] $seen   Seen URLs (by ref).
-	 * @param array    $item   { url, anchor, type }.
+	 * @param array[]  $items   Items list (by ref).
+	 * @param array    $seen    Map of normalized URL key → item index (by ref).
+	 * @param array    $item    { url, anchor, type }.
+	 * @param int      $post_id Post ID for URL normalization.
 	 */
-	private function push_scan_item( array &$items, array &$seen, array $item ) {
+	private function push_scan_item( array &$items, array &$seen, array $item, $post_id = 0 ) {
 		$url = isset( $item['url'] ) ? (string) $item['url'] : '';
-		if ( '' === $url || in_array( $url, $seen, true ) ) {
+		if ( '' === $url ) {
 			return;
 		}
-		$items[] = $item;
-		$seen[]  = $url;
+		$key = $this->scan_url_key( $url, $post_id );
+		if ( isset( $seen[ $key ] ) ) {
+			$idx        = (int) $seen[ $key ];
+			$new_anchor = isset( $item['anchor'] ) ? trim( (string) $item['anchor'] ) : '';
+			if ( isset( $items[ $idx ] ) ) {
+				$existing_type = isset( $items[ $idx ]['type'] ) ? (string) $items[ $idx ]['type'] : 'link';
+				$incoming_type = isset( $item['type'] ) ? (string) $item['type'] : 'link';
+				$items[ $idx ]['type'] = $this->prefer_scan_item_type( $existing_type, $incoming_type );
+				if ( '' !== $new_anchor && '' === trim( (string) $items[ $idx ]['anchor'] ) ) {
+					$items[ $idx ]['anchor'] = sanitize_text_field( $item['anchor'] );
+				}
+			}
+			return;
+		}
+		$seen[ $key ] = count( $items );
+		$items[]      = $item;
 	}
 
 	/**
@@ -450,6 +1329,12 @@ class TSOLIIN_Scanner {
 			return $scheme . ':' . $url;
 		}
 		if ( '/' === $url[0] ) {
+			$path_only = (string) strtok( $url, '?#' );
+			$home_path = self::get_site_home_path_prefix();
+			if ( '' !== $home_path && self::path_includes_site_subdirectory( $path_only, $home_path ) ) {
+				$absolute = self::build_absolute_url_from_root_path( $url );
+				return is_string( $absolute ) && '' !== $absolute ? $absolute : $url;
+			}
 			$absolute = home_url( $url );
 			return is_string( $absolute ) ? $absolute : $url;
 		}
@@ -462,6 +1347,65 @@ class TSOLIIN_Scanner {
 		}
 		$absolute = home_url( '/' . ltrim( $url, '/' ) );
 		return is_string( $absolute ) ? $absolute : $url;
+	}
+
+	/**
+	 * Home URL path prefix for subdirectory installs (e.g. /blog2), or empty at site root.
+	 *
+	 * @return string
+	 */
+	private static function get_site_home_path_prefix() {
+		$home_parts = wp_parse_url( home_url( '/' ) );
+		if ( ! is_array( $home_parts ) || empty( $home_parts['path'] ) ) {
+			return '';
+		}
+		$home_path = untrailingslashit( (string) $home_parts['path'] );
+		return ( '/' === $home_path ) ? '' : $home_path;
+	}
+
+	/**
+	 * Whether a root-relative path already includes the WP subdirectory (wp_make_link_relative style).
+	 *
+	 * @param string $path      Path only (no query/fragment).
+	 * @param string $home_path Site home path prefix.
+	 * @return bool
+	 */
+	private static function path_includes_site_subdirectory( $path, $home_path ) {
+		$path      = untrailingslashit( (string) $path );
+		$home_path = untrailingslashit( (string) $home_path );
+		if ( '' === $home_path ) {
+			return false;
+		}
+		return $path === $home_path || 0 === strpos( $path, $home_path . '/' );
+	}
+
+	/**
+	 * Build scheme://host/path from a domain-root-relative URL (/blog2/... on subdirectory installs).
+	 *
+	 * @param string $url Root-relative URL (may include query/fragment).
+	 * @return string
+	 */
+	private static function build_absolute_url_from_root_path( $url ) {
+		$url_parts = wp_parse_url( (string) $url );
+		if ( ! is_array( $url_parts ) ) {
+			return '';
+		}
+		$path = isset( $url_parts['path'] ) ? (string) $url_parts['path'] : '/';
+		if ( '' === $path ) {
+			$path = '/';
+		}
+		foreach ( array( home_url( '/' ), site_url( '/' ) ) as $base ) {
+			$base_parts = wp_parse_url( (string) $base );
+			if ( ! is_array( $base_parts ) || empty( $base_parts['host'] ) ) {
+				continue;
+			}
+			$scheme = ! empty( $base_parts['scheme'] ) ? (string) $base_parts['scheme'] : ( is_ssl() ? 'https' : 'http' );
+			$port   = ! empty( $base_parts['port'] ) ? ':' . (int) $base_parts['port'] : '';
+			$query  = isset( $url_parts['query'] ) ? '?' . $url_parts['query'] : '';
+			$frag   = isset( $url_parts['fragment'] ) ? '#' . $url_parts['fragment'] : '';
+			return $scheme . '://' . $base_parts['host'] . $port . $path . $query . $frag;
+		}
+		return '';
 	}
 
 	/**
@@ -484,8 +1428,7 @@ class TSOLIIN_Scanner {
 			$path = dirname( $path ) . '/';
 		}
 		$path = self::normalize_path( $path . ltrim( $relative, '/' ) );
-		$query = ! empty( $parts['query'] ) ? '?' . $parts['query'] : '';
-		return $scheme . '://' . $host . $port . $path . $query;
+		return $scheme . '://' . $host . $port . $path;
 	}
 
 	/**
@@ -536,31 +1479,85 @@ class TSOLIIN_Scanner {
 				}
 			}
 		}
+		$variants = self::add_internal_host_equivalent_urls( $url, $variants, $post_id );
+		if ( '' !== $resolved ) {
+			$variants = self::add_internal_host_equivalent_urls( $resolved, $variants, $post_id );
+		}
 		return array_values( array_unique( array_filter( $variants ) ) );
 	}
 
 	/**
-	 * Whether a stored URL still matches one of the URLs found in the latest scan.
+	 * www / non-www spellings for same-site absolute URLs.
 	 *
-	 * @param string   $stored_url Stored link_url.
-	 * @param string[] $found_urls URLs from current scan.
-	 * @param int      $post_id    Post ID.
-	 * @return bool
+	 * @param string   $url      URL.
+	 * @param string[] $variants Existing variants.
+	 * @param int      $post_id  Post context.
+	 * @return string[]
 	 */
-	private function url_still_found( $stored_url, $found_urls, $post_id ) {
-		if ( in_array( $stored_url, $found_urls, true ) ) {
-			return true;
+	private static function add_internal_host_equivalent_urls( $url, array $variants, $post_id = 0 ) {
+		$url = (string) $url;
+		if ( '' === $url || ! class_exists( 'TSOLIIN_HTTP' ) || ! TSOLIIN_HTTP::is_internal_link_url( $url, $post_id ) ) {
+			return $variants;
 		}
-		$stored_abs = self::resolve_to_absolute_url( $stored_url, $post_id );
-		foreach ( $found_urls as $found ) {
-			if ( $found === $stored_url ) {
-				return true;
-			}
-			if ( self::resolve_to_absolute_url( $found, $post_id ) === $stored_abs ) {
-				return true;
+		$alt = TSOLIIN_HTTP::toggle_www_host_in_url( $url );
+		if ( '' !== $alt && ! in_array( $alt, $variants, true ) ) {
+			$variants[] = $alt;
+		}
+		return $variants;
+	}
+
+	/**
+	 * URL strings that may appear in href/src for a stored link (frontend nofollow, etc.).
+	 *
+	 * @param string $url     Stored link URL.
+	 * @param int    $post_id Post ID for relative resolution.
+	 * @return string[]
+	 */
+	public static function get_href_match_variants( $url, $post_id = 0 ) {
+		$url     = (string) $url;
+		$post_id = absint( $post_id );
+		$decoded = urldecode( $url );
+		$core    = array( $url );
+		$resolved = self::resolve_to_absolute_url( $url, $post_id );
+		if ( '' !== $resolved && $resolved !== $url ) {
+			$core[] = $resolved;
+		}
+		if ( function_exists( 'wp_make_link_relative' ) ) {
+			foreach ( array( $url, $resolved ) as $candidate ) {
+				if ( '' === $candidate ) {
+					continue;
+				}
+				$rel = wp_make_link_relative( $candidate );
+				if ( is_string( $rel ) && '' !== $rel && ! in_array( $rel, $core, true ) ) {
+					$core[] = $rel;
+				}
 			}
 		}
-		return false;
+		$base = array_unique( array_filter( array_merge(
+			$core,
+			array(
+				$decoded,
+				rawurldecode( $url ),
+				html_entity_decode( $url, ENT_QUOTES, 'UTF-8' ),
+				str_replace( '&', '&amp;', $url ),
+				str_replace( '&', '&amp;', $decoded ),
+				str_replace( '&amp;', '&', $url ),
+				untrailingslashit( $url ),
+				trailingslashit( untrailingslashit( $url ) ),
+			)
+		) ) );
+		foreach ( $base as $candidate ) {
+			$base = self::add_internal_host_equivalent_urls( $candidate, $base, $post_id );
+		}
+
+		usort(
+			$base,
+			static function ( $a, $b ) {
+				return strlen( (string) $b ) - strlen( (string) $a );
+			}
+		);
+
+		return array_values( $base );
 	}
 
 	/**
@@ -585,12 +1582,6 @@ class TSOLIIN_Scanner {
 		return false;
 	}
 
-	/**
-	 * Remove items with duplicate URLs.
-	 *
-	 * @param array[] $items
-	 * @return array[]
-	 */
 	/**
 	 * Check if a URL matches the ignore list (domains or prefixes).
 	 *
@@ -643,6 +1634,7 @@ class TSOLIIN_Scanner {
 	 */
 	public function scan_post( $post_id, $force_all = false ) {
 		$post_id = absint( $post_id );
+		clean_post_cache( $post_id );
 		$post    = get_post( $post_id );
 		if ( ! $post || 'publish' !== $post->post_status ) {
 			$this->db->delete_links_for_post( $post_id );
@@ -653,76 +1645,92 @@ class TSOLIIN_Scanner {
 		$items = array();
 		$seen  = array();
 
-		// a href links.
+		// a href links (rendered + raw post_content).
 		$links = $this->extract_links( $html );
+		foreach ( $this->extract_links( $post->post_content ) as $item ) {
+			$this->push_scan_item( $items, $seen, $item, $post_id );
+		}
 		if ( empty( $links ) && false !== strpos( $post->post_content, 'href=' ) ) {
 			$links = $this->regex_links( $post->post_content );
 		}
 		foreach ( $links as $item ) {
-			$this->push_scan_item( $items, $seen, $item );
+			$this->push_scan_item( $items, $seen, $item, $post_id );
 		}
 
 		// Bare http(s) URLs in post_content (no <a> tag).
 		if ( $force_all || $this->opt( 'scan_plain_urls', true ) ) {
 			foreach ( $this->extract_plain_urls( $post->post_content ) as $item ) {
-				$this->push_scan_item( $items, $seen, $item );
+				$this->push_scan_item( $items, $seen, $item, $post_id );
 			}
 		}
 
 		// Gutenberg block attrs (url/link/href in JSON).
 		if ( $force_all || $this->opt( 'scan_block_attrs', true ) ) {
 			foreach ( $this->extract_block_urls( $post->post_content ) as $item ) {
-				$this->push_scan_item( $items, $seen, $item );
+				$this->push_scan_item( $items, $seen, $item, $post_id );
 			}
 		}
 
-		// img src.
+		// img src (rendered + raw post_content).
 		if ( $force_all || $this->opt( 'scan_images' ) ) {
+			foreach ( $this->extract_images( $post->post_content ) as $item ) {
+				$this->push_scan_item( $items, $seen, $item, $post_id );
+			}
 			foreach ( $this->extract_images( $html ) as $item ) {
-				$this->push_scan_item( $items, $seen, $item );
+				$this->push_scan_item( $items, $seen, $item, $post_id );
 			}
 		}
 
 		// srcset, picture, video, audio, embed, object.
 		if ( $force_all || $this->opt( 'scan_srcset', true ) ) {
 			foreach ( $this->extract_responsive_media_urls( $html ) as $item ) {
-				$this->push_scan_item( $items, $seen, $item );
+				$this->push_scan_item( $items, $seen, $item, $post_id );
 			}
 		}
 
 		// iframe src.
 		if ( $force_all || $this->opt( 'scan_iframes' ) ) {
 			foreach ( $this->extract_iframes( $html ) as $item ) {
-				$this->push_scan_item( $items, $seen, $item );
+				$this->push_scan_item( $items, $seen, $item, $post_id );
 			}
 		}
 
 		// Page-builder data-* link attributes.
 		if ( $force_all || $this->opt( 'scan_data_attrs', true ) ) {
 			foreach ( $this->extract_data_attr_urls( $html ) as $item ) {
-				$this->push_scan_item( $items, $seen, $item );
+				$this->push_scan_item( $items, $seen, $item, $post_id );
 			}
 			foreach ( $this->extract_data_attr_urls( $post->post_content ) as $item ) {
-				$this->push_scan_item( $items, $seen, $item );
+				$this->push_scan_item( $items, $seen, $item, $post_id );
 			}
 		}
 
 		// Meta fields (ACF, custom fields).
 		if ( $force_all || $this->opt( 'scan_meta' ) ) {
 			foreach ( $this->scan_meta( $post_id ) as $item ) {
-				$this->push_scan_item( $items, $seen, $item );
+				$this->push_scan_item( $items, $seen, $item, $post_id );
 			}
 		}
 
-		$found_urls = array();
+		$items = $this->enrich_scan_item_anchors( $items, $post->post_content, $post_id, $html );
+		$items = $this->finalize_scan_items( $items, $post_id );
+		$items = $this->reclassify_hyperlink_items( $items, $post->post_content, $post_id, $html );
+		$items = $this->reclassify_image_items( $items, $post->post_content, $post_id, $html );
+		$items = $this->reclassify_plain_text_items( $items, $post->post_content, $post_id );
+
+		$this->remove_stale( $post_id, $items );
+
 		foreach ( $items as $item ) {
 			if ( $this->is_ignored( $item['url'] ) ) {
 				continue;
 			}
-			$this->db->upsert_link( $post_id, $item['url'], $item['anchor'], isset( $item['type'] ) ? $item['type'] : 'link' );
-			$found_urls[] = $item['url'];
+			$type = isset( $item['type'] ) ? (string) $item['type'] : 'link';
+			if ( in_array( $type, array( 'link', 'image', 'iframe' ), true )
+				&& ! $this->is_url_editable_in_post( $post_id, $item['url'], $type ) ) {
+				continue;
+			}
+			$this->db->upsert_link( $post_id, $item['url'], $item['anchor'], $type );
 		}
-		$this->remove_stale( $post_id, $found_urls );
 		return count( $items );
 	}
 
@@ -734,63 +1742,85 @@ class TSOLIIN_Scanner {
 	 * @return array { scanned: int, found: int, done: bool }
 	 */
 	public function scan_batch( $page = 1, $per_page = TSOLIIN_BATCH_SIZE ) {
-		$ids = $this->get_post_ids( $page, $per_page );
-		if ( empty( $ids ) ) {
-			return array( 'scanned' => 0, 'found' => 0, 'done' => true );
-		}
+		$ids   = $this->get_post_ids( $page, $per_page );
+		$total = $this->get_total_posts();
+		$done  = empty( $ids ) || ( $page * $per_page >= $total ) || ( count( $ids ) < $per_page );
+
 		$found = 0;
-		foreach ( $ids as $id ) {
-			$found += $this->scan_post( $id );
+		if ( ! empty( $ids ) ) {
+			foreach ( $ids as $id ) {
+				$found += $this->scan_post( $id );
+			}
+			if ( $this->opt( 'scan_comments' ) ) {
+				$found += $this->scan_comments_batch( TSOLIIN_BATCH_SIZE * 5 );
+			}
+			if ( $this->opt( 'scan_menus', true ) ) {
+				$found += $this->scan_menus_batch( TSOLIIN_BATCH_SIZE * 5 );
+			}
+			if ( $this->opt( 'scan_terms', true ) ) {
+				$found += $this->scan_terms_batch( TSOLIIN_BATCH_SIZE * 5 );
+			}
+			if ( $this->opt( 'scan_fse', true ) ) {
+				$found += $this->scan_fse_batch( TSOLIIN_BATCH_SIZE * 2 );
+			}
+			if ( class_exists( 'TSOLIIN_Sources' ) ) {
+				$found += TSOLIIN_Sources::scan_registered_batch( $this, TSOLIIN_BATCH_SIZE * 2 );
+			}
 		}
-		if ( $this->opt( 'scan_comments' ) ) {
-			$found += $this->scan_comments_batch( TSOLIIN_BATCH_SIZE * 5 );
-		}
-		if ( $this->opt( 'scan_menus', true ) ) {
-			$found += $this->scan_menus_batch( TSOLIIN_BATCH_SIZE * 5 );
-		}
-		if ( $this->opt( 'scan_widgets', true ) ) {
+
+		if ( $done && $this->is_scan_widgets_enabled() ) {
+			$found += $this->scan_all_widgets();
+		} elseif ( ! empty( $ids ) && $this->is_scan_widgets_enabled() ) {
 			$found += $this->scan_widgets_batch( TSOLIIN_BATCH_SIZE * 3 );
 		}
-		if ( $this->opt( 'scan_terms', true ) ) {
-			$found += $this->scan_terms_batch( TSOLIIN_BATCH_SIZE * 5 );
-		}
-		if ( $this->opt( 'scan_fse', true ) ) {
-			$found += $this->scan_fse_batch( TSOLIIN_BATCH_SIZE * 2 );
-		}
-		if ( class_exists( 'TSOLIIN_Sources' ) ) {
-			$found += TSOLIIN_Sources::scan_registered_batch( $this, TSOLIIN_BATCH_SIZE * 2 );
-		}
-		$total = $this->get_total_posts();
-		$done  = ( $page * $per_page >= $total ) || ( count( $ids ) < $per_page );
 		return array( 'scanned' => count( $ids ), 'found' => $found, 'done' => $done );
 	}
 
 	/**
-	 * Remove DB rows for URLs no longer in a post.
+	 * Remove DB rows for URLs no longer found by the latest post scan.
 	 *
-	 * @param int      $post_id    Post ID.
-	 * @param string[] $found_urls URLs currently found.
+	 * @param int     $post_id Post ID.
+	 * @param array[] $items   Items from the current scan (url, anchor, type).
 	 */
-	private function remove_stale( $post_id, $found_urls ) {
+	private function remove_stale( $post_id, array $items ) {
 		global $wpdb;
-		$table = $this->db->get_table();
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+		$post_id = absint( $post_id );
+		$table   = $this->db->get_table();
+
+		$active = array();
+		foreach ( $items as $item ) {
+			$url = isset( $item['url'] ) ? (string) $item['url'] : '';
+			if ( '' === $url || $this->is_ignored( $url ) ) {
+				continue;
+			}
+			$type = isset( $item['type'] ) ? (string) $item['type'] : 'link';
+			if ( ! in_array( $type, array( 'link', 'image', 'iframe', 'plain' ), true ) ) {
+				continue;
+			}
+			$active[ $this->scan_url_key( $url, $post_id ) ] = true;
+		}
+
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix + fixed suffix.
 		$existing = $wpdb->get_results(
 			$wpdb->prepare(
-				// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-				"SELECT id, link_url FROM {$table} WHERE post_id = %d AND link_type NOT IN ('comment', 'menu', 'widget', 'term', 'template', 'wp_block')",
+				"SELECT id, link_url, link_type FROM {$table} WHERE post_id = %d AND link_type NOT IN ('comment', 'menu', 'widget', 'term', 'template', 'wp_block')",
 				$post_id
 			)
 		);
-			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		if ( empty( $existing ) ) {
 			return;
 		}
 		foreach ( $existing as $row ) {
-			if ( ! $this->url_still_found( (string) $row->link_url, $found_urls, $post_id ) ) {
-				$this->db->delete_link( (int) $row->id );
+			$type = isset( $row->link_type ) ? (string) $row->link_type : 'link';
+			if ( ! in_array( $type, array( 'link', 'image', 'iframe', 'plain' ), true ) ) {
+				continue;
 			}
+			$key = $this->scan_url_key( (string) $row->link_url, $post_id );
+			if ( isset( $active[ $key ] ) ) {
+				continue;
+			}
+			$this->db->delete_link( (int) $row->id );
 		}
 	}
 
@@ -809,32 +1839,14 @@ class TSOLIIN_Scanner {
 		if ( empty( $all_meta ) ) {
 			return array();
 		}
-		$s        = get_option( 'tsoliin_settings', array() );
-		$excluded = isset( $s['meta_exclude_keys'] ) && is_array( $s['meta_exclude_keys'] )
-			? array_map( 'sanitize_text_field', $s['meta_exclude_keys'] )
-			: $this->default_excluded_meta();
 
 		$out = array();
 		foreach ( $all_meta as $key => $values ) {
-			$key = (string) $key;
-			if ( in_array( $key, $excluded, true ) ) {
+			if ( ! $this->should_include_meta_key( (string) $key, (array) $values ) ) {
 				continue;
 			}
-			if ( isset( $key[0] ) && '_' === $key[0] ) {
-				$has = false;
-				foreach ( (array) $values as $v ) {
-					$val = maybe_unserialize( $v );
-					if ( is_string( $val ) && ( false !== strpos( $val, 'href=' ) || filter_var( trim( $val ), FILTER_VALIDATE_URL ) ) ) {
-						$has = true;
-						break;
-					}
-				}
-				if ( ! $has ) {
-					continue;
-				}
-			}
 			foreach ( (array) $values as $v ) {
-				$this->extract_meta_value( maybe_unserialize( $v ), $key, $out );
+				$this->extract_meta_value( maybe_unserialize( $v ), (string) $key, $out );
 			}
 		}
 		return $this->dedup( $out );
@@ -852,7 +1864,7 @@ class TSOLIIN_Scanner {
 					$item['anchor'] = $item['anchor'] ?: sanitize_text_field( $key );
 					$out[]          = $item;
 				}
-			} elseif ( filter_var( trim( $val ), FILTER_VALIDATE_URL ) && ! $this->skip_url( trim( $val ) ) ) {
+			} elseif ( $this->looks_like_link_url( $val ) ) {
 				$out[] = array( 'url' => $this->clean_url( trim( $val ) ), 'anchor' => sanitize_text_field( $key ), 'type' => 'link' );
 			}
 			if ( $this->opt( 'scan_meta_plain', true ) && is_string( $val ) ) {
@@ -862,8 +1874,17 @@ class TSOLIIN_Scanner {
 				}
 			}
 		} elseif ( is_array( $val ) ) {
-			foreach ( $val as $sub ) {
-				$this->extract_meta_value( $sub, $key, $out );
+			if ( isset( $val['url'] ) && is_string( $val['url'] ) && $this->looks_like_link_url( $val['url'] ) ) {
+				$anchor = ! empty( $val['title'] ) ? sanitize_text_field( (string) $val['title'] ) : sanitize_text_field( $key );
+				$out[]  = array(
+					'url'    => $this->clean_url( trim( (string) $val['url'] ) ),
+					'anchor' => $anchor,
+					'type'   => 'link',
+				);
+			} else {
+				foreach ( $val as $sub ) {
+					$this->extract_meta_value( $sub, $key, $out );
+				}
 			}
 		} elseif ( is_object( $val ) ) {
 			foreach ( get_object_vars( $val ) as $sub ) {
@@ -872,9 +1893,101 @@ class TSOLIIN_Scanner {
 		}
 	}
 
+	/**
+	 * Meta keys excluded from scan/replace (defaults plus user list from Settings).
+	 *
+	 * @return string[]
+	 */
+	private function get_meta_exclude_keys() {
+		$s    = get_option( 'tsoliin_settings', array() );
+		$user = array();
+		if ( isset( $s['meta_exclude_keys'] ) && is_array( $s['meta_exclude_keys'] ) ) {
+			foreach ( $s['meta_exclude_keys'] as $key ) {
+				$key = sanitize_text_field( (string) $key );
+				if ( '' !== $key ) {
+					$user[] = $key;
+				}
+			}
+		}
+		return array_values( array_unique( array_merge( $this->default_excluded_meta(), $user ) ) );
+	}
+
+	/**
+	 * Whether a meta key should be scanned or edited.
+	 *
+	 * @param string $key    Meta key.
+	 * @param array  $values Raw meta values.
+	 * @return bool
+	 */
+	private function should_include_meta_key( $key, array $values ) {
+		$key = (string) $key;
+		if ( in_array( $key, $this->get_meta_exclude_keys(), true ) ) {
+			return false;
+		}
+		if ( isset( $key[0] ) && '_' === $key[0] ) {
+			foreach ( $values as $v ) {
+				$val = maybe_unserialize( $v );
+				if ( $this->meta_value_might_contain_links( $val ) ) {
+					return true;
+				}
+			}
+			return false;
+		}
+		return true;
+	}
+
+	/**
+	 * Quick check whether a meta value may hold links (for private keys).
+	 *
+	 * @param mixed $val Meta value.
+	 * @return bool
+	 */
+	private function meta_value_might_contain_links( $val ) {
+		if ( is_string( $val ) ) {
+			return false !== strpos( $val, 'href=' )
+				|| $this->looks_like_link_url( $val )
+				|| ( $this->opt( 'scan_meta_plain', true ) && false !== preg_match( '#https?://#i', $val ) );
+		}
+		if ( is_array( $val ) ) {
+			if ( isset( $val['url'] ) && is_string( $val['url'] ) && $this->looks_like_link_url( $val['url'] ) ) {
+				return true;
+			}
+			foreach ( $val as $sub ) {
+				if ( $this->meta_value_might_contain_links( $sub ) ) {
+					return true;
+				}
+			}
+		}
+		if ( is_object( $val ) ) {
+			foreach ( get_object_vars( $val ) as $sub ) {
+				if ( $this->meta_value_might_contain_links( $sub ) ) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a string looks like a stored URL (absolute or site-relative).
+	 *
+	 * @param string $url Candidate URL.
+	 * @return bool
+	 */
+	private function looks_like_link_url( $url ) {
+		$url = trim( (string) $url );
+		if ( '' === $url || $this->skip_url( $url ) ) {
+			return false;
+		}
+		if ( filter_var( $url, FILTER_VALIDATE_URL ) ) {
+			return true;
+		}
+		return (bool) preg_match( '#^(?:https?://|/|\./|\.\./)#i', $url );
+	}
+
 	/** @return string[] */
 	private function default_excluded_meta() {
-		return array( '_edit_lock', '_edit_last', '_wp_trash_meta_status', '_wp_trash_meta_time', '_wp_old_slug', '_wp_old_date', '_wp_attachment_metadata', '_wp_attached_file', '_thumbnail_id', '_wp_page_template', '_yoast_wpseo_content_score', '_yoast_wpseo_focuskw', '_yoast_wpseo_metadesc', '_yoast_wpseo_title', '_yoast_wpseo_linkdex', '_rank_math_seo_score', '_rank_math_focus_keyword' );
+		return array( '_edit_lock', '_edit_last', '_wp_trash_meta_status', '_wp_trash_meta_time', '_wp_old_slug', '_wp_old_date', '_wp_attachment_metadata', '_wp_attached_file', '_thumbnail_id', '_wp_page_template', '_yoast_wpseo_content_score', '_yoast_wpseo_focuskw', '_yoast_wpseo_metadesc', '_yoast_wpseo_title', '_yoast_wpseo_linkdex', '_rank_math_seo_score', '_rank_math_focus_keyword', '_rank_math_internal_links', '_rank_math_internal_linking_processed', '_wpseo_internal_linking' );
 	}
 
 	// -------------------------------------------------------------------------
@@ -917,37 +2030,10 @@ class TSOLIIN_Scanner {
 		$max_id = $after_id;
 		foreach ( $comments as $comment ) {
 			$cid = absint( $comment->comment_ID );
-			$pid = absint( $comment->comment_post_ID );
 			if ( $cid ) {
 				$max_id = max( $max_id, $cid );
 			}
-			$allowed_keys = array();
-
-			foreach ( $this->extract_comment_links( (string) $comment->comment_content ) as $item ) {
-				$url = isset( $item['url'] ) ? (string) $item['url'] : '';
-				if ( '' === $url || $this->skip_url( $url ) || $this->is_ignored( $url ) ) {
-					continue;
-				}
-				/* translators: %d: comment ID */
-				$anchor = $item['anchor'] ?: sprintf( __( 'Comment #%d', 'tso-link-inspector' ), $cid );
-				$sk = $this->db->sanitize_source_key( 'c-' . $cid . '-l-' . md5( $url ) );
-				$allowed_keys[] = $sk;
-				$this->db->upsert_link( $pid, $url, $anchor, 'comment', $sk );
-				$found++;
-			}
-
-			$author_url = trim( (string) $comment->comment_author_url );
-			if ( $author_url && ! $this->skip_url( $author_url ) && ! $this->is_ignored( $author_url ) ) {
-				$clean = $this->clean_url( $author_url );
-				/* translators: %d: comment ID */
-				$anchor         = sprintf( __( 'Comment author #%d', 'tso-link-inspector' ), $cid );
-				$sk             = $this->db->sanitize_source_key( 'c-' . $cid . '-author' );
-				$allowed_keys[] = $sk;
-				$this->db->upsert_link( $pid, $clean, $anchor, 'comment', $sk );
-				$found++;
-			}
-
-			$this->db->delete_comment_sources_not_in( $pid, $cid, $allowed_keys );
+			$found += $this->scan_comment( $cid );
 		}
 
 		update_option( 'tsoliin_comment_scan_after_id', $max_id, false );
@@ -994,47 +2080,1141 @@ class TSOLIIN_Scanner {
 			if ( $item_id ) {
 				$max_id = max( $max_id, $item_id );
 			}
-			$post = get_post( $item_id );
-			if ( ! $post ) {
-				continue;
+			if ( $this->scan_nav_menu_item( $item_id ) > 0 ) {
+				$found++;
 			}
-			$item = wp_setup_nav_menu_item( $post );
-			if ( ! $item || empty( $item->url ) ) {
-				$this->db->delete_menu_sources_not_in( $item_id, array() );
-				continue;
-			}
-
-			$url = $this->clean_url( trim( (string) $item->url ) );
-			if ( '' === $url || $this->skip_url( $url ) || $this->is_ignored( $url ) ) {
-				$this->db->delete_menu_sources_not_in( $item_id, array() );
-				continue;
-			}
-
-			$post_id = absint( $item->object_id );
-			if ( 'post_type' !== $item->type || ! $post_id ) {
-				$post_id = $item_id;
-			}
-
-			$anchor = sanitize_text_field( (string) $item->title );
-			if ( '' === $anchor ) {
-				/* translators: %d: navigation menu item ID */
-				$anchor = sprintf( __( 'Menu item #%d', 'tso-link-inspector' ), $item_id );
-			}
-
-			$sk             = $this->db->sanitize_source_key( 'mi-' . $item_id );
-			$allowed_keys   = array( $sk );
-			$this->db->upsert_link( $post_id, $url, $anchor, 'menu', $sk );
-			$this->db->delete_menu_sources_not_in( $item_id, $allowed_keys );
-			$found++;
 		}
 
 		update_option( 'tsoliin_menu_scan_after_id', $max_id, false );
 		return $found;
 	}
 
+	/**
+	 * Scan one navigation menu item and sync its inspector row(s).
+	 *
+	 * @param int $item_id nav_menu_item post ID.
+	 * @return int Inspector row ID, or 0 when removed / not found.
+	 */
+	public function scan_nav_menu_item( $item_id ) {
+		$item_id = absint( $item_id );
+		if ( ! $item_id || ! $this->opt( 'scan_menus', true ) ) {
+			if ( $item_id ) {
+				$this->db->delete_menu_sources_not_in( $item_id, array() );
+			}
+			return 0;
+		}
+
+		$post = get_post( $item_id );
+		if ( ! $post || 'nav_menu_item' !== $post->post_type || 'publish' !== $post->post_status ) {
+			$this->db->delete_menu_sources_not_in( $item_id, array() );
+			return 0;
+		}
+
+		$item = wp_setup_nav_menu_item( $post );
+		if ( ! $item || empty( $item->url ) ) {
+			$this->db->delete_menu_sources_not_in( $item_id, array() );
+			return 0;
+		}
+
+		$url = $this->clean_url( trim( (string) $item->url ) );
+		if ( '' === $url || $this->skip_url( $url ) || $this->is_ignored( $url ) ) {
+			$this->db->delete_menu_sources_not_in( $item_id, array() );
+			return 0;
+		}
+
+		$post_id = absint( $item->object_id );
+		if ( 'post_type' !== $item->type || ! $post_id ) {
+			$post_id = $item_id;
+		}
+
+		$anchor = sanitize_text_field( (string) $item->title );
+		if ( '' === $anchor ) {
+			/* translators: %d: navigation menu item ID */
+			$anchor = sprintf( __( 'Menu item #%d', 'tso-link-inspector' ), $item_id );
+		}
+
+		$sk           = $this->db->sanitize_source_key( 'mi-' . $item_id );
+		$allowed_keys = array( $sk );
+		$row_id       = $this->db->upsert_link( $post_id, $url, $anchor, 'menu', $sk );
+		$this->db->delete_menu_sources_not_in( $item_id, $allowed_keys, $url );
+
+		return is_int( $row_id ) && $row_id > 0 ? $row_id : 0;
+	}
+
+	/**
+	 * Re-read a menu item from WordPress and refresh its inspector row.
+	 *
+	 * @param object $link DB row.
+	 * @return int Updated row ID, or 0 if removed.
+	 */
+	public function rescan_menu_link( $link ) {
+		if ( ! $link || empty( $link->source_key ) ) {
+			return ! empty( $link->id ) ? (int) $link->id : 0;
+		}
+		if ( ! preg_match( '/^mi-(\d+)/', (string) $link->source_key, $matches ) ) {
+			return ! empty( $link->id ) ? (int) $link->id : 0;
+		}
+		$row_id = $this->scan_nav_menu_item( absint( $matches[1] ) );
+		if ( $row_id > 0 ) {
+			return $row_id;
+		}
+		$row = $this->find_link_row_after_rescan( $link );
+		return $row ? (int) $row->id : 0;
+	}
+
+	/**
+	 * Scan one approved comment for links.
+	 *
+	 * @param int $comment_id Comment ID.
+	 * @return int Items found.
+	 */
+	public function scan_comment( $comment_id ) {
+		$comment_id = absint( $comment_id );
+		if ( $comment_id <= 0 ) {
+			return 0;
+		}
+		$comment = get_comment( $comment_id );
+		if ( ! $comment || '1' !== (string) $comment->comment_approved ) {
+			$this->db->delete_comment_sources_not_in( 0, $comment_id, array() );
+			return 0;
+		}
+
+		$cid          = $comment_id;
+		$pid          = absint( $comment->comment_post_ID );
+		$allowed_keys = array();
+		$found        = 0;
+
+		foreach ( $this->extract_comment_links( (string) $comment->comment_content ) as $item ) {
+			$url = isset( $item['url'] ) ? (string) $item['url'] : '';
+			if ( '' === $url || $this->skip_url( $url ) || $this->is_ignored( $url ) ) {
+				continue;
+			}
+			/* translators: %d: comment ID */
+			$anchor         = $item['anchor'] ?: sprintf( __( 'Comment #%d', 'tso-link-inspector' ), $cid );
+			$sk             = $this->db->sanitize_source_key( 'c-' . $cid . '-l-' . md5( $url ) );
+			$allowed_keys[] = $sk;
+			$this->db->upsert_link( $pid, $url, $anchor, 'comment', $sk );
+			$found++;
+		}
+
+		$author_url = trim( (string) $comment->comment_author_url );
+		if ( $author_url && ! $this->skip_url( $author_url ) && ! $this->is_ignored( $author_url ) ) {
+			$clean = $this->clean_url( $author_url );
+			/* translators: %d: comment ID */
+			$anchor         = sprintf( __( 'Comment author #%d', 'tso-link-inspector' ), $cid );
+			$sk             = $this->db->sanitize_source_key( 'c-' . $cid . '-author' );
+			$allowed_keys[] = $sk;
+			$this->db->upsert_link( $pid, $clean, $anchor, 'comment', $sk );
+			$found++;
+		}
+
+		$this->db->delete_comment_sources_not_in( $pid, $cid, $allowed_keys );
+		return $found;
+	}
+
+	/**
+	 * Re-read a comment from WordPress and refresh its inspector row.
+	 *
+	 * @param object $link DB row.
+	 * @return int Updated row ID, or 0 if removed.
+	 */
+	public function rescan_comment_link( $link ) {
+		if ( ! $link ) {
+			return 0;
+		}
+		$comment_id = TSOLIIN_Support::get_comment_id_from_link_row( $link );
+		if ( $comment_id <= 0 ) {
+			return ! empty( $link->id ) ? (int) $link->id : 0;
+		}
+		$this->scan_comment( $comment_id );
+		$row = $this->find_link_row_after_rescan( $link );
+		return $row ? (int) $row->id : 0;
+	}
+
+	/**
+	 * Scan one taxonomy term description for links.
+	 *
+	 * @param int $term_id Term ID.
+	 * @return int Items found.
+	 */
+	public function scan_term( $term_id ) {
+		$term_id = absint( $term_id );
+		if ( $term_id <= 0 ) {
+			return 0;
+		}
+		$term = get_term( $term_id );
+		if ( ! $term || is_wp_error( $term ) ) {
+			$this->db->delete_sources_not_in( 'term', 't-' . $term_id . '-', array(), 0 );
+			return 0;
+		}
+
+		$desc = isset( $term->description ) ? (string) $term->description : '';
+		if ( '' === trim( $desc ) ) {
+			$this->db->delete_sources_not_in( 'term', 't-' . $term_id . '-', array(), 0 );
+			return 0;
+		}
+
+		$taxonomy = sanitize_key( (string) $term->taxonomy );
+		$name     = sanitize_text_field( (string) $term->name );
+		$tax_obj  = get_taxonomy( $taxonomy );
+		$tax_lbl  = ( $tax_obj && ! empty( $tax_obj->labels->singular_name ) )
+			? (string) $tax_obj->labels->singular_name
+			: $taxonomy;
+		/* translators: 1: taxonomy label, 2: term name */
+		$default_anchor = sprintf( __( '%1$s: %2$s', 'tso-link-inspector' ), $tax_lbl, $name );
+		$prefix         = 't-' . $term_id . '-';
+		$allowed        = array();
+		$found          = 0;
+
+		foreach ( $this->extract_all_url_items( $desc, $desc ) as $item ) {
+			$url = isset( $item['url'] ) ? (string) $item['url'] : '';
+			if ( '' === $url || $this->skip_url( $url ) || $this->is_ignored( $url ) ) {
+				continue;
+			}
+			$sk        = $this->db->sanitize_source_key( $prefix . md5( $url ) );
+			$allowed[] = $sk;
+			$anchor    = ! empty( $item['anchor'] ) ? (string) $item['anchor'] : $default_anchor;
+			$this->db->upsert_link( 0, $url, $anchor, 'term', $sk );
+			$found++;
+		}
+
+		$this->db->delete_sources_not_in( 'term', $prefix, $allowed, 0 );
+		return $found;
+	}
+
+	/**
+	 * Re-read a term from WordPress and refresh its inspector row.
+	 *
+	 * @param object $link DB row.
+	 * @return int Updated row ID, or 0 if removed.
+	 */
+	public function rescan_term_link( $link ) {
+		if ( ! $link || empty( $link->source_key ) ) {
+			return ! empty( $link->id ) ? (int) $link->id : 0;
+		}
+		if ( ! preg_match( '/^t-(\d+)-/', (string) $link->source_key, $matches ) ) {
+			return ! empty( $link->id ) ? (int) $link->id : 0;
+		}
+		$this->scan_term( absint( $matches[1] ) );
+		$row = $this->find_link_row_after_rescan( $link );
+		return $row ? (int) $row->id : 0;
+	}
+
+	/**
+	 * Re-read an FSE template or reusable block and refresh its inspector row.
+	 *
+	 * @param object $link DB row.
+	 * @return int Updated row ID, or 0 if removed.
+	 */
+	public function rescan_storage_post_link( $link ) {
+		if ( ! $link ) {
+			return 0;
+		}
+		$post_id   = (int) $link->post_id;
+		$link_type = isset( $link->link_type ) ? sanitize_key( (string) $link->link_type ) : '';
+		if ( ! $post_id || ! in_array( $link_type, array( 'template', 'wp_block' ), true ) ) {
+			return ! empty( $link->id ) ? (int) $link->id : 0;
+		}
+		$this->scan_storage_post( $post_id, $link_type );
+		$row = $this->find_link_row_after_rescan( $link );
+		return $row ? (int) $row->id : 0;
+	}
+
+	/**
+	 * Resolve the DB row for a link after re-reading its WordPress source.
+	 *
+	 * @param object $original    Row before rescan.
+	 * @param int    $hint_row_id Scanner hint (e.g. menu upsert ID).
+	 * @return object|null
+	 */
+	public function find_link_row_after_rescan( $original, $hint_row_id = 0 ) {
+		if ( ! $original ) {
+			return null;
+		}
+		$hint_row_id = absint( $hint_row_id );
+		if ( $hint_row_id > 0 ) {
+			$row = $this->db->get_link( $hint_row_id );
+			if ( $row ) {
+				return $row;
+			}
+		}
+		$orig_id = ! empty( $original->id ) ? (int) $original->id : 0;
+		if ( $orig_id > 0 ) {
+			$row = $this->db->get_link( $orig_id );
+			if ( $row ) {
+				return $row;
+			}
+		}
+
+		$type    = isset( $original->link_type ) ? (string) $original->link_type : '';
+		$post_id = (int) ( $original->post_id ?? 0 );
+		$old_url = isset( $original->link_url ) ? (string) $original->link_url : '';
+		$sk      = isset( $original->source_key ) ? (string) $original->source_key : '';
+
+		if ( '' !== $old_url ) {
+			$row = $this->db->get_link_by_post_url( $post_id, $old_url, $type, $sk );
+			if ( $row ) {
+				return $row;
+			}
+		}
+
+		if ( 'menu' === $type && '' !== $sk ) {
+			$row = $this->db->get_link_by_source_key( $sk, 'menu', $post_id );
+			if ( $row ) {
+				return $row;
+			}
+		}
+
+		if ( preg_match( '/^(c-\d+-)/', $sk, $matches ) ) {
+			return $this->resolve_row_after_prefix_rescan( 'comment', $matches[1], $post_id, $old_url, $original );
+		}
+		if ( preg_match( '/^(t-\d+-)/', $sk, $matches ) ) {
+			return $this->resolve_row_after_prefix_rescan( 'term', $matches[1], 0, $old_url, $original );
+		}
+		if ( preg_match( '/^(st-\d+-)/', $sk, $matches ) ) {
+			return $this->resolve_row_after_prefix_rescan( $type, $matches[1], $post_id, $old_url, $original );
+		}
+		if ( 0 === strpos( $sk, 'wg-' ) ) {
+			$resolved = $this->resolve_widget_from_source_key( $sk );
+			if ( $resolved ) {
+				$prefix = $this->db->sanitize_source_key( 'wg-' . $resolved['sidebar_id'] . '-' . $resolved['widget_id'] . '-' );
+				return $this->resolve_row_after_prefix_rescan( 'widget', $prefix, 0, $old_url, $original );
+			}
+		}
+
+		if ( $post_id > 0 && in_array( $type, array( 'link', 'image', 'iframe', 'plain' ), true ) ) {
+			return $this->resolve_post_content_row_after_rescan( $original );
+		}
+
+		return null;
+	}
+
+	/**
+	 * Pick the best row after a prefix-based rescan (comment, term, widget, FSE).
+	 *
+	 * @param string $link_type Link type.
+	 * @param string $prefix    Source key prefix.
+	 * @param int    $post_id   Post ID filter (0 = none).
+	 * @param string $old_url   URL before edit.
+	 * @param object $original  Original row.
+	 * @return object|null
+	 */
+	private function resolve_row_after_prefix_rescan( $link_type, $prefix, $post_id, $old_url, $original ) {
+		$filter_post = in_array( $link_type, array( 'term', 'widget' ), true ) ? 0 : ( $post_id > 0 ? $post_id : null );
+		$rows        = $this->db->get_links_by_source_prefix( $link_type, $prefix, $filter_post );
+		if ( empty( $rows ) ) {
+			return null;
+		}
+		foreach ( $rows as $row ) {
+			if ( TSOLIIN_HTTP::urls_equivalent_for_verify_lock( (string) $row->link_url, $old_url ) ) {
+				return $row;
+			}
+		}
+		if ( 1 === count( $rows ) ) {
+			return $rows[0];
+		}
+
+		$source_ok = array();
+		foreach ( $rows as $row ) {
+			if ( $this->is_url_editable_in_source( $row ) ) {
+				$source_ok[] = $row;
+			}
+		}
+		if ( 1 === count( $source_ok ) ) {
+			return $source_ok[0];
+		}
+
+		if ( ! $this->is_url_editable_in_source( $original ) ) {
+			$changed = array();
+			foreach ( $source_ok as $row ) {
+				if ( ! TSOLIIN_HTTP::urls_equivalent_for_verify_lock( (string) $row->link_url, $old_url ) ) {
+					$changed[] = $row;
+				}
+			}
+			if ( 1 === count( $changed ) ) {
+				return $changed[0];
+			}
+			$old_anchor = isset( $original->anchor_text ) ? (string) $original->anchor_text : '';
+			if ( '' !== $old_anchor ) {
+				foreach ( $source_ok as $row ) {
+					if ( (string) $row->anchor_text === $old_anchor ) {
+						return $row;
+					}
+				}
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Pick the best post-content row after the URL changed in the editor.
+	 *
+	 * @param object $original Original row.
+	 * @return object|null
+	 */
+	private function resolve_post_content_row_after_rescan( $original ) {
+		$post_id = (int) $original->post_id;
+		$type    = (string) $original->link_type;
+		$old_url = (string) $original->link_url;
+		$rows    = $this->db->get_links_by_post_and_type( $post_id, $type, '' );
+		if ( empty( $rows ) ) {
+			return null;
+		}
+		foreach ( $rows as $row ) {
+			if ( TSOLIIN_HTTP::urls_equivalent_for_verify_lock( (string) $row->link_url, $old_url ) ) {
+				return $row;
+			}
+		}
+		if ( $this->is_url_editable_in_post( $post_id, $old_url, $type ) ) {
+			return null;
+		}
+
+		$candidates = array();
+		foreach ( $rows as $row ) {
+			if ( $this->is_url_editable_in_post( $post_id, (string) $row->link_url, $type ) ) {
+				$candidates[] = $row;
+			}
+		}
+		$old_anchor = isset( $original->anchor_text ) ? (string) $original->anchor_text : '';
+		if ( '' !== $old_anchor ) {
+			foreach ( $candidates as $row ) {
+				if ( (string) $row->anchor_text === $old_anchor ) {
+					return $row;
+				}
+			}
+		}
+		$changed = array();
+		foreach ( $candidates as $row ) {
+			if ( ! TSOLIIN_HTTP::urls_equivalent_for_verify_lock( (string) $row->link_url, $old_url ) ) {
+				$changed[] = $row;
+			}
+		}
+		if ( 1 === count( $changed ) ) {
+			return $changed[0];
+		}
+
+		return null;
+	}
+
 	// -------------------------------------------------------------------------
 	// Post content manipulation
 	// -------------------------------------------------------------------------
+
+	/**
+	 * URL strings that may appear in post/comment HTML for a stored link URL.
+	 *
+	 * Longest variants are tried first so a trailing-slash mismatch does not fall through
+	 * to a bare "/" and corrupt closing tags via a whole-content str_replace.
+	 *
+	 * @param string $old_url Stored link URL.
+	 * @param int    $post_id Post ID for relative resolution.
+	 * @return string[]
+	 */
+	private function build_url_replace_candidates( $old_url, $post_id = 0 ) {
+		$old_url  = (string) $old_url;
+		$post_id  = absint( $post_id );
+		$decoded  = urldecode( $old_url );
+		$candidates = array_unique( array_filter( array_merge(
+			$this->url_content_variants( $old_url, $post_id ),
+			array(
+				$decoded,
+				rawurldecode( $old_url ),
+				esc_url_raw( $old_url ),
+				esc_url_raw( $decoded ),
+				html_entity_decode( $old_url, ENT_QUOTES, 'UTF-8' ),
+				str_replace( '&', '&amp;', $old_url ),
+				str_replace( '&', '&amp;', $decoded ),
+				str_replace( '&amp;', '&', $old_url ),
+				untrailingslashit( $old_url ),
+				trailingslashit( untrailingslashit( $old_url ) ),
+			),
+			$this->json_slash_url_variants( $old_url ),
+			$this->json_slash_url_variants( $decoded ),
+			$this->percent_placeholder_url_variants( $old_url ),
+			$this->percent_placeholder_url_variants( $decoded )
+		) ) );
+
+		usort(
+			$candidates,
+			static function ( $a, $b ) {
+				return strlen( (string) $b ) - strlen( (string) $a );
+			}
+		);
+
+		return array_values( $candidates );
+	}
+
+	/**
+	 * URL variants for replace/preview, including exact spellings found in post HTML.
+	 *
+	 * @param string $old_url Stored URL.
+	 * @param int    $post_id Post ID.
+	 * @param string $content Raw post content.
+	 * @return string[]
+	 */
+	private function build_url_replace_candidates_for_content( $old_url, $post_id, $content ) {
+		$candidates = $this->build_url_replace_candidates( $old_url, $post_id );
+		if ( '' !== trim( (string) $content ) ) {
+			$candidates = array_merge(
+				$candidates,
+				$this->get_content_url_spellings_for_stored( (string) $content, (string) $old_url, $post_id )
+			);
+		}
+		$candidates = array_unique( array_filter( $candidates ) );
+		usort(
+			$candidates,
+			static function ( $a, $b ) {
+				return strlen( (string) $b ) - strlen( (string) $a );
+			}
+		);
+		return array_values( $candidates );
+	}
+
+	/**
+	 * WordPress KSES may replace "%" in stored href values with "{sha256}" placeholders.
+	 *
+	 * @return string
+	 */
+	private function wp_kses_url_percent_placeholder_hash() {
+		if ( ! function_exists( 'wp_salt' ) ) {
+			return '';
+		}
+		return hash_hmac( 'sha256', 'url', wp_salt( 'auth' ) );
+	}
+
+	/**
+	 * Toggle between "%" and "{hash}" percent-encoding placeholders.
+	 *
+	 * @param string $url URL.
+	 * @return string[]
+	 */
+	private function percent_placeholder_url_variants( $url ) {
+		$url      = (string) $url;
+		$variants = array();
+		if ( preg_match_all( '/\{[a-f0-9]{64}\}/i', $url, $matches ) ) {
+			$decoded = $url;
+			foreach ( array_unique( $matches[0] ) as $token ) {
+				$decoded = str_replace( $token, '%', $decoded );
+			}
+			$variants[] = $decoded;
+		}
+		$hash = $this->wp_kses_url_percent_placeholder_hash();
+		if ( '' !== $hash && false !== strpos( $url, '%' ) ) {
+			$variants[] = str_replace( '%', '{' . $hash . '}', $url );
+		}
+		if ( '' !== $hash && false !== strpos( $url, '{' . $hash . '}' ) ) {
+			$variants[] = str_replace( '{' . $hash . '}', '%', $url );
+		}
+		return array_values( array_unique( array_filter( $variants ) ) );
+	}
+
+	/**
+	 * Normalize a URL for fuzzy equivalence checks (placeholders, case, entities).
+	 *
+	 * @param string $url URL.
+	 * @return string
+	 */
+	private function normalize_url_for_matching( $url ) {
+		$url = html_entity_decode( (string) $url, ENT_QUOTES, 'UTF-8' );
+		$url = str_replace( '&amp;', '&', $url );
+		$url = preg_replace( '/\{[a-f0-9]{64}\}/i', '%', $url );
+		$hash = $this->wp_kses_url_percent_placeholder_hash();
+		if ( '' !== $hash ) {
+			$url = str_replace( '{' . $hash . '}', '%', $url );
+		}
+		return strtolower( $url );
+	}
+
+	/**
+	 * Whether an attribute value in post content refers to the stored URL.
+	 *
+	 * @param string $stored     URL from the DB.
+	 * @param string $attr_value href/src spelling in content.
+	 * @param int    $post_id    Post ID.
+	 * @return bool
+	 */
+	private function url_attribute_matches_stored( $stored, $attr_value, $post_id = 0 ) {
+		$stored     = (string) $stored;
+		$attr_value = (string) $attr_value;
+		if ( '' === $stored || '' === $attr_value ) {
+			return false;
+		}
+		if ( 0 === strcasecmp( $stored, $attr_value ) ) {
+			return true;
+		}
+		$stored_abs = self::resolve_to_absolute_url( $stored, $post_id );
+		$attr_abs   = self::resolve_to_absolute_url( $attr_value, $post_id );
+		if (
+			'' !== $stored_abs
+			&& '' !== $attr_abs
+			&& class_exists( 'TSOLIIN_HTTP' )
+			&& TSOLIIN_HTTP::is_http_same_resource_bar_www( $stored_abs, $attr_abs )
+		) {
+			return true;
+		}
+		foreach ( $this->build_url_replace_candidates( $stored, $post_id ) as $variant ) {
+			if ( 0 === strcasecmp( (string) $variant, $attr_value ) ) {
+				return true;
+			}
+		}
+		$norm_stored = $this->normalize_url_for_matching( $stored );
+		$norm_attr   = $this->normalize_url_for_matching( $attr_value );
+		if ( $norm_stored === $norm_attr ) {
+			return true;
+		}
+		$min = 32;
+		if ( strlen( $norm_stored ) >= $min && 0 === strpos( $norm_attr, $norm_stored ) ) {
+			return true;
+		}
+		if ( strlen( $norm_attr ) >= $min && 0 === strpos( $norm_stored, $norm_attr ) ) {
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Attribute names scanned when locating editable URLs in HTML.
+	 *
+	 * @return string[]
+	 */
+	private function get_editable_url_attributes() {
+		return array( 'href', 'src', 'data-url', 'data-href', 'data-link', 'data-button-url', 'data-bg-url', 'data-src' );
+	}
+
+	/**
+	 * Load post HTML into DOMDocument (shared helper).
+	 *
+	 * @param string $html HTML fragment.
+	 * @return DOMDocument|null
+	 */
+	private function load_dom_for_html( $html ) {
+		if ( '' === trim( (string) $html ) ) {
+			return null;
+		}
+		$wrapped = '<html><head><meta charset="UTF-8"></head><body>' . (string) $html . '</body></html>';
+		$dom     = new DOMDocument( '1.0', 'UTF-8' );
+		libxml_use_internal_errors( true );
+		if ( ! $dom->loadHTML( $wrapped, LIBXML_NONET | LIBXML_NOWARNING ) ) {
+			libxml_clear_errors();
+			return null;
+		}
+		libxml_clear_errors();
+		return $dom;
+	}
+
+	/**
+	 * Exact href/src spellings in raw content that match a stored (possibly truncated) URL.
+	 *
+	 * @param string $content    post_content.
+	 * @param string $stored_url URL from DB.
+	 * @param int    $post_id    Post ID.
+	 * @return string[]
+	 */
+	private function get_content_url_spellings_for_stored( $content, $stored_url, $post_id = 0 ) {
+		$content    = (string) $content;
+		$stored_url = (string) $stored_url;
+		if ( '' === $content || '' === $stored_url ) {
+			return array();
+		}
+
+		$spellings = array();
+		$dom       = $this->load_dom_for_html( $content );
+		if ( $dom && $dom->documentElement ) {
+			$body = $dom->getElementsByTagName( 'body' )->item( 0 );
+			if ( $body ) {
+				$walk = function ( DOMNode $node ) use ( &$walk, &$spellings, $stored_url, $post_id ) {
+					if ( XML_ELEMENT_NODE === $node->nodeType && $node instanceof DOMElement ) {
+						foreach ( $this->get_editable_url_attributes() as $attr ) {
+							if ( ! $node->hasAttribute( $attr ) ) {
+								continue;
+							}
+							$val = trim( (string) $node->getAttribute( $attr ) );
+							if ( '' !== $val && $this->url_attribute_matches_stored( $stored_url, $val, $post_id ) ) {
+								$spellings[] = $val;
+							}
+						}
+						if ( $node->hasAttribute( 'srcset' ) ) {
+							foreach ( preg_split( '/\s*,\s*/', (string) $node->getAttribute( 'srcset' ) ) as $part ) {
+								$chunks = preg_split( '/\s+/', trim( (string) $part ), 2 );
+								$val    = isset( $chunks[0] ) ? trim( (string) $chunks[0] ) : '';
+								if ( '' !== $val && $this->url_attribute_matches_stored( $stored_url, $val, $post_id ) ) {
+									$spellings[] = $val;
+								}
+							}
+						}
+					}
+					if ( $node->hasChildNodes() ) {
+						foreach ( $node->childNodes as $child ) {
+							$walk( $child );
+						}
+					}
+				};
+				$walk( $body );
+			}
+		}
+
+		foreach ( $this->build_url_replace_candidates( $stored_url, $post_id ) as $variant ) {
+			if ( '' !== $variant && false !== stripos( $content, (string) $variant ) ) {
+				$spellings[] = (string) $variant;
+			}
+		}
+
+		$spellings = array_values( array_unique( array_filter( $spellings ) ) );
+		$expanded  = array();
+		foreach ( $spellings as $spelling ) {
+			$expanded[] = $spelling;
+			if ( false !== strpos( $spelling, '&' ) && false === stripos( $spelling, '&amp;' ) ) {
+				$expanded[] = str_replace( '&', '&amp;', $spelling );
+			}
+			if ( false !== stripos( $spelling, '&amp;' ) ) {
+				$expanded[] = str_replace( '&amp;', '&', $spelling );
+			}
+		}
+		$spellings = array_values( array_unique( array_filter( $expanded ) ) );
+		usort(
+			$spellings,
+			static function ( $a, $b ) {
+				return strlen( (string) $b ) - strlen( (string) $a );
+			}
+		);
+		return $spellings;
+	}
+
+	/**
+	 * Extract the opening HTML tag around an attribute value from raw content.
+	 *
+	 * @param string $content    Raw HTML.
+	 * @param string $attr       Attribute name.
+	 * @param string $attr_value Exact attribute value.
+	 * @return string
+	 */
+	private function extract_tag_snippet_for_attr_value( $content, $attr, $attr_value ) {
+		$content    = (string) $content;
+		$attr       = (string) $attr;
+		$attr_value = (string) $attr_value;
+		if ( '' === $content || '' === $attr || '' === $attr_value ) {
+			return '';
+		}
+		foreach ( array( '"', "'" ) as $quote ) {
+			$needle = $attr . '=' . $quote . $attr_value . $quote;
+			$pos    = stripos( $content, $needle );
+			if ( false === $pos ) {
+				continue;
+			}
+			$start = strrpos( substr( $content, 0, $pos ), '<' );
+			$end   = strpos( $content, '>', $pos );
+			if ( false !== $start && false !== $end ) {
+				return substr( $content, $start, $end - $start + 1 );
+			}
+		}
+		return '';
+	}
+
+	/**
+	 * Gutenberg block JSON often stores URLs with escaped slashes.
+	 *
+	 * @param string $url URL.
+	 * @return string[]
+	 */
+	private function json_slash_url_variants( $url ) {
+		$url = (string) $url;
+		if ( '' === $url || false === strpos( $url, '/' ) ) {
+			return array();
+		}
+		return array_unique(
+			array_filter(
+				array(
+					str_replace( '/', '\/', $url ),
+					str_replace( '/', '\\/', $url ),
+				)
+			)
+		);
+	}
+
+	/**
+	 * Whether a URL exists in editable post storage (content or custom fields).
+	 *
+	 * @param int    $post_id   Post ID.
+	 * @param string $url       Stored URL.
+	 * @param string $link_type link|image|iframe.
+	 * @return bool
+	 */
+	public function is_url_editable_in_post( $post_id, $url, $link_type = 'link' ) {
+		unset( $link_type );
+		$post_id = absint( $post_id );
+		$url     = (string) $url;
+		if ( $post_id <= 0 || '' === $url ) {
+			return false;
+		}
+		$post = get_post( $post_id );
+		if ( ! $post || ! is_string( $post->post_content ) ) {
+			return false;
+		}
+		if ( $this->url_located_in_string( $post->post_content, $url, $post_id ) ) {
+			return true;
+		}
+		return $this->locate_url_in_post_meta( $post_id, $url )['found'];
+	}
+
+	/**
+	 * Whether this DB row can be changed with the inline editor.
+	 *
+	 * @param object $link Link row.
+	 * @return bool
+	 */
+	public function is_url_editable_in_source( $link ) {
+		if ( ! $link || empty( $link->link_url ) ) {
+			return false;
+		}
+		$type = isset( $link->link_type ) ? (string) $link->link_type : 'link';
+		if ( 'plain' === $type ) {
+			return false;
+		}
+		$url = (string) $link->link_url;
+		$sk  = isset( $link->source_key ) ? (string) $link->source_key : '';
+
+		if ( 'comment' === $type ) {
+			$comment_id = $this->comment_id_from_source_key( $sk, (int) $link->post_id );
+			if ( $comment_id <= 0 ) {
+				return false;
+			}
+			$comment = get_comment( $comment_id );
+			return $comment && $this->url_located_in_string( (string) $comment->comment_content, $url, (int) $link->post_id );
+		}
+		if ( 'widget' === $type ) {
+			$content = $this->get_widget_content_by_source_key( $sk );
+			return '' !== $content && $this->url_located_in_string( $content, $url, 0 );
+		}
+		if ( 'menu' === $type && preg_match( '/^mi-(\d+)/', $sk, $m ) ) {
+			$item_url = get_post_meta( absint( $m[1] ), '_menu_item_url', true );
+			return is_string( $item_url ) && '' !== $item_url && $this->urls_match_for_edit( $item_url, $url );
+		}
+		if ( 'term' === $type && preg_match( '/^t-(\d+)-/', $sk, $m ) ) {
+			$term = get_term( absint( $m[1] ) );
+			return $term && ! is_wp_error( $term ) && $this->url_located_in_string( (string) $term->description, $url, 0 );
+		}
+		if ( ! empty( $link->post_id ) ) {
+			return $this->is_url_editable_in_post( (int) $link->post_id, $url, $type );
+		}
+		return false;
+	}
+
+	/**
+	 * @param string $stored Stored value.
+	 * @param string $needle URL to find.
+	 * @return bool
+	 */
+	private function urls_match_for_edit( $stored, $needle ) {
+		$stored = $this->clean_url( (string) $stored );
+		$needle = $this->clean_url( (string) $needle );
+		if ( '' === $stored || '' === $needle ) {
+			return false;
+		}
+		if ( $stored === $needle ) {
+			return true;
+		}
+		foreach ( $this->build_url_replace_candidates( $needle, 0 ) as $variant ) {
+			if ( $stored === $variant ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * @param string $content HTML or block markup.
+	 * @param string $url     Stored URL.
+	 * @param int    $post_id Post ID.
+	 * @return bool
+	 */
+	private function url_located_in_string( $content, $url, $post_id = 0 ) {
+		$content = (string) $content;
+		$url     = (string) $url;
+		if ( '' === $content || '' === $url ) {
+			return false;
+		}
+		foreach ( array( 'href', 'src' ) as $attr ) {
+			if ( '' !== $this->extract_matching_tag_snippet( $content, $url, $post_id, $attr ) ) {
+				return true;
+			}
+		}
+		$data_attrs = array( 'data-url', 'data-href', 'data-link', 'data-button-url', 'data-bg-url', 'data-src' );
+		foreach ( $data_attrs as $attr ) {
+			if ( '' !== $this->extract_matching_tag_snippet( $content, $url, $post_id, $attr ) ) {
+				return true;
+			}
+		}
+		return '' !== $this->extract_url_context_snippet( $content, $url, $post_id );
+	}
+
+	/**
+	 * @param int    $post_id Post ID.
+	 * @param string $url     Stored URL.
+	 * @return array{ found: bool, field_key: string, snippet: string }
+	 */
+	private function locate_url_in_post_meta( $post_id, $url ) {
+		$post_id = absint( $post_id );
+		foreach ( $this->get_scannable_meta_entries( $post_id ) as $entry ) {
+			$located = $this->locate_url_in_meta_value( $entry['value'], $url, $post_id );
+			if ( ! $located['found'] ) {
+				continue;
+			}
+			return array(
+				'found'     => true,
+				'field_key' => (string) $entry['key'],
+				'snippet'   => $located['snippet'],
+			);
+		}
+		return array(
+			'found'     => false,
+			'field_key' => '',
+			'snippet'   => '',
+		);
+	}
+
+	/**
+	 * @param mixed  $value   Meta value.
+	 * @param string $url     Stored URL.
+	 * @param int    $post_id Post ID.
+	 * @return array{ found: bool, snippet: string }
+	 */
+	private function locate_url_in_meta_value( $value, $url, $post_id ) {
+		if ( is_string( $value ) ) {
+			$snippet = $this->extract_url_context_snippet( $value, $url, $post_id );
+			if ( '' !== $snippet || $this->url_located_in_string( $value, $url, $post_id ) ) {
+				if ( '' === $snippet ) {
+					$snippet = substr( $value, 0, 240 );
+				}
+				return array(
+					'found'   => true,
+					'snippet' => $snippet,
+				);
+			}
+			return array(
+				'found'   => false,
+				'snippet' => '',
+			);
+		}
+		if ( is_array( $value ) ) {
+			if ( isset( $value['url'] ) && is_string( $value['url'] ) && $this->urls_match_for_edit( (string) $value['url'], $url ) ) {
+				$title = ! empty( $value['title'] ) ? (string) $value['title'] : (string) $value['url'];
+				return array(
+					'found'   => true,
+					'snippet' => substr( $title, 0, 240 ),
+				);
+			}
+			foreach ( $value as $sub ) {
+				$located = $this->locate_url_in_meta_value( $sub, $url, $post_id );
+				if ( $located['found'] ) {
+					return $located;
+				}
+			}
+		}
+		if ( is_object( $value ) ) {
+			foreach ( get_object_vars( $value ) as $sub ) {
+				$located = $this->locate_url_in_meta_value( $sub, $url, $post_id );
+				if ( $located['found'] ) {
+					return $located;
+				}
+			}
+		}
+		return array(
+			'found'   => false,
+			'snippet' => '',
+		);
+	}
+
+	/**
+	 * @param int $post_id Post ID.
+	 * @return array<int, array{ key: string, value: mixed }>
+	 */
+	private function get_scannable_meta_entries( $post_id ) {
+		$all_meta = get_post_meta( absint( $post_id ) );
+		if ( empty( $all_meta ) ) {
+			return array();
+		}
+		$entries = array();
+		foreach ( $all_meta as $key => $values ) {
+			if ( ! $this->should_include_meta_key( (string) $key, (array) $values ) ) {
+				continue;
+			}
+			foreach ( (array) $values as $value ) {
+				$entries[] = array(
+					'key'   => (string) $key,
+					'value' => maybe_unserialize( $value ),
+				);
+			}
+		}
+		return $entries;
+	}
+
+	/**
+	 * Replace a URL only inside href/src attributes (never a raw str_replace on HTML).
+	 *
+	 * @param string $content HTML content.
+	 * @param string $old_url Stored link URL.
+	 * @param string $new_url New URL.
+	 * @param int    $post_id Post ID.
+	 * @return string|null Updated content, or null when no attribute matched.
+	 */
+	private function replace_url_in_html_attributes( $content, $old_url, $new_url, $post_id = 0 ) {
+		$new_url    = $this->clean_url( (string) $new_url );
+		$candidates = $this->build_url_replace_candidates_for_content( $old_url, $post_id, $content );
+		$changed    = false;
+
+		foreach ( $candidates as $v ) {
+			if ( '' === $v ) {
+				continue;
+			}
+			$quoted      = preg_quote( (string) $v, '#' );
+			$escaped_new = esc_attr( $new_url );
+			$patterns    = array(
+				'#(href=(["\']))' . $quoted . '(\2)#i',
+				'#(src=(["\']))' . $quoted . '(\2)#i',
+				'#(data-(?:url|href|src|link|button-url|bg-url)=(["\']))' . $quoted . '(\2)#i',
+			);
+
+			foreach ( $patterns as $pattern ) {
+				$count = 0;
+				$next  = preg_replace_callback(
+					$pattern,
+					static function ( $m ) use ( $escaped_new ) {
+						return $m[1] . $escaped_new . $m[3];
+					},
+					$content,
+					-1,
+					$count
+				);
+				if ( $count > 0 && is_string( $next ) && $next !== $content ) {
+					$content = $next;
+					$changed = true;
+				}
+			}
+
+			$srcset_pattern = '#(\ssrcset=(["\']))((?:(?!\2).)+)(\2)#is';
+			$count          = 0;
+			$next           = preg_replace_callback(
+				$srcset_pattern,
+				static function ( $m ) use ( $v, $escaped_new ) {
+					if ( false === stripos( $m[3], (string) $v ) ) {
+						return $m[0];
+					}
+					$new_srcset = str_replace( (string) $v, $escaped_new, $m[3] );
+					if ( $new_srcset === $m[3] ) {
+						return $m[0];
+					}
+					return $m[1] . $new_srcset . $m[4];
+				},
+				$content,
+				-1,
+				$count
+			);
+			if ( $count > 0 && is_string( $next ) && $next !== $content ) {
+				$content = $next;
+				$changed = true;
+			}
+		}
+
+		return $changed ? $content : null;
+	}
+
+	/**
+	 * Replace a bare URL string in text (comments often store links without <a> tags).
+	 *
+	 * @param string $content HTML or plain text.
+	 * @param string $old_url Stored link URL.
+	 * @param string $new_url New URL.
+	 * @param int    $post_id Post ID for variant resolution.
+	 * @return string|null Updated content, or null when no match.
+	 */
+	private function replace_plain_url_in_text( $content, $old_url, $new_url, $post_id = 0 ) {
+		$content = (string) $content;
+		$new_url = $this->clean_url( (string) $new_url );
+		if ( '' === $content || '' === $new_url ) {
+			return null;
+		}
+
+		foreach ( $this->build_url_replace_candidates_for_content( $old_url, $post_id, $content ) as $variant ) {
+			if ( '' === $variant ) {
+				continue;
+			}
+			$result = $this->replace_variant_safely( $content, $variant, $new_url );
+			if ( $result['changed'] ) {
+				return $result['content'];
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Whether a replace candidate is a site-relative path (not protocol-relative).
+	 *
+	 * @param string $variant URL variant.
+	 * @return bool
+	 */
+	private function is_relative_path_variant( $variant ) {
+		return is_string( $variant )
+			&& strlen( $variant ) > 1
+			&& '/' === $variant[0]
+			&& '/' !== $variant[1];
+	}
+
+	/**
+	 * Replace one URL variant without patching a relative path inside an absolute URL.
+	 *
+	 * @param string $content Content or snippet.
+	 * @param string $variant Stored URL variant.
+	 * @param string $new_url Replacement URL.
+	 * @param int    $limit   Max replacements (1 for snippets).
+	 * @return array{ changed: bool, content: string }
+	 */
+	private function replace_variant_safely( $content, $variant, $new_url, $limit = 1 ) {
+		$content = (string) $content;
+		$variant = (string) $variant;
+		$new_url = (string) $new_url;
+		if ( '' === $variant || false === strpos( $content, $variant ) ) {
+			return array(
+				'changed' => false,
+				'content' => $content,
+			);
+		}
+
+		if ( $this->is_relative_path_variant( $variant ) ) {
+			$quoted  = preg_quote( $variant, '#' );
+			$escaped = esc_attr( $new_url );
+			$patterns = array(
+				'#(href=(["\']))' . $quoted . '(\2)#i',
+				'#(src=(["\']))' . $quoted . '(\2)#i',
+				'#"(url|link|href|src)"\s*:\s*"' . preg_quote( $variant, '#' ) . '"#i',
+			);
+			foreach ( $patterns as $index => $pattern ) {
+				$count = 0;
+				if ( 2 === $index ) {
+					$next = preg_replace( $pattern, '"$1":"' . $escaped . '"', $content, $limit, $count );
+				} else {
+					$next = preg_replace( $pattern, '$1' . $escaped . '$3', $content, $limit, $count );
+				}
+				if ( $count > 0 && is_string( $next ) ) {
+					return array(
+						'changed' => true,
+						'content' => $next,
+					);
+				}
+			}
+			return array(
+				'changed' => false,
+				'content' => $content,
+			);
+		}
+
+		$next = str_replace( $variant, $new_url, $content );
+		return array(
+			'changed' => ( $next !== $content ),
+			'content' => $next,
+		);
+	}
 
 	/**
 	 * Replace a URL in post content.
@@ -1051,46 +3231,584 @@ class TSOLIIN_Scanner {
 		if ( ! $post ) {
 			return false;
 		}
-		$old_url = (string) $old_url;
-		$new_url = $this->clean_url( (string) $new_url );
-		$content = $post->post_content;
 
-		// Build all possible representations of the URL that could appear in post_content.
-		// WordPress stores href attributes with & encoded as &amp;, which is the most
-		// common cause of "URL not found in post" errors with long Amazon/affiliate URLs.
-		$decoded = urldecode( $old_url );
-		$candidates = array_unique( array_filter( array_merge(
-			$this->url_content_variants( $old_url, $post_id ),
-			array(
-				$decoded,                                                // fully URL-decoded
-				rawurldecode( $old_url ),                                // rawurl decoded
-				esc_url_raw( $old_url ),                                 // WP-sanitized
-				esc_url_raw( $decoded ),                                 // decode then WP-sanitize
-				html_entity_decode( $old_url, ENT_QUOTES, 'UTF-8' ),    // HTML entities
-				str_replace( '&', '&amp;', $old_url ),                  // & -> &amp; (WordPress HTML)
-				str_replace( '&', '&amp;', $decoded ),                  // decoded + &amp;
-				str_replace( '&amp;', '&', $old_url ),                  // &amp; -> & (reverse)
-			)
-		) ) );
+		$content     = (string) $post->post_content;
+		$new_content = $this->replace_url_in_html_attributes(
+			$content,
+			(string) $old_url,
+			(string) $new_url,
+			$post_id
+		);
+		if ( null === $new_content ) {
+			$new_content = $this->replace_plain_url_in_text( $content, (string) $old_url, (string) $new_url, $post_id );
+		}
+		if ( null === $new_content ) {
+			$new_content = $this->replace_url_in_parsed_blocks( $content, (string) $old_url, (string) $new_url, $post_id );
+		}
+		if ( null !== $new_content ) {
+			$this->maybe_create_post_revision( $post_id );
+			$r = $this->update_post_content( $post_id, $new_content );
+			if ( ! $r ) {
+				return false;
+			}
+			$this->purge_cache( $post_id );
+			return true;
+		}
+		if ( $this->replace_url_in_post_meta( $post_id, (string) $old_url, (string) $new_url ) ) {
+			$this->purge_cache( $post_id );
+			return true;
+		}
+		return false;
+	}
 
-		$found = null;
-		foreach ( $candidates as $c ) {
-			if ( '' !== $c && false !== strpos( $content, $c ) ) {
-				$found = $c;
-				break;
+	/**
+	 * Replace a URL inside post meta values (ACF, custom fields).
+	 *
+	 * @param int    $post_id Post ID.
+	 * @param string $old_url Stored URL.
+	 * @param string $new_url New URL.
+	 * @return bool
+	 */
+	public function replace_url_in_post_meta( $post_id, $old_url, $new_url ) {
+		$post_id = absint( $post_id );
+		if ( $post_id <= 0 ) {
+			return false;
+		}
+		$changed_any = false;
+		$grouped     = array();
+		foreach ( $this->get_scannable_meta_entries( $post_id ) as $entry ) {
+			$key = (string) $entry['key'];
+			if ( ! isset( $grouped[ $key ] ) ) {
+				$grouped[ $key ] = array();
+			}
+			$grouped[ $key ][] = $entry['value'];
+		}
+		foreach ( $grouped as $key => $values ) {
+			$updated     = array();
+			$key_changed = false;
+			foreach ( $values as $value ) {
+				$new_value = $this->replace_urls_in_meta_value( $value, (string) $old_url, (string) $new_url, $post_id );
+				if ( null !== $new_value ) {
+					$updated[]   = $new_value;
+					$key_changed = true;
+				} else {
+					$updated[] = $value;
+				}
+			}
+			if ( ! $key_changed ) {
+				continue;
+			}
+			delete_post_meta( $post_id, $key );
+			foreach ( $updated as $row ) {
+				add_post_meta( $post_id, $key, $row );
+			}
+			$changed_any = true;
+		}
+		return $changed_any;
+	}
+
+	/**
+	 * @param mixed  $val     Meta value.
+	 * @param string $old_url Stored URL.
+	 * @param string $new_url New URL.
+	 * @param int    $post_id Post ID.
+	 * @return mixed|null Updated value or null when unchanged.
+	 */
+	private function replace_urls_in_meta_value( $val, $old_url, $new_url, $post_id ) {
+		if ( is_string( $val ) ) {
+			$next = $this->replace_url_in_html_attributes( $val, $old_url, $new_url, $post_id );
+			if ( null === $next ) {
+				$next = $this->replace_plain_url_in_text( $val, $old_url, $new_url, $post_id );
+			}
+			return ( null !== $next && $next !== $val ) ? $next : null;
+		}
+		if ( is_array( $val ) ) {
+			$changed = false;
+			foreach ( $val as $k => $sub ) {
+				$next = $this->replace_urls_in_meta_value( $sub, $old_url, $new_url, $post_id );
+				if ( null !== $next ) {
+					$val[ $k ] = $next;
+					$changed   = true;
+				}
+			}
+			return $changed ? $val : null;
+		}
+		if ( is_object( $val ) ) {
+			$changed = false;
+			foreach ( get_object_vars( $val ) as $k => $sub ) {
+				$next = $this->replace_urls_in_meta_value( $sub, $old_url, $new_url, $post_id );
+				if ( null !== $next ) {
+					$val->$k = $next;
+					$changed = true;
+				}
+			}
+			return $changed ? $val : null;
+		}
+		return null;
+	}
+
+	/**
+	 * Preview the HTML tag snippet that would change when replacing a URL.
+	 *
+	 * @param int    $post_id   Post ID.
+	 * @param string $old_url   Stored URL.
+	 * @param string $new_url   Proposed URL.
+	 * @param string $link_type link|image|iframe.
+	 * @return array{found:bool,before:string,after:string}
+	 */
+	public function preview_url_change_in_post( $post_id, $old_url, $new_url, $link_type = 'link' ) {
+		$post_id = absint( $post_id );
+		$post    = get_post( $post_id );
+		if ( ! $post || ! is_string( $post->post_content ) ) {
+			return array(
+				'found'  => false,
+				'before' => '',
+				'after'  => '',
+			);
+		}
+
+		$content        = $post->post_content;
+		$attr           = in_array( (string) $link_type, array( 'image', 'iframe' ), true ) ? 'src' : 'href';
+		$is_tag_snippet = false;
+		$before         = $this->extract_matching_tag_snippet( $content, (string) $old_url, $post_id, $attr );
+		if ( '' !== $before ) {
+			$is_tag_snippet = true;
+		} elseif ( 'href' === $attr ) {
+			$before = $this->extract_matching_tag_snippet( $content, (string) $old_url, $post_id, 'src' );
+			if ( '' !== $before ) {
+				$is_tag_snippet = true;
+				$attr           = 'src';
+			}
+		} else {
+			$before = $this->extract_matching_tag_snippet( $content, (string) $old_url, $post_id, 'href' );
+			if ( '' !== $before ) {
+				$is_tag_snippet = true;
+				$attr           = 'href';
 			}
 		}
-		if ( null === $found ) {
+		if ( '' === $before ) {
+			foreach ( array( 'data-url', 'data-href', 'data-link', 'data-button-url', 'data-bg-url', 'data-src' ) as $data_attr ) {
+				$before = $this->extract_matching_tag_snippet( $content, (string) $old_url, $post_id, $data_attr );
+				if ( '' !== $before ) {
+					$is_tag_snippet = true;
+					$attr           = $data_attr;
+					break;
+				}
+			}
+		}
+		if ( '' === $before ) {
+			$before = $this->extract_url_context_snippet( $content, (string) $old_url, $post_id );
+		}
+		if ( '' === $before ) {
+			$meta = $this->locate_url_in_post_meta( $post_id, (string) $old_url );
+			if ( ! empty( $meta['found'] ) ) {
+				$before = (string) $meta['snippet'];
+			}
+		}
+		if ( '' === $before ) {
+			return array(
+				'found'  => false,
+				'before' => '',
+				'after'  => '',
+			);
+		}
+
+		$after = $this->replace_url_in_tag_snippet( $before, (string) $old_url, (string) $new_url, $post_id, $attr );
+		if ( ! $is_tag_snippet && $after === $before ) {
+			$after = $this->replace_url_in_text_snippet( $before, (string) $old_url, (string) $new_url, $post_id );
+		}
+		return array(
+			'found'  => true,
+			'before' => $before,
+			'after'  => $after,
+		);
+	}
+
+	/**
+	 * @param string $content HTML.
+	 * @param string $old_url Stored URL.
+	 * @param int    $post_id Post ID.
+	 * @param string $attr    href|src.
+	 * @return string
+	 */
+	private function extract_matching_tag_snippet( $content, $old_url, $post_id, $attr ) {
+		$allowed = $this->get_editable_url_attributes();
+		if ( ! in_array( $attr, $allowed, true ) ) {
+			$attr = 'href';
+		}
+		$content = (string) $content;
+
+		foreach ( $this->get_content_url_spellings_for_stored( $content, (string) $old_url, $post_id ) as $spelling ) {
+			$snippet = $this->extract_tag_snippet_for_attr_value( $content, $attr, $spelling );
+			if ( '' !== $snippet ) {
+				return $snippet;
+			}
+			foreach ( $allowed as $fallback_attr ) {
+				if ( $fallback_attr === $attr ) {
+					continue;
+				}
+				$snippet = $this->extract_tag_snippet_for_attr_value( $content, $fallback_attr, $spelling );
+				if ( '' !== $snippet ) {
+					return $snippet;
+				}
+			}
+		}
+
+		foreach ( $this->build_url_replace_candidates_for_content( $old_url, $post_id, $content ) as $variant ) {
+			if ( '' === $variant ) {
+				continue;
+			}
+			$pattern = '#(<[^>\s]+[^>]*\s' . preg_quote( $attr, '#' ) . '=(["\'])' . preg_quote( (string) $variant, '#' ) . '\2[^>]*)>#i';
+			if ( preg_match( $pattern, $content, $matches ) ) {
+				return (string) $matches[1];
+			}
+		}
+		return '';
+	}
+
+	/**
+	 * @param string $snippet Tag snippet.
+	 * @param string $old_url Stored URL.
+	 * @param string $new_url New URL.
+	 * @param int    $post_id Post ID.
+	 * @param string $attr    href|src.
+	 * @return string
+	 */
+	private function replace_url_in_tag_snippet( $snippet, $old_url, $new_url, $post_id, $attr ) {
+		$allowed = $this->get_editable_url_attributes();
+		if ( ! in_array( $attr, $allowed, true ) ) {
+			$attr = 'href';
+		}
+		$new_url = $this->clean_url( (string) $new_url );
+		$snippet = (string) $snippet;
+
+		if ( preg_match( '#\s' . preg_quote( $attr, '#' ) . '=(["\'])(.*?)\1#is', $snippet, $match ) ) {
+			$actual = html_entity_decode( (string) $match[2], ENT_QUOTES, 'UTF-8' );
+			if ( $this->url_attribute_matches_stored( (string) $old_url, $actual, $post_id ) ) {
+				$pattern = '#(' . preg_quote( $attr, '#' ) . '=(["\']))' . preg_quote( (string) $match[2], '#' ) . '(\2)#i';
+				$count   = 0;
+				$next    = preg_replace( $pattern, '$1' . esc_attr( $new_url ) . '$3', $snippet, 1, $count );
+				if ( $count > 0 && is_string( $next ) ) {
+					return $next;
+				}
+			}
+		}
+
+		foreach ( $this->build_url_replace_candidates( $old_url, $post_id ) as $variant ) {
+			if ( '' === $variant ) {
+				continue;
+			}
+			$pattern = '#(' . preg_quote( $attr, '#' ) . '=(["\']))' . preg_quote( (string) $variant, '#' ) . '(\2)#i';
+			$count   = 0;
+			$next    = preg_replace( $pattern, '$1' . esc_attr( $new_url ) . '$3', $snippet, 1, $count );
+			if ( $count > 0 && is_string( $next ) ) {
+				return $next;
+			}
+		}
+		return $snippet;
+	}
+
+	/**
+	 * Short raw-content excerpt around a stored URL (block JSON, plain text, etc.).
+	 *
+	 * @param string $content Post content.
+	 * @param string $old_url Stored URL.
+	 * @param int    $post_id Post ID.
+	 * @return string
+	 */
+	private function extract_url_context_snippet( $content, $old_url, $post_id ) {
+		$content = (string) $content;
+		foreach ( $this->build_url_replace_candidates_for_content( $old_url, $post_id, $content ) as $variant ) {
+			if ( '' === $variant ) {
+				continue;
+			}
+			$pos = stripos( $content, (string) $variant );
+			if ( false === $pos ) {
+				continue;
+			}
+			$start = max( 0, $pos - 80 );
+			$end   = min( strlen( $content ), $pos + strlen( (string) $variant ) + 80 );
+			return substr( $content, $start, $end - $start );
+		}
+		return '';
+	}
+
+	/**
+	 * Replace URL variants inside a short text snippet.
+	 *
+	 * @param string $snippet Text excerpt.
+	 * @param string $old_url Stored URL.
+	 * @param string $new_url New URL.
+	 * @param int    $post_id Post ID.
+	 * @return string
+	 */
+	private function replace_url_in_text_snippet( $snippet, $old_url, $new_url, $post_id ) {
+		$snippet = (string) $snippet;
+		$new_url = $this->clean_url( (string) $new_url );
+		foreach ( $this->build_url_replace_candidates( $old_url, $post_id ) as $variant ) {
+			if ( '' === $variant ) {
+				continue;
+			}
+			$result = $this->replace_variant_safely( $snippet, $variant, $new_url, 1 );
+			if ( $result['changed'] ) {
+				return $result['content'];
+			}
+		}
+		return $snippet;
+	}
+
+	/**
+	 * Replace URL values inside parsed Gutenberg block attrs.
+	 *
+	 * @param string $raw     post_content.
+	 * @param string $old_url Stored URL.
+	 * @param string $new_url New URL.
+	 * @param int    $post_id Post ID.
+	 * @return string|null
+	 */
+	private function replace_url_in_parsed_blocks( $raw, $old_url, $new_url, $post_id = 0 ) {
+		if ( ! function_exists( 'parse_blocks' ) || ! function_exists( 'serialize_blocks' ) ) {
+			return null;
+		}
+		$raw = (string) $raw;
+		if ( '' === trim( $raw ) ) {
+			return null;
+		}
+		$blocks = parse_blocks( $raw );
+		if ( empty( $blocks ) ) {
+			return null;
+		}
+		$new_url    = $this->clean_url( (string) $new_url );
+		$candidates = $this->build_url_replace_candidates_for_content( $old_url, $post_id, $raw );
+		$changed    = false;
+		$blocks     = $this->replace_url_in_blocks_recursive( $blocks, $candidates, $new_url, $changed );
+		if ( ! $changed ) {
+			return null;
+		}
+		return serialize_blocks( $blocks );
+	}
+
+	/**
+	 * @param array[] $blocks     Parsed blocks.
+	 * @param string[] $candidates URL variants to replace.
+	 * @param string  $new_url    Replacement URL.
+	 * @param bool    $changed    Set true when a value changes.
+	 * @return array[]
+	 */
+	private function replace_url_in_blocks_recursive( array $blocks, array $candidates, $new_url, &$changed ) {
+		foreach ( $blocks as &$block ) {
+			if ( ! is_array( $block ) ) {
+				continue;
+			}
+			if ( ! empty( $block['attrs'] ) && is_array( $block['attrs'] ) ) {
+				$next = $this->replace_url_values_in_array( $block['attrs'], $candidates, $new_url, $changed );
+				if ( $next !== $block['attrs'] ) {
+					$block['attrs'] = $next;
+				}
+			}
+			if ( ! empty( $block['innerBlocks'] ) && is_array( $block['innerBlocks'] ) ) {
+				$block['innerBlocks'] = $this->replace_url_in_blocks_recursive( $block['innerBlocks'], $candidates, $new_url, $changed );
+			}
+		}
+		unset( $block );
+		return $blocks;
+	}
+
+	/**
+	 * @param array    $data       Block attrs or nested array.
+	 * @param string[] $candidates URL variants.
+	 * @param string   $new_url    Replacement URL.
+	 * @param bool     $changed    Set true when a value changes.
+	 * @param int      $depth      Recursion guard.
+	 * @return array
+	 */
+	private function replace_url_values_in_array( array $data, array $candidates, $new_url, &$changed, $depth = 0 ) {
+		if ( $depth > 12 ) {
+			return $data;
+		}
+		$url_keys = array( 'url', 'link', 'href', 'linkurl', 'buttonurl', 'fileurl', 'mediaurl', 'src' );
+		foreach ( $data as $key => $value ) {
+			if ( is_array( $value ) ) {
+				$data[ $key ] = $this->replace_url_values_in_array( $value, $candidates, $new_url, $changed, $depth + 1 );
+				continue;
+			}
+			if ( ! is_string( $value ) ) {
+				continue;
+			}
+			$key_lower = strtolower( (string) $key );
+			$looks_url = in_array( $key_lower, $url_keys, true )
+				|| (bool) preg_match( '/(?:url|link|href)$/i', $key_lower );
+			if ( ! $looks_url ) {
+				continue;
+			}
+			foreach ( $candidates as $variant ) {
+				if ( '' === $variant ) {
+					continue;
+				}
+				if ( 0 === strcasecmp( (string) $value, (string) $variant ) ) {
+					$data[ $key ] = $new_url;
+					$changed      = true;
+					break;
+				}
+			}
+		}
+		return $data;
+	}
+
+	/**
+	 * Store a post revision before content edits when enabled in settings.
+	 *
+	 * @param int $post_id Post ID.
+	 * @return void
+	 */
+	private function maybe_create_post_revision( $post_id ) {
+		$post_id = absint( $post_id );
+		if ( $post_id <= 0 || ! empty( $this->revision_saved_for_posts[ $post_id ] ) ) {
+			return;
+		}
+		$s = get_option( 'tsoliin_settings', array() );
+		if ( empty( $s['create_revision'] ) ) {
+			return;
+		}
+		$post = get_post( $post_id );
+		if ( ! $post || 'revision' === $post->post_type ) {
+			return;
+		}
+		if ( ! wp_revisions_enabled( $post ) ) {
+			return;
+		}
+		wp_save_post_revision( $post );
+		$this->revision_saved_for_posts[ $post_id ] = true;
+	}
+
+	/**
+	 * Replace alt text on an <img> matched by src URL.
+	 *
+	 * @param int         $post_id  Post ID.
+	 * @param string      $old_url  Original src URL stored in the DB.
+	 * @param string      $new_alt  New alt text (may be empty).
+	 * @param string|null $new_src  Updated src URL after a URL change (optional).
+	 * @return bool
+	 */
+	public function replace_alt_in_post( $post_id, $old_url, $new_alt, $new_src = null ) {
+		$post_id = absint( $post_id );
+		$post    = get_post( $post_id );
+		if ( ! $post ) {
 			return false;
 		}
 
-		$new_content = str_replace( $found, $new_url, $content );
+		$match_src   = null !== $new_src ? (string) $new_src : (string) $old_url;
+		$new_content = $this->replace_alt_on_img_src(
+			$post->post_content,
+			(string) $old_url,
+			(string) $new_alt,
+			$post_id,
+			$match_src
+		);
+		if ( null === $new_content ) {
+			return false;
+		}
+
+		$this->maybe_create_post_revision( $post_id );
+
 		$r = $this->update_post_content( $post_id, $new_content );
 		if ( ! $r ) {
 			return false;
 		}
 		$this->purge_cache( $post_id );
 		return true;
+	}
+
+	/**
+	 * Replace or add alt="" on the first matching <img src="…"> tag.
+	 *
+	 * @param string $content   Post HTML.
+	 * @param string $old_url   Original src URL stored in the DB.
+	 * @param string $new_alt   New alt text.
+	 * @param int    $post_id   Post ID.
+	 * @param string $match_src Src URL to match after a URL change.
+	 * @return string|null
+	 */
+	private function replace_alt_on_img_src( $content, $old_url, $new_alt, $post_id, $match_src ) {
+		$new_alt = sanitize_text_field( (string) $new_alt );
+		$candidates = array_unique( array_filter( array_merge(
+			$this->build_url_replace_candidates( $match_src, $post_id ),
+			$this->build_url_replace_candidates( $old_url, $post_id )
+		) ) );
+
+		usort(
+			$candidates,
+			static function ( $a, $b ) {
+				return strlen( (string) $b ) - strlen( (string) $a );
+			}
+		);
+
+		foreach ( $candidates as $v ) {
+			if ( '' === $v ) {
+				continue;
+			}
+			$quoted      = preg_quote( (string) $v, '#' );
+			$pattern     = '#(<img\b)(\s[^>]*?\ssrc=(["\'])' . $quoted . '\3)([^>]*)(>)#is';
+			$escaped_alt = esc_attr( $new_alt );
+			$count       = 0;
+			$next        = preg_replace_callback(
+				$pattern,
+				static function ( $m ) use ( $escaped_alt ) {
+					$attrs = $m[2] . $m[4];
+					$attrs = preg_replace( '#\salt=(["\']).*?\1#is', '', $attrs );
+					return $m[1] . $attrs . ' alt="' . $escaped_alt . '"' . $m[5];
+				},
+				$content,
+				1,
+				$count
+			);
+			if ( $count > 0 && is_string( $next ) && $next !== $content ) {
+				return $next;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Replace anchor text inside an <a href="…"> tag in post content.
+	 *
+	 * @param int    $post_id    Post ID.
+	 * @param string $url        href URL as stored in the DB.
+	 * @param string $new_anchor New visible link text.
+	 * @return bool
+	 */
+	public function replace_anchor_in_post( $post_id, $url, $new_anchor ) {
+		$post_id    = absint( $post_id );
+		$post       = get_post( $post_id );
+		$new_anchor = sanitize_text_field( (string) $new_anchor );
+		if ( ! $post || '' === $new_anchor ) {
+			return false;
+		}
+		$url      = (string) $url;
+		$content  = $post->post_content;
+		$variants = array_unique( array_filter( array_merge(
+			$this->url_content_variants( $url, $post_id ),
+			array(
+				urldecode( $url ),
+				rawurldecode( $url ),
+				str_replace( '&', '&amp;', $url ),
+				html_entity_decode( $url, ENT_QUOTES, 'UTF-8' ),
+			)
+		) ) );
+
+		foreach ( $variants as $v ) {
+			if ( '' === $v ) {
+				continue;
+			}
+			$pattern     = '#(<a\s[^>]*href=["\']' . preg_quote( $v, '#' ) . '["\'][^>]*>)(.*?)(</a>)#is';
+			$new_content = preg_replace( $pattern, '$1' . esc_html( $new_anchor ) . '$3', $content, 1, $count );
+			if ( $count > 0 && is_string( $new_content ) && $new_content !== $content ) {
+				$this->maybe_create_post_revision( $post_id );
+				return $this->update_post_content( $post_id, $new_content );
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -1317,34 +4035,67 @@ class TSOLIIN_Scanner {
 			return false;
 		}
 
-		$old_url  = (string) $old_url;
-		$new_url  = $this->clean_url( (string) $new_url );
-		$text     = (string) $comment->comment_content;
-
-		$candidates = array_unique( array_filter( array(
-			$old_url,
-			urldecode( $old_url ),
-			rawurldecode( $old_url ),
-			str_replace( '&', '&amp;', $old_url ),
-			html_entity_decode( $old_url, ENT_QUOTES, 'UTF-8' ),
-		) ) );
-
-		$found = null;
-		foreach ( $candidates as $c ) {
-			if ( '' !== $c && false !== strpos( $text, $c ) ) {
-				$found = $c;
-				break;
-			}
+		$post_id  = (int) $comment->comment_post_ID;
+		$content  = (string) $comment->comment_content;
+		$new_text = $this->replace_url_in_html_attributes(
+			$content,
+			(string) $old_url,
+			(string) $new_url,
+			$post_id
+		);
+		if ( null === $new_text ) {
+			$new_text = $this->replace_plain_url_in_text( $content, (string) $old_url, (string) $new_url, $post_id );
 		}
-		if ( null === $found ) {
+		if ( null === $new_text || $new_text === $content ) {
 			return false;
 		}
 
-		$new_text = str_replace( $found, $new_url, $text );
 		return false !== wp_update_comment( array(
 			'comment_ID'      => $comment_id,
 			'comment_content' => $new_text,
 		) );
+	}
+
+	/**
+	 * Replace anchor text for a matching href inside comment content.
+	 *
+	 * @param int    $comment_id Comment ID.
+	 * @param string $url        href URL as stored in the DB.
+	 * @param string $new_anchor New visible link text.
+	 * @return bool
+	 */
+	public function replace_anchor_in_comment_content( $comment_id, $url, $new_anchor ) {
+		$comment_id = absint( $comment_id );
+		$comment    = get_comment( $comment_id );
+		$new_anchor = sanitize_text_field( (string) $new_anchor );
+		if ( ! $comment || '' === $new_anchor ) {
+			return false;
+		}
+
+		$url  = (string) $url;
+		$text = (string) $comment->comment_content;
+		$candidates = array_unique( array_filter( array(
+			$url,
+			urldecode( $url ),
+			rawurldecode( $url ),
+			str_replace( '&', '&amp;', $url ),
+			html_entity_decode( $url, ENT_QUOTES, 'UTF-8' ),
+		) ) );
+
+		foreach ( $candidates as $c ) {
+			if ( '' === $c ) {
+				continue;
+			}
+			$pattern  = '#(<a\s[^>]*href=["\']' . preg_quote( $c, '#' ) . '["\'][^>]*>)(.*?)(</a>)#is';
+			$new_text = preg_replace( $pattern, '$1' . esc_html( $new_anchor ) . '$3', $text, 1, $count );
+			if ( $count > 0 && is_string( $new_text ) && $new_text !== $text ) {
+				return false !== wp_update_comment( array(
+					'comment_ID'      => $comment_id,
+					'comment_content' => $new_text,
+				) );
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -1484,6 +4235,9 @@ class TSOLIIN_Scanner {
 			if ( '' === $url || $this->skip_url( $url ) || $this->is_ignored( $url ) ) {
 				continue;
 			}
+			if ( ! $this->is_url_editable_in_post( $post_id, $url, $link_type ) ) {
+				continue;
+			}
 			$sk             = $this->db->sanitize_source_key( $prefix . md5( $url ) );
 			$allowed_keys[] = $sk;
 			$anchor         = ! empty( $item['anchor'] ) ? (string) $item['anchor'] : (string) $post->post_title;
@@ -1496,36 +4250,218 @@ class TSOLIIN_Scanner {
 	}
 
 	/**
+	 * Scan every registered widget and drop rows for deleted instances.
+	 *
+	 * @return int Links found.
+	 */
+	public function scan_all_widgets() {
+		if ( ! $this->is_scan_widgets_enabled() ) {
+			return 0;
+		}
+		$found = 0;
+		foreach ( $this->get_registered_widget_instances() as $instance ) {
+			$found += $this->scan_widget_instance( $instance['sidebar_id'], $instance['widget_id'] );
+		}
+		$this->cleanup_stale_widget_links();
+		update_option( 'tsoliin_widget_scan_after_index', 0, false );
+		return $found;
+	}
+
+	/**
+	 * Re-scan the widget that owns a DB row; delete the row if the widget or URL is gone.
+	 *
+	 * @param object $link DB row.
+	 * @return int Updated row ID, or 0 if removed.
+	 */
+	public function rescan_widget_link( $link ) {
+		if ( ! $link || empty( $link->id ) ) {
+			return 0;
+		}
+		$original = $link;
+		$link_id  = (int) $link->id;
+		$sk       = isset( $link->source_key ) ? (string) $link->source_key : '';
+		$resolved = $this->resolve_widget_from_source_key( $sk );
+		if ( $resolved ) {
+			$this->scan_widget_instance( $resolved['sidebar_id'], $resolved['widget_id'] );
+		}
+		$row = $this->find_link_row_after_rescan( $original );
+		if ( $row ) {
+			return (int) $row->id;
+		}
+		$link = $this->db->get_link( $link_id );
+		if ( $link && $this->is_stale_widget_link_row( $link ) ) {
+			$this->db->delete_link( $link_id );
+		}
+		return 0;
+	}
+
+	/**
+	 * Whether a stored widget row no longer matches a registered instance or its URL.
+	 *
+	 * @param object $row DB row (id, source_key, link_url).
+	 * @return bool
+	 */
+	private function is_stale_widget_link_row( $row ) {
+		if ( ! $row ) {
+			return false;
+		}
+		$sk       = isset( $row->source_key ) ? (string) $row->source_key : '';
+		$resolved = $this->resolve_widget_from_source_key( $sk );
+		if ( ! $resolved ) {
+			return true;
+		}
+		$url = isset( $row->link_url ) ? (string) $row->link_url : '';
+		if ( '' === $url ) {
+			return true;
+		}
+		return ! $this->widget_instance_contains_url( $resolved['widget_id'], $url );
+	}
+
+	/**
+	 * Delete widget rows whose widget instance or URL is no longer present.
+	 *
+	 * @return int Rows deleted.
+	 */
+	public function cleanup_stale_widget_links() {
+		global $wpdb;
+		$table = $this->db->get_table();
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix + fixed suffix.
+		$rows = $wpdb->get_results(
+			"SELECT id, source_key, link_url FROM {$table} WHERE link_type = 'widget'"
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+		if ( empty( $rows ) ) {
+			return 0;
+		}
+		$deleted = 0;
+		foreach ( $rows as $row ) {
+			if ( ! $this->is_stale_widget_link_row( $row ) ) {
+				continue;
+			}
+			$this->db->delete_link( (int) $row->id );
+			$deleted++;
+		}
+		return $deleted;
+	}
+
+	/**
+	 * Delete widget rows whose source_key no longer maps to a registered widget.
+	 *
+	 * @return int Rows deleted.
+	 */
+	public function cleanup_orphan_widget_links() {
+		return $this->cleanup_stale_widget_links();
+	}
+
+	/**
+	 * @return array<int, array{sidebar_id:string,widget_id:string}>
+	 */
+	private function get_registered_widget_instances() {
+		$sidebars = get_option( 'sidebars_widgets', array() );
+		if ( ! is_array( $sidebars ) ) {
+			return array();
+		}
+		/** This filter is documented in wp-includes/widgets.php. */
+		// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound
+		$sidebars = apply_filters( 'sidebars_widgets', $sidebars );
+
+		$instances = array();
+		foreach ( $sidebars as $sidebar_id => $widgets ) {
+			if ( ! is_array( $widgets ) ) {
+				continue;
+			}
+			foreach ( $widgets as $widget_id ) {
+				if ( ! is_string( $widget_id ) || '' === $widget_id ) {
+					continue;
+				}
+				$instances[] = array(
+					'sidebar_id' => (string) $sidebar_id,
+					'widget_id'  => (string) $widget_id,
+				);
+			}
+		}
+		return $instances;
+	}
+
+	/**
+	 * Scan one widget instance and prune stale rows for that instance.
+	 *
+	 * @param string $sidebar_id Sidebar ID.
+	 * @param string $widget_id  Widget instance ID.
+	 * @return int Links found.
+	 */
+	private function scan_widget_instance( $sidebar_id, $widget_id ) {
+		$sidebar_id = (string) $sidebar_id;
+		$widget_id  = (string) $widget_id;
+		if ( '' === $sidebar_id || '' === $widget_id ) {
+			return 0;
+		}
+
+		$content = $this->get_widget_instance_content( $widget_id );
+		$prefix  = $this->db->sanitize_source_key( 'wg-' . $sidebar_id . '-' . $widget_id . '-' );
+		$allowed = array();
+		$found   = 0;
+
+		if ( '' !== $content ) {
+			/* translators: 1: sidebar ID, 2: widget ID */
+			$default_anchor = sprintf( __( 'Widget %1$s / %2$s', 'tso-link-inspector' ), $sidebar_id, $widget_id );
+			foreach ( $this->extract_all_url_items( $content, $content ) as $item ) {
+				$url = isset( $item['url'] ) ? (string) $item['url'] : '';
+				if ( '' === $url || $this->skip_url( $url ) || $this->is_ignored( $url ) ) {
+					continue;
+				}
+				$sk        = $this->db->sanitize_source_key( $prefix . md5( $url ) );
+				$allowed[] = $sk;
+				$anchor    = ! empty( $item['anchor'] ) ? (string) $item['anchor'] : $default_anchor;
+				$this->db->upsert_link( 0, $url, $anchor, 'widget', $sk );
+				$found++;
+			}
+		}
+
+		$this->db->delete_sources_not_in( 'widget', $prefix, $allowed, 0 );
+		return $found;
+	}
+
+	/**
+	 * Whether a URL is still present in a widget instance.
+	 *
+	 * @param string $widget_id Widget instance ID.
+	 * @param string $url       Stored URL.
+	 * @return bool
+	 */
+	private function widget_instance_contains_url( $widget_id, $url ) {
+		$content = $this->get_widget_instance_content( (string) $widget_id );
+		if ( '' === $content || '' === trim( (string) $url ) ) {
+			return false;
+		}
+		$target_key = $this->scan_url_key( (string) $url, 0 );
+		foreach ( $this->extract_all_url_items( $content, $content ) as $item ) {
+			$candidate = isset( $item['url'] ) ? (string) $item['url'] : '';
+			if ( '' === $candidate ) {
+				continue;
+			}
+			if ( $this->scan_url_key( $candidate, 0 ) === $target_key ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * Scan widget sidebars (classic + block widgets).
 	 *
 	 * @param int $per_page Max widget instances per call.
 	 * @return int
 	 */
 	public function scan_widgets_batch( $per_page = 30 ) {
-		if ( ! $this->opt( 'scan_widgets', true ) ) {
+		if ( ! $this->is_scan_widgets_enabled() ) {
 			return 0;
 		}
 
-		$sidebars = get_option( 'sidebars_widgets', array() );
-		if ( ! is_array( $sidebars ) ) {
-			return 0;
-		}
-		/** This filter is documented in wp-includes/widgets.php. */
-		// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Core widget registration hook.
-		$sidebars = apply_filters( 'sidebars_widgets', $sidebars );
-
-		$flat = array();
-		foreach ( $sidebars as $sidebar_id => $widgets ) {
-			if ( ! is_array( $widgets ) || 'wp_inactive_widgets' === $sidebar_id ) {
-				continue;
-			}
-			foreach ( $widgets as $widget_id ) {
-				$flat[] = array( (string) $sidebar_id, (string) $widget_id );
-			}
-		}
-
+		$flat = $this->get_registered_widget_instances();
 		if ( empty( $flat ) ) {
 			update_option( 'tsoliin_widget_scan_after_index', 0, false );
+			$this->cleanup_stale_widget_links();
 			return 0;
 		}
 
@@ -1534,38 +4470,403 @@ class TSOLIIN_Scanner {
 		$slice       = array_slice( $flat, $after_index, $per_page );
 		if ( empty( $slice ) ) {
 			update_option( 'tsoliin_widget_scan_after_index', 0, false );
+			$this->cleanup_stale_widget_links();
 			return 0;
 		}
 
 		$found = 0;
-		foreach ( $slice as $pair ) {
-			$sidebar_id = $pair[0];
-			$widget_id  = $pair[1];
-			$content    = $this->get_widget_instance_content( $widget_id );
-			$prefix     = $this->db->sanitize_source_key( 'wg-' . $sidebar_id . '-' . $widget_id . '-' );
-			$allowed    = array();
-
-			if ( '' !== $content ) {
-				/* translators: 1: sidebar ID, 2: widget ID */
-				$default_anchor = sprintf( __( 'Widget %1$s / %2$s', 'tso-link-inspector' ), $sidebar_id, $widget_id );
-				foreach ( $this->extract_all_url_items( $content, $content ) as $item ) {
-					$url = isset( $item['url'] ) ? (string) $item['url'] : '';
-					if ( '' === $url || $this->skip_url( $url ) || $this->is_ignored( $url ) ) {
-						continue;
-					}
-					$sk        = $this->db->sanitize_source_key( $prefix . md5( $url ) );
-					$allowed[] = $sk;
-					$anchor    = ! empty( $item['anchor'] ) ? (string) $item['anchor'] : $default_anchor;
-					$this->db->upsert_link( 0, $url, $anchor, 'widget', $sk );
-					$found++;
-				}
-			}
-
-			$this->db->delete_sources_not_in( 'widget', $prefix, $allowed, 0 );
+		foreach ( $slice as $instance ) {
+			$found += $this->scan_widget_instance( $instance['sidebar_id'], $instance['widget_id'] );
 		}
 
-		update_option( 'tsoliin_widget_scan_after_index', $after_index + count( $slice ), false );
+		$next_index = $after_index + count( $slice );
+		if ( $next_index >= count( $flat ) ) {
+			update_option( 'tsoliin_widget_scan_after_index', 0, false );
+			$this->cleanup_stale_widget_links();
+		} else {
+			update_option( 'tsoliin_widget_scan_after_index', $next_index, false );
+		}
 		return $found;
+	}
+
+	/**
+	 * Comment ID from a stored source_key (c-123-…).
+	 *
+	 * @param string $source_key DB source_key.
+	 * @param int    $post_id    Fallback post ID (unused).
+	 * @return int
+	 */
+	private function comment_id_from_source_key( $source_key, $post_id = 0 ) {
+		unset( $post_id );
+		if ( preg_match( '/^c-(\d+)/', (string) $source_key, $m ) ) {
+			return absint( $m[1] );
+		}
+		return 0;
+	}
+
+	/**
+	 * Widget instance content from source_key.
+	 *
+	 * @param string $source_key DB source_key.
+	 * @return string
+	 */
+	private function get_widget_content_by_source_key( $source_key ) {
+		$resolved = $this->resolve_widget_from_source_key( $source_key );
+		if ( ! $resolved ) {
+			return '';
+		}
+		return $this->get_widget_instance_content( $resolved['widget_id'] );
+	}
+
+	/**
+	 * Locate a widget instance from a stored source_key (wg-{sidebar}-{widget}-{hash}).
+	 *
+	 * @param string $source_key DB source_key.
+	 * @return array{sidebar_id:string,widget_id:string}|null
+	 */
+	public function resolve_widget_from_source_key( $source_key ) {
+		$source_key = (string) $source_key;
+		if ( 0 !== strpos( $source_key, 'wg-' ) ) {
+			return null;
+		}
+		$sidebars = get_option( 'sidebars_widgets', array() );
+		if ( ! is_array( $sidebars ) ) {
+			return null;
+		}
+		/** This filter is documented in wp-includes/widgets.php. */
+		// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound
+		$sidebars = apply_filters( 'sidebars_widgets', $sidebars );
+
+		foreach ( $sidebars as $sidebar_id => $widgets ) {
+			if ( ! is_array( $widgets ) ) {
+				continue;
+			}
+			foreach ( $widgets as $widget_id ) {
+				$prefix = $this->db->sanitize_source_key( 'wg-' . $sidebar_id . '-' . $widget_id . '-' );
+				if ( 0 === strpos( $source_key, $prefix ) ) {
+					return array(
+						'sidebar_id' => (string) $sidebar_id,
+						'widget_id'  => (string) $widget_id,
+					);
+				}
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Replace a URL inside a widget instance.
+	 *
+	 * @param string $source_key Widget source_key.
+	 * @param string $old_url    Stored URL.
+	 * @param string $new_url    New URL.
+	 * @return bool
+	 */
+	public function replace_url_in_widget( $source_key, $old_url, $new_url ) {
+		$resolved = $this->resolve_widget_from_source_key( $source_key );
+		if ( ! $resolved ) {
+			return false;
+		}
+		$content = $this->get_widget_instance_content( $resolved['widget_id'] );
+		if ( '' === $content ) {
+			return false;
+		}
+		$new_content = $this->replace_url_in_html_attributes( $content, (string) $old_url, (string) $new_url, 0 );
+		if ( null === $new_content ) {
+			$new_content = $this->replace_plain_url_in_text( $content, (string) $old_url, (string) $new_url, 0 );
+		}
+		if ( null === $new_content || $new_content === $content ) {
+			return false;
+		}
+		return $this->save_widget_instance_content( $resolved['widget_id'], $new_content );
+	}
+
+	/**
+	 * Replace anchor text inside a widget instance.
+	 *
+	 * @param string $source_key Widget source_key.
+	 * @param string $url        href URL to match.
+	 * @param string $new_anchor New visible text.
+	 * @return bool
+	 */
+	public function replace_anchor_in_widget( $source_key, $url, $new_anchor ) {
+		$resolved = $this->resolve_widget_from_source_key( $source_key );
+		if ( ! $resolved ) {
+			return false;
+		}
+		$content = $this->get_widget_instance_content( $resolved['widget_id'] );
+		if ( '' === $content ) {
+			return false;
+		}
+		$new_anchor = sanitize_text_field( (string) $new_anchor );
+		if ( '' === $new_anchor ) {
+			return false;
+		}
+		$variants = array_unique( array_filter( array_merge(
+			$this->build_url_replace_candidates( (string) $url, 0 ),
+			array( urldecode( (string) $url ), str_replace( '&', '&amp;', (string) $url ) )
+		) ) );
+		foreach ( $variants as $v ) {
+			if ( '' === $v ) {
+				continue;
+			}
+			$pattern     = '#(<a\s[^>]*href=["\']' . preg_quote( $v, '#' ) . '["\'][^>]*>)(.*?)(</a>)#is';
+			$new_content = preg_replace( $pattern, '$1' . esc_html( $new_anchor ) . '$3', $content, 1, $count );
+			if ( $count > 0 && is_string( $new_content ) && $new_content !== $content ) {
+				return $this->save_widget_instance_content( $resolved['widget_id'], $new_content );
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Remove a link from widget HTML content.
+	 *
+	 * @param string $source_key Widget source_key.
+	 * @param string $url        URL to remove.
+	 * @return bool
+	 */
+	public function unlink_in_widget( $source_key, $url ) {
+		return $this->unlink_url_in_widget_html( $source_key, $url );
+	}
+
+	/**
+	 * @param string $source_key Widget source_key.
+	 * @param string $url        URL.
+	 * @return bool
+	 */
+	private function unlink_url_in_widget_html( $source_key, $url ) {
+		$resolved = $this->resolve_widget_from_source_key( $source_key );
+		if ( ! $resolved ) {
+			return false;
+		}
+		$content = $this->get_widget_instance_content( $resolved['widget_id'] );
+		if ( '' === $content ) {
+			return false;
+		}
+		$variants = $this->build_url_replace_candidates( (string) $url, 0 );
+		$changed  = false;
+		foreach ( $variants as $v ) {
+			if ( '' === $v ) {
+				continue;
+			}
+			$pattern = '#<a\s[^>]*href=["\']' . preg_quote( $v, '#' ) . '["\'][^>]*>(.*?)</a>#is';
+			$next    = preg_replace( $pattern, '$1', $content, 1, $count );
+			if ( $count > 0 && is_string( $next ) && $next !== $content ) {
+				$content = $next;
+				$changed = true;
+				break;
+			}
+		}
+		return $changed && $this->save_widget_instance_content( $resolved['widget_id'], $content );
+	}
+
+	/**
+	 * @param string $widget_id Widget instance ID.
+	 * @param string $content   New HTML/text content for the widget field.
+	 * @return bool
+	 */
+	private function save_widget_instance_content( $widget_id, $content ) {
+		if ( ! preg_match( '/^(.+)-(\d+)$/', (string) $widget_id, $m ) ) {
+			return false;
+		}
+		$type   = (string) $m[1];
+		$number = absint( $m[2] );
+		$option = get_option( 'widget_' . $type );
+		if ( ! is_array( $option ) || empty( $option[ $number ] ) || ! is_array( $option[ $number ] ) ) {
+			return false;
+		}
+		if ( 'block' === $type || 'custom_html' === $type ) {
+			$option[ $number ]['content'] = (string) $content;
+		} elseif ( 'text' === $type ) {
+			$option[ $number ]['text'] = (string) $content;
+		} else {
+			$updated = false;
+			foreach ( $option[ $number ] as $key => $val ) {
+				if ( is_string( $val ) && ( false !== stripos( $val, 'http' ) || false !== stripos( $val, 'href=' ) ) ) {
+					$option[ $number ][ $key ] = (string) $content;
+					$updated                   = true;
+					break;
+				}
+			}
+			if ( ! $updated ) {
+				return false;
+			}
+		}
+		return update_option( 'widget_' . $type, $option );
+	}
+
+	/**
+	 * @param string $source_key mi-{item_id} source key.
+	 * @return int Menu item post ID or 0.
+	 */
+	private function menu_item_id_from_source_key( $source_key ) {
+		if ( preg_match( '/^mi-(\d+)/', (string) $source_key, $m ) ) {
+			return absint( $m[1] );
+		}
+		return 0;
+	}
+
+	/**
+	 * Replace a custom menu item URL.
+	 *
+	 * @param string $source_key Menu source_key.
+	 * @param string $old_url    Stored URL.
+	 * @param string $new_url    New URL.
+	 * @return bool
+	 */
+	public function replace_url_in_menu_item( $source_key, $old_url, $new_url ) {
+		$item_id = $this->menu_item_id_from_source_key( $source_key );
+		if ( ! $item_id ) {
+			return false;
+		}
+		$stored = (string) get_post_meta( $item_id, '_menu_item_url', true );
+		if ( '' === $stored && get_post( $item_id ) ) {
+			$item = wp_setup_nav_menu_item( get_post( $item_id ) );
+			$stored = ( $item && ! empty( $item->url ) ) ? (string) $item->url : '';
+		}
+		if ( '' === $stored || ! $this->comment_author_url_matches_row_url( $stored, (string) $old_url ) ) {
+			return false;
+		}
+		update_post_meta( $item_id, '_menu_item_url', $this->clean_url( (string) $new_url ) );
+		return true;
+	}
+
+	/**
+	 * Update menu item label (anchor).
+	 *
+	 * @param string $source_key Menu source_key.
+	 * @param string $new_anchor New label.
+	 * @return bool
+	 */
+	public function replace_anchor_in_menu_item( $source_key, $new_anchor ) {
+		$item_id = $this->menu_item_id_from_source_key( $source_key );
+		$new_anchor = sanitize_text_field( (string) $new_anchor );
+		if ( ! $item_id || '' === $new_anchor ) {
+			return false;
+		}
+		return false !== wp_update_post(
+			array(
+				'ID'         => $item_id,
+				'post_title' => $new_anchor,
+			),
+			true
+		);
+	}
+
+	/**
+	 * Remove a custom menu item URL (keeps the menu entry).
+	 *
+	 * @param string $source_key Menu source_key.
+	 * @param string $url        Stored URL.
+	 * @return bool
+	 */
+	public function unlink_in_menu_item( $source_key, $url ) {
+		return $this->replace_url_in_menu_item( $source_key, $url, '#' );
+	}
+
+	/**
+	 * @param string $source_key t-{term_id}-… source key.
+	 * @return int Term ID or 0.
+	 */
+	private function term_id_from_source_key( $source_key ) {
+		if ( preg_match( '/^t-(\d+)-/', (string) $source_key, $m ) ) {
+			return absint( $m[1] );
+		}
+		return 0;
+	}
+
+	/**
+	 * Replace a URL in a taxonomy term description.
+	 *
+	 * @param string $source_key Term source_key.
+	 * @param string $old_url    Stored URL.
+	 * @param string $new_url    New URL.
+	 * @return bool
+	 */
+	public function replace_url_in_term( $source_key, $old_url, $new_url ) {
+		$term_id = $this->term_id_from_source_key( $source_key );
+		$term    = $term_id ? get_term( $term_id ) : null;
+		if ( ! $term || is_wp_error( $term ) ) {
+			return false;
+		}
+		$desc = isset( $term->description ) ? (string) $term->description : '';
+		if ( '' === $desc ) {
+			return false;
+		}
+		$new_desc = $this->replace_url_in_html_attributes( $desc, (string) $old_url, (string) $new_url, 0 );
+		if ( null === $new_desc ) {
+			$new_desc = $this->replace_plain_url_in_text( $desc, (string) $old_url, (string) $new_url, 0 );
+		}
+		if ( null === $new_desc || $new_desc === $desc ) {
+			return false;
+		}
+		return ! is_wp_error( wp_update_term( $term_id, $term->taxonomy, array( 'description' => $new_desc ) ) );
+	}
+
+	/**
+	 * Replace anchor text in a term description.
+	 *
+	 * @param string $source_key Term source_key.
+	 * @param string $url        href URL.
+	 * @param string $new_anchor New text.
+	 * @return bool
+	 */
+	public function replace_anchor_in_term( $source_key, $url, $new_anchor ) {
+		$term_id = $this->term_id_from_source_key( $source_key );
+		$term    = $term_id ? get_term( $term_id ) : null;
+		if ( ! $term || is_wp_error( $term ) ) {
+			return false;
+		}
+		$new_anchor = sanitize_text_field( (string) $new_anchor );
+		if ( '' === $new_anchor ) {
+			return false;
+		}
+		$desc = isset( $term->description ) ? (string) $term->description : '';
+		foreach ( $this->build_url_replace_candidates( (string) $url, 0 ) as $v ) {
+			if ( '' === $v ) {
+				continue;
+			}
+			$pattern  = '#(<a\s[^>]*href=["\']' . preg_quote( $v, '#' ) . '["\'][^>]*>)(.*?)(</a>)#is';
+			$new_desc = preg_replace( $pattern, '$1' . esc_html( $new_anchor ) . '$3', $desc, 1, $count );
+			if ( $count > 0 && is_string( $new_desc ) && $new_desc !== $desc ) {
+				return ! is_wp_error( wp_update_term( $term_id, $term->taxonomy, array( 'description' => $new_desc ) ) );
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Remove a link from a term description.
+	 *
+	 * @param string $source_key Term source_key.
+	 * @param string $url        URL to remove.
+	 * @return bool
+	 */
+	public function unlink_in_term( $source_key, $url ) {
+		$term_id = $this->term_id_from_source_key( $source_key );
+		$term    = $term_id ? get_term( $term_id ) : null;
+		if ( ! $term || is_wp_error( $term ) ) {
+			return false;
+		}
+		$desc    = isset( $term->description ) ? (string) $term->description : '';
+		$changed = false;
+		foreach ( $this->build_url_replace_candidates( (string) $url, 0 ) as $v ) {
+			if ( '' === $v ) {
+				continue;
+			}
+			$pattern  = '#<a\s[^>]*href=["\']' . preg_quote( $v, '#' ) . '["\'][^>]*>(.*?)</a>#is';
+			$new_desc = preg_replace( $pattern, '$1', $desc, 1, $count );
+			if ( $count > 0 && is_string( $new_desc ) && $new_desc !== $desc ) {
+				$desc    = $new_desc;
+				$changed = true;
+				break;
+			}
+		}
+		if ( ! $changed ) {
+			return false;
+		}
+		return ! is_wp_error( wp_update_term( $term_id, $term->taxonomy, array( 'description' => $desc ) ) );
 	}
 
 	/**
@@ -1639,40 +4940,11 @@ class TSOLIIN_Scanner {
 		$found  = 0;
 		$max_id = $after_id;
 		foreach ( $rows as $row ) {
-			$term_id  = absint( $row->term_id );
-			$taxonomy = sanitize_key( (string) $row->taxonomy );
-			$name     = sanitize_text_field( (string) $row->name );
+			$term_id = absint( $row->term_id );
 			if ( $term_id ) {
 				$max_id = max( $max_id, $term_id );
 			}
-			$desc = isset( $row->description ) ? (string) $row->description : '';
-			if ( '' === trim( $desc ) ) {
-				$this->db->delete_sources_not_in( 'term', 't-' . $term_id . '-', array(), 0 );
-				continue;
-			}
-
-			$tax_obj = get_taxonomy( $taxonomy );
-			$tax_lbl = ( $tax_obj && ! empty( $tax_obj->labels->singular_name ) )
-				? (string) $tax_obj->labels->singular_name
-				: $taxonomy;
-			/* translators: 1: taxonomy label, 2: term name */
-			$default_anchor = sprintf( __( '%1$s: %2$s', 'tso-link-inspector' ), $tax_lbl, $name );
-			$prefix         = 't-' . $term_id . '-';
-			$allowed        = array();
-
-			foreach ( $this->extract_all_url_items( $desc, $desc ) as $item ) {
-				$url = isset( $item['url'] ) ? (string) $item['url'] : '';
-				if ( '' === $url || $this->skip_url( $url ) || $this->is_ignored( $url ) ) {
-					continue;
-				}
-				$sk        = $this->db->sanitize_source_key( $prefix . md5( $url ) );
-				$allowed[] = $sk;
-				$anchor    = ! empty( $item['anchor'] ) ? (string) $item['anchor'] : $default_anchor;
-				$this->db->upsert_link( 0, $url, $anchor, 'term', $sk );
-				$found++;
-			}
-
-			$this->db->delete_sources_not_in( 'term', $prefix, $allowed, 0 );
+			$found += $this->scan_term( $term_id );
 		}
 
 		update_option( 'tsoliin_term_scan_after_id', $max_id, false );
