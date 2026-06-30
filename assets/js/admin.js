@@ -178,9 +178,9 @@
 				var $a = $( this );
 				self.openModal(
 					parseInt( $a.data( 'id' ), 10 ),
-					$a.data( 'url' ),
+					$a.attr( 'data-url' ) || $a.data( 'url' ),
 					parseInt( $a.data( 'post' ), 10 ),
-					$a.data( 'anchor' ) || '',
+					$a.attr( 'data-anchor' ) || $a.data( 'anchor' ) || '',
 					$a.data( 'type' ) || 'link',
 					'1' === String( $a.data( 'anchor-editable' ) || $a.attr( 'data-anchor-editable' ) || '1' )
 				);
@@ -944,12 +944,12 @@
 				$link.attr( 'href', d.new_url ).attr( 'title', d.new_url );
 				$link.text( display + ' ' );
 				$link.append( $icon );
-				$row.find( '.tsoliin-edit-link' ).attr( 'data-url', d.new_url );
+				$row.find( '.tsoliin-edit-link' ).attr( 'data-url', d.new_url ).data( 'url', d.new_url );
 				this.editOldUrl = d.new_url;
 			}
-			if ( d.new_anchor ) {
+			if ( undefined !== d.new_anchor && null !== d.new_anchor ) {
 				$row.find( '.column-anchor_text' ).text( d.new_anchor );
-				$row.find( '.tsoliin-edit-link' ).attr( 'data-anchor', d.new_anchor );
+				$row.find( '.tsoliin-edit-link' ).attr( 'data-anchor', d.new_anchor ).data( 'anchor', d.new_anchor );
 			}
 			if ( d.status_html ) {
 				$row.find( '.column-status_code' ).html( d.status_html );
