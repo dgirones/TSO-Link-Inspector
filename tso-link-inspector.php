@@ -589,7 +589,31 @@ final class TSOLIIN_Link_Inspector {
 		if ( 'post.php' !== $hook && 'post-new.php' !== $hook ) {
 			return;
 		}
+		$post_id = $this->resolve_admin_post_editor_id();
+		if ( $post_id > 0 ) {
+			$post = get_post( $post_id );
+			if ( $post instanceof WP_Post && TSOLIIN_Support::post_uses_block_editor( $post ) ) {
+				return;
+			}
+		}
 		$this->enqueue_editor_link_focus_shared();
+	}
+
+	/**
+	 * Post ID for the current post edit admin screen.
+	 *
+	 * @return int
+	 */
+	private function resolve_admin_post_editor_id() {
+		global $post;
+		if ( $post instanceof WP_Post ) {
+			return (int) $post->ID;
+		}
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only screen routing.
+		if ( isset( $_GET['post'] ) ) {
+			return absint( wp_unslash( $_GET['post'] ) );
+		}
+		return 0;
 	}
 
 	/**
@@ -613,10 +637,15 @@ final class TSOLIIN_Link_Inspector {
 		if ( $this->is_widgets_block_editor_screen() ) {
 			return;
 		}
+		static $enqueued = false;
+		if ( $enqueued ) {
+			return;
+		}
 		$request = $this->get_editor_focus_request();
 		if ( ! $request ) {
 			return;
 		}
+		$enqueued = true;
 		$link    = $request['link'];
 		$post_id = $request['post_id'];
 		wp_enqueue_style(
@@ -627,9 +656,7 @@ final class TSOLIIN_Link_Inspector {
 		);
 		$deps = array();
 		$post = get_post( $post_id );
-		$use_block_editor = ( $post instanceof WP_Post && function_exists( 'use_block_editor_for_post' ) )
-			? use_block_editor_for_post( $post )
-			: false;
+		$use_block_editor = TSOLIIN_Support::post_uses_block_editor( $post );
 		if ( $use_block_editor ) {
 			if ( wp_script_is( 'wp-data', 'registered' ) ) {
 				$deps[] = 'wp-data';

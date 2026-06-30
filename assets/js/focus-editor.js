@@ -8,8 +8,25 @@
 	var codeModeTried     = false;
 	var visualTried       = false;
 	var blockFocusPending = false;
+	var visualModeEnsured = false;
+
+	function isClassicEditorDom() {
+		if ( document.body.classList.contains( 'block-editor-page' ) ) {
+			return false;
+		}
+		return !! (
+			document.getElementById( 'post' ) && (
+				document.getElementById( 'content' ) ||
+				document.getElementById( 'wp-content-editor-container' ) ||
+				document.getElementById( 'postdivrich' )
+			)
+		);
+	}
 
 	function isBlockEditorScreen( data ) {
+		if ( isClassicEditorDom() ) {
+			return false;
+		}
 		if ( data && typeof data.isBlockEditor !== 'undefined' ) {
 			return !! data.isBlockEditor;
 		}
@@ -99,11 +116,21 @@
 	}
 
 	function ensureVisualEditorMode( data ) {
-		if ( ! isBlockEditorScreen( data ) ) {
+		if ( visualModeEnsured || ! isBlockEditorScreen( data ) ) {
 			return;
 		}
 		if ( ! window.wp || ! wp.data ) {
 			return;
+		}
+		var prefSelect = wp.data.select( 'core/preferences' );
+		if ( prefSelect && prefSelect.get ) {
+			try {
+				var current = prefSelect.get( 'core', 'editorMode' );
+				if ( 'visual' === current ) {
+					visualModeEnsured = true;
+					return;
+				}
+			} catch ( err ) {}
 		}
 		var prefs = wp.data.dispatch( 'core/preferences' );
 		if ( ! prefs || ! prefs.set ) {
@@ -115,6 +142,7 @@
 		try {
 			prefs.set( 'core/edit-post', 'editorMode', 'visual' );
 		} catch ( err ) {}
+		visualModeEnsured = true;
 	}
 
 	function getDocumentFromRoot( root ) {
@@ -646,8 +674,6 @@
 			return tryClassicEditorFocus( data, searchVariants );
 		}
 
-		ensureVisualEditorMode( data );
-
 		if ( data.inPostContent === 0 && focusMetaField( data, searchVariants ) ) {
 			return true;
 		}
@@ -693,30 +719,66 @@
 		return false;
 	}
 
+	function whenTinyMceReady( callback ) {
+		if ( typeof callback !== 'function' ) {
+			return;
+		}
+		if ( typeof window.tinymce === 'undefined' ) {
+			callback();
+			return;
+		}
+		var ed = window.tinymce.get( 'content' );
+		if ( ed ) {
+			if ( ed.initialized ) {
+				callback();
+			} else {
+				ed.on( 'init', callback );
+			}
+			return;
+		}
+		window.tinymce.on( 'AddEditor', function ( event ) {
+			if ( event.editor && event.editor.id === 'content' ) {
+				event.editor.on( 'init', callback );
+			}
+		} );
+	}
+
+	function scheduleClassicFallback( data ) {
+		window.setTimeout( function () {
+			if ( focused || ! data ) {
+				return;
+			}
+			tryClassicEditorFocus( data, buildSearchVariants( data ) );
+		}, 2500 );
+	}
+
 	function start() {
 		var data = getFocusData();
 		if ( ! data ) {
 			return;
 		}
-		if ( isBlockEditorScreen( data ) ) {
+		var blockEditor = isBlockEditorScreen( data );
+		if ( blockEditor ) {
 			ensureVisualEditorMode( data );
 		}
-		if ( tryFocus() ) {
-			return;
+		var runFocus = function () {
+			if ( tryFocus() ) {
+				return;
+			}
+			var delays = [ 400, 900, 1500, 2500, 4000, 6000 ];
+			var i;
+			for ( i = 0; i < delays.length; i++ ) {
+				window.setTimeout( tryFocus, delays[ i ] );
+			}
+			if ( blockEditor ) {
+				scheduleClassicFallback( data );
+			}
+		};
+		if ( ! blockEditor ) {
+			whenTinyMceReady( runFocus );
+		} else {
+			runFocus();
 		}
-		if ( isBlockEditorScreen( data ) && window.wp && wp.data && wp.data.subscribe ) {
-			var attempts = 0;
-			var unsubscribe = wp.data.subscribe( function () {
-				attempts++;
-				if ( tryFocus() || attempts > 200 ) {
-					unsubscribe();
-				}
-			} );
-		}
-		window.setTimeout( tryFocus, 600 );
-		window.setTimeout( tryFocus, 1500 );
-		window.setTimeout( tryFocus, 3000 );
-		window.setTimeout( tryFocus, 5000 );
 	}
 
 	if ( window.wp && wp.domReady ) {
