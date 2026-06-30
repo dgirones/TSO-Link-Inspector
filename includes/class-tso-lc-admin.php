@@ -1898,6 +1898,9 @@ class TSOLIIN_Admin {
 
 		$new_anchor     = null !== $new_anchor_raw ? sanitize_text_field( $new_anchor_raw ) : null;
 		$url_changed    = $new_url !== (string) $link->link_url;
+		if ( $url_changed && $this->scanner->urls_equivalent_for_stored_link( (string) $link->link_url, $new_url, (int) $link->post_id ) ) {
+			$url_changed = false;
+		}
 		$anchor_changed = null !== $new_anchor && $new_anchor !== (string) $link->anchor_text;
 		if ( ! $url_changed && $anchor_changed && ! TSOLIIN_Support::can_edit_link_anchor_in_modal( $link ) ) {
 			wp_send_json_error(
@@ -1937,27 +1940,25 @@ class TSOLIIN_Admin {
 					$match_src
 				);
 			} elseif ( in_array( $link_type, array( 'link', 'comment', 'widget', 'menu', 'term' ), true ) ) {
-				if ( ! $url_changed || $url_done ) {
-					$href_for_anchor = $url_changed ? $new_url : (string) $link->link_url;
-					if ( 'comment' === $link_type ) {
-						$anchor_done = $this->update_anchor_in_comment( $link, $href_for_anchor, $new_anchor );
-					} elseif ( 'widget' === $link_type ) {
-						$anchor_done = $this->scanner->replace_anchor_in_widget( (string) $link->source_key, $href_for_anchor, $new_anchor );
-					} elseif ( 'menu' === $link_type ) {
-						$anchor_done = $this->scanner->replace_anchor_in_menu_item( (string) $link->source_key, $new_anchor );
-					} elseif ( 'term' === $link_type ) {
-						$anchor_done = $this->scanner->replace_anchor_in_term( (string) $link->source_key, $href_for_anchor, $new_anchor );
-					} else {
-						$anchor_done = $this->scanner->replace_anchor_in_post( (int) $link->post_id, $href_for_anchor, $new_anchor );
-					}
+				$href_for_anchor = ( $url_changed && $url_done ) ? $new_url : (string) $link->link_url;
+				if ( 'comment' === $link_type ) {
+					$anchor_done = $this->update_anchor_in_comment( $link, $href_for_anchor, $new_anchor );
+				} elseif ( 'widget' === $link_type ) {
+					$anchor_done = $this->scanner->replace_anchor_in_widget( (string) $link->source_key, $href_for_anchor, $new_anchor );
+				} elseif ( 'menu' === $link_type ) {
+					$anchor_done = $this->scanner->replace_anchor_in_menu_item( (string) $link->source_key, $new_anchor );
+				} elseif ( 'term' === $link_type ) {
+					$anchor_done = $this->scanner->replace_anchor_in_term( (string) $link->source_key, $href_for_anchor, $new_anchor );
 				} else {
-					$anchor_done = false;
+					$anchor_done = $this->scanner->replace_anchor_in_post( (int) $link->post_id, $href_for_anchor, $new_anchor );
 				}
 			}
 		}
 
 		if ( $url_changed && ! $url_done ) {
-			if ( 'comment' === $link_type ) {
+			if ( $anchor_changed && $anchor_done ) {
+				$warning = __( 'Link text updated, but the URL could not be changed in the post. Edit the post manually or leave the URL field unchanged next time.', 'tso-link-inspector' );
+			} elseif ( 'comment' === $link_type ) {
 				wp_send_json_error( array( 'message' => __( 'Original URL not found in this comment. Edit the comment manually or check encoding (e.g. trailing slash).', 'tso-link-inspector' ) ) );
 			} elseif ( 'image' === $link_type ) {
 				wp_send_json_error( array( 'message' => __( 'Original image URL not found in post. Check whether the image was edited manually.', 'tso-link-inspector' ) ) );
