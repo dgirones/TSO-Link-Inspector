@@ -626,14 +626,20 @@ final class TSOLIIN_Link_Inspector {
 			TSOLIIN_VERSION
 		);
 		$deps = array();
-		if ( wp_script_is( 'wp-data', 'registered' ) ) {
-			$deps[] = 'wp-data';
-		}
-		if ( wp_script_is( 'wp-dom-ready', 'registered' ) ) {
-			$deps[] = 'wp-dom-ready';
-		}
-		if ( wp_script_is( 'wp-blocks', 'registered' ) ) {
-			$deps[] = 'wp-blocks';
+		$post = get_post( $post_id );
+		$use_block_editor = ( $post instanceof WP_Post && function_exists( 'use_block_editor_for_post' ) )
+			? use_block_editor_for_post( $post )
+			: false;
+		if ( $use_block_editor ) {
+			if ( wp_script_is( 'wp-data', 'registered' ) ) {
+				$deps[] = 'wp-data';
+			}
+			if ( wp_script_is( 'wp-dom-ready', 'registered' ) ) {
+				$deps[] = 'wp-dom-ready';
+			}
+			if ( wp_script_is( 'wp-blocks', 'registered' ) ) {
+				$deps[] = 'wp-blocks';
+			}
 		}
 		$focus_ver = TSOLIIN_VERSION . '.' . (string) filemtime( TSOLIIN_PLUGIN_DIR . 'assets/js/focus-editor.js' );
 		wp_enqueue_script(

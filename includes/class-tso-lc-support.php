@@ -396,15 +396,21 @@ class TSOLIIN_Support {
 
 		$attachment_id = self::resolve_attachment_id_from_url( $url );
 
+		$is_block_editor = false;
+		if ( $post instanceof WP_Post && function_exists( 'use_block_editor_for_post' ) ) {
+			$is_block_editor = (bool) use_block_editor_for_post( $post );
+		}
+
 		return array(
-			'variants'      => array_values( array_unique( array_filter( array_merge( $variants, $extra ) ) ) ),
-			'attrs'         => self::get_focus_attributes_for_link_type( $link_type ),
-			'linkType'      => $link_type,
-			'inPostContent' => $in_post_content ? 1 : 0,
-			'metaKeyHint'   => $meta_key_hint,
-			'contentNeedle' => $content_needle,
-			'attachmentId'  => $attachment_id,
-			'fileName'      => self::file_name_from_url( $url ),
+			'variants'        => array_values( array_unique( array_filter( array_merge( $variants, $extra ) ) ) ),
+			'attrs'           => self::get_focus_attributes_for_link_type( $link_type ),
+			'linkType'        => $link_type,
+			'inPostContent'   => $in_post_content ? 1 : 0,
+			'metaKeyHint'     => $meta_key_hint,
+			'contentNeedle'   => $content_needle,
+			'attachmentId'    => $attachment_id,
+			'fileName'        => self::file_name_from_url( $url ),
+			'isBlockEditor'   => $is_block_editor ? 1 : 0,
 		);
 	}
 
