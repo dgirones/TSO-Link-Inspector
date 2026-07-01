@@ -178,9 +178,9 @@
 				var $a = $( this );
 				self.openModal(
 					parseInt( $a.data( 'id' ), 10 ),
-					$a.data( 'url' ),
+					$a.attr( 'data-url' ) || $a.data( 'url' ),
 					parseInt( $a.data( 'post' ), 10 ),
-					$a.data( 'anchor' ) || '',
+					$a.attr( 'data-anchor' ) || $a.data( 'anchor' ) || '',
 					$a.data( 'type' ) || 'link',
 					'1' === String( $a.data( 'anchor-editable' ) || $a.attr( 'data-anchor-editable' ) || '1' )
 				);
