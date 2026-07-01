@@ -4119,6 +4119,9 @@ class TSOLIIN_Scanner {
 	/**
 	 * Replace anchor text inside an <a href="…"> tag in post content.
 	 *
+	 * Classic Editor: HTML anchors in post_content.
+	 * Block editor: block innerHTML plus attrs JSON (button, navigation-link, etc.).
+	 *
 	 * @param int    $post_id    Post ID.
 	 * @param string $url        href URL as stored in the DB.
 	 * @param string $new_anchor New visible link text.
@@ -4131,34 +4134,402 @@ class TSOLIIN_Scanner {
 		if ( ! $post || '' === $new_anchor ) {
 			return false;
 		}
-		$url      = (string) $url;
-		$content  = $post->post_content;
-		$variants = array_unique( array_filter( array_merge(
-			$this->url_content_variants( $url, $post_id ),
-			array(
-				urldecode( $url ),
-				rawurldecode( $url ),
-				str_replace( '&', '&amp;', $url ),
-				html_entity_decode( $url, ENT_QUOTES, 'UTF-8' ),
-			)
-		) ) );
 
-		foreach ( $variants as $v ) {
-			if ( '' === $v ) {
+		$content     = (string) $post->post_content;
+		$new_content = $this->replace_anchor_in_html_content( $content, (string) $url, $new_anchor, $post_id );
+		if ( null !== $new_content && $new_content !== $content ) {
+			$this->maybe_create_post_revision( $post_id );
+			$r = $this->update_post_content( $post_id, $new_content );
+			if ( ! $r ) {
+				return false;
+			}
+			$this->purge_cache( $post_id );
+			return true;
+		}
+
+		$new_content = $this->replace_anchor_in_parsed_blocks( $content, (string) $url, $new_anchor, $post_id );
+		if ( null !== $new_content && $new_content !== $content ) {
+			$this->maybe_create_post_revision( $post_id );
+			$r = $this->update_post_content( $post_id, $new_content );
+			if ( ! $r ) {
+				return false;
+			}
+			$this->purge_cache( $post_id );
+			return true;
+		}
+
+		if ( $this->replace_anchor_in_post_meta( $post_id, (string) $url, $new_anchor ) ) {
+			$this->purge_cache( $post_id );
+			return true;
+		}
+
+		return false;
+	}
+
+	/**
+	 * Replace link text inside HTML (classic editor or block innerHTML).
+	 *
+	 * @param string $content    Raw HTML.
+	 * @param string $url        Stored href URL.
+	 * @param string $new_anchor New visible text.
+	 * @param int    $post_id    Post ID.
+	 * @return string|null Updated HTML or null when no anchor matched.
+	 */
+	private function replace_anchor_in_html_content( $content, $url, $new_anchor, $post_id ) {
+		$content = (string) $content;
+		if ( '' === trim( $content ) ) {
+			return null;
+		}
+
+		$next = $this->replace_first_matching_anchor_in_html( $content, $url, $new_anchor, $post_id );
+		if ( null !== $next ) {
+			return $next;
+		}
+
+		$candidates = array();
+		foreach ( $this->get_content_url_spellings_for_stored( $content, $url, $post_id ) as $spelling ) {
+			$candidates[] = $spelling;
+		}
+		foreach ( $this->build_url_replace_candidates_for_content( $url, $post_id, $content ) as $spelling ) {
+			$candidates[] = $spelling;
+		}
+		$candidates = array_values( array_unique( array_filter( $candidates ) ) );
+
+		foreach ( $candidates as $spelling ) {
+			$snippet = $this->extract_anchor_tag_snippet_for_href( $content, $spelling );
+			if ( '' === $snippet ) {
 				continue;
 			}
-			$pattern     = '#(<a\s[^>]*href=["\']' . preg_quote( $v, '#' ) . '["\'][^>]*>)(.*?)(</a>)#is';
-			$new_content = preg_replace( $pattern, '$1' . esc_html( $new_anchor ) . '$3', $content, 1, $count );
-			if ( $count > 0 && is_string( $new_content ) && $new_content !== $content ) {
-				$this->maybe_create_post_revision( $post_id );
-				return $this->update_post_content( $post_id, $new_content );
+			$updated = $this->replace_anchor_text_in_tag_snippet( $snippet, $new_anchor );
+			if ( $updated === $snippet ) {
+				continue;
+			}
+			$pos = strpos( $content, $snippet );
+			if ( false === $pos ) {
+				$pos = stripos( $content, $snippet );
+				if ( false === $pos ) {
+					continue;
+				}
+			}
+			return substr_replace( $content, $updated, $pos, strlen( $snippet ) );
+		}
+
+		return null;
+	}
+
+	/**
+	 * Replace the first <a href="…"> whose href matches the stored URL.
+	 *
+	 * @param string $content    HTML.
+	 * @param string $stored_url Stored URL.
+	 * @param string $new_anchor New link text.
+	 * @param int    $post_id    Post ID.
+	 * @return string|null
+	 */
+	private function replace_first_matching_anchor_in_html( $content, $stored_url, $new_anchor, $post_id ) {
+		$content = (string) $content;
+		if ( ! preg_match_all(
+			'#<a\b[^>]*\bhref\s*=\s*(["\'])([^"\']*)\1[^>]*>(.*?)</a>#is',
+			$content,
+			$matches,
+			PREG_OFFSET_CAPTURE
+		) ) {
+			return null;
+		}
+
+		foreach ( $matches[2] as $i => $href_part ) {
+			$href = (string) $href_part[0];
+			if ( ! $this->url_attribute_matches_stored( (string) $stored_url, $href, $post_id ) ) {
+				continue;
+			}
+			$snippet = (string) $matches[0][ $i ][0];
+			$pos     = (int) $matches[0][ $i ][1];
+			$updated = $this->replace_anchor_text_in_tag_snippet( $snippet, $new_anchor );
+			if ( $updated === $snippet ) {
+				continue;
+			}
+			return substr_replace( $content, $updated, $pos, strlen( $snippet ) );
+		}
+
+		return null;
+	}
+
+	/**
+	 * Update link labels inside Gutenberg block attrs / innerHTML.
+	 *
+	 * @param string $raw        post_content.
+	 * @param string $stored_url Stored URL.
+	 * @param string $new_anchor New visible text.
+	 * @param int    $post_id    Post ID.
+	 * @return string|null
+	 */
+	private function replace_anchor_in_parsed_blocks( $raw, $stored_url, $new_anchor, $post_id = 0 ) {
+		if ( ! function_exists( 'parse_blocks' ) || ! function_exists( 'serialize_blocks' ) ) {
+			return null;
+		}
+		$raw = (string) $raw;
+		if ( '' === trim( $raw ) ) {
+			return null;
+		}
+		$blocks = parse_blocks( $raw );
+		if ( empty( $blocks ) ) {
+			return null;
+		}
+		$candidates = $this->build_url_replace_candidates_for_content( (string) $stored_url, $post_id, $raw );
+		if ( empty( $candidates ) ) {
+			return null;
+		}
+		$changed = false;
+		$blocks  = $this->replace_anchor_in_blocks_recursive( $blocks, (string) $stored_url, $candidates, $new_anchor, $post_id, $changed );
+		if ( ! $changed ) {
+			return null;
+		}
+		return serialize_blocks( $blocks );
+	}
+
+	/**
+	 * @param array[]  $blocks     Parsed blocks.
+	 * @param string   $stored_url Stored URL.
+	 * @param string[] $candidates URL variants to match.
+	 * @param string   $new_anchor New link text.
+	 * @param int      $post_id    Post ID.
+	 * @param bool     $changed    Set true when modified.
+	 * @return array[]
+	 */
+	private function replace_anchor_in_blocks_recursive( array $blocks, $stored_url, array $candidates, $new_anchor, $post_id, &$changed ) {
+		foreach ( $blocks as &$block ) {
+			if ( ! is_array( $block ) ) {
+				continue;
+			}
+			if ( ! empty( $block['innerHTML'] ) && is_string( $block['innerHTML'] ) ) {
+				$next = $this->replace_anchor_in_html_content( $block['innerHTML'], (string) $stored_url, $new_anchor, $post_id );
+				if ( null !== $next && $next !== $block['innerHTML'] ) {
+					$block['innerHTML'] = $next;
+					$changed            = true;
+				}
+			}
+			if ( ! empty( $block['innerContent'] ) && is_array( $block['innerContent'] ) ) {
+				foreach ( $block['innerContent'] as $idx => $part ) {
+					if ( ! is_string( $part ) || '' === $part ) {
+						continue;
+					}
+					$next = $this->replace_anchor_in_html_content( $part, (string) $stored_url, $new_anchor, $post_id );
+					if ( null !== $next && $next !== $part ) {
+						$block['innerContent'][ $idx ] = $next;
+						$changed                       = true;
+					}
+				}
+			}
+			if ( ! empty( $block['attrs'] ) && is_array( $block['attrs'] ) ) {
+				$next = $this->replace_anchor_labels_in_array( $block['attrs'], $candidates, $new_anchor, $changed );
+				if ( $next !== $block['attrs'] ) {
+					$block['attrs'] = $next;
+				}
+			}
+			if ( ! empty( $block['innerBlocks'] ) && is_array( $block['innerBlocks'] ) ) {
+				$block['innerBlocks'] = $this->replace_anchor_in_blocks_recursive(
+					$block['innerBlocks'],
+					$stored_url,
+					$candidates,
+					$new_anchor,
+					$post_id,
+					$changed
+				);
+			}
+		}
+		unset( $block );
+		return $blocks;
+	}
+
+	/**
+	 * @param array    $data       Block attrs or nested array.
+	 * @param string[] $candidates URL variants to match.
+	 * @param string   $new_anchor Replacement link text.
+	 * @param bool     $changed    Set true when a value changes.
+	 * @param int      $depth      Recursion guard.
+	 * @return array
+	 */
+	private function replace_anchor_labels_in_array( array $data, array $candidates, $new_anchor, &$changed, $depth = 0 ) {
+		if ( $depth > 12 ) {
+			return $data;
+		}
+
+		foreach ( $data as $key => $value ) {
+			if ( is_array( $value ) ) {
+				$data[ $key ] = $this->replace_anchor_labels_in_array( $value, $candidates, $new_anchor, $changed, $depth + 1 );
+			}
+		}
+
+		if ( $this->array_has_anchor_label_fields( $data ) && $this->array_tree_contains_url_candidate( $data, $candidates ) ) {
+			foreach ( array( 'text', 'title', 'linktitle', 'label', 'content' ) as $label_key ) {
+				if ( array_key_exists( $label_key, $data ) && is_string( $data[ $label_key ] ) ) {
+					$data[ $label_key ] = sanitize_text_field( (string) $new_anchor );
+					$changed            = true;
+				}
+			}
+		}
+
+		return $data;
+	}
+
+	/**
+	 * Whether an associative array owns visible link text fields in block attrs.
+	 *
+	 * @param array $data Block attrs fragment.
+	 * @return bool
+	 */
+	private function array_has_anchor_label_fields( array $data ) {
+		foreach ( array( 'text', 'title', 'linktitle', 'label', 'content' ) as $key ) {
+			if ( array_key_exists( $key, $data ) ) {
+				return true;
 			}
 		}
 		return false;
 	}
 
 	/**
+	 * Replace anchor text inside scannable post meta values.
+	 *
+	 * @param int    $post_id    Post ID.
+	 * @param string $stored_url Stored URL.
+	 * @param string $new_anchor New link text.
+	 * @return bool
+	 */
+	public function replace_anchor_in_post_meta( $post_id, $stored_url, $new_anchor ) {
+		$post_id = absint( $post_id );
+		if ( $post_id <= 0 ) {
+			return false;
+		}
+		$changed_any = false;
+		$grouped     = array();
+		foreach ( $this->get_scannable_meta_entries( $post_id ) as $entry ) {
+			$key = (string) $entry['key'];
+			if ( ! isset( $grouped[ $key ] ) ) {
+				$grouped[ $key ] = array();
+			}
+			$grouped[ $key ][] = $entry['value'];
+		}
+		foreach ( $grouped as $key => $values ) {
+			$updated     = array();
+			$key_changed = false;
+			foreach ( $values as $value ) {
+				$new_value = $this->replace_anchor_in_meta_value( $value, (string) $stored_url, $new_anchor, $post_id );
+				if ( null !== $new_value ) {
+					$updated[]   = $new_value;
+					$key_changed = true;
+				} else {
+					$updated[] = $value;
+				}
+			}
+			if ( ! $key_changed ) {
+				continue;
+			}
+			delete_post_meta( $post_id, $key );
+			foreach ( $updated as $row ) {
+				add_post_meta( $post_id, $key, $row );
+			}
+			$changed_any = true;
+		}
+		return $changed_any;
+	}
+
+	/**
+	 * @param mixed  $val        Meta value.
+	 * @param string $stored_url Stored URL.
+	 * @param string $new_anchor New link text.
+	 * @param int    $post_id    Post ID.
+	 * @return mixed|null Updated value or null when unchanged.
+	 */
+	private function replace_anchor_in_meta_value( $val, $stored_url, $new_anchor, $post_id ) {
+		if ( is_string( $val ) ) {
+			$next = $this->replace_anchor_in_html_content( $val, $stored_url, $new_anchor, $post_id );
+			return ( null !== $next && $next !== $val ) ? $next : null;
+		}
+		if ( is_array( $val ) ) {
+			$candidates = $this->build_url_replace_candidates( (string) $stored_url, $post_id );
+			if ( isset( $val['url'] ) && is_string( $val['url'] )
+				&& $this->url_value_matches_candidates( (string) $val['url'], $candidates ) ) {
+				$changed = false;
+				foreach ( array( 'text', 'title', 'linktitle', 'label', 'content' ) as $label_key ) {
+					if ( array_key_exists( $label_key, $val ) && is_string( $val[ $label_key ] ) ) {
+						$val[ $label_key ] = sanitize_text_field( (string) $new_anchor );
+						$changed           = true;
+					}
+				}
+				return $changed ? $val : null;
+			}
+			$changed = false;
+			foreach ( $val as $k => $sub ) {
+				$next = $this->replace_anchor_in_meta_value( $sub, $stored_url, $new_anchor, $post_id );
+				if ( null !== $next ) {
+					$val[ $k ] = $next;
+					$changed   = true;
+				}
+			}
+			return $changed ? $val : null;
+		}
+		if ( is_object( $val ) ) {
+			$changed = false;
+			foreach ( get_object_vars( $val ) as $k => $sub ) {
+				$next = $this->replace_anchor_in_meta_value( $sub, $stored_url, $new_anchor, $post_id );
+				if ( null !== $next ) {
+					$val->$k = $next;
+					$changed = true;
+				}
+			}
+			return $changed ? $val : null;
+		}
+		return null;
+	}
+
+	/**
+	 * Full <a href="…">…</a> snippet matching an href spelling in post content.
+	 *
+	 * @param string $content       Raw post HTML.
+	 * @param string $href_spelling Exact href attribute value.
+	 * @return string
+	 */
+	private function extract_anchor_tag_snippet_for_href( $content, $href_spelling ) {
+		$content = (string) $content;
+		$open    = $this->extract_tag_snippet_for_attr_value( $content, 'href', (string) $href_spelling );
+		if ( '' === $open || ! preg_match( '#^<a\b#i', $open ) ) {
+			return '';
+		}
+		$pos = strpos( $content, $open );
+		if ( false === $pos ) {
+			$pos = stripos( $content, $open );
+			if ( false === $pos ) {
+				return '';
+			}
+		}
+		$after_open = $pos + strlen( $open );
+		$close_pos  = stripos( $content, '</a>', $after_open );
+		if ( false === $close_pos ) {
+			return '';
+		}
+		return substr( $content, $pos, $close_pos + 4 - $pos );
+	}
+
+	/**
+	 * Replace visible text inside a single anchor tag snippet.
+	 *
+	 * @param string $snippet    Full <a>…</a> HTML.
+	 * @param string $new_anchor New link text.
+	 * @return string
+	 */
+	private function replace_anchor_text_in_tag_snippet( $snippet, $new_anchor ) {
+		$snippet = (string) $snippet;
+		if ( ! preg_match( '#^(<a\b[^>]*>)(.*?)(</a>)$#is', $snippet, $matches ) ) {
+			return $snippet;
+		}
+		return $matches[1] . esc_html( (string) $new_anchor ) . $matches[3];
+	}
+
+	/**
 	 * Remove an anchor tag, keeping inner text; for images/iframes remove the element.
+	 *
+	 * Classic Editor: HTML in post_content.
+	 * Block editor: block innerHTML plus attrs JSON when no rendered tag exists.
 	 *
 	 * @param int    $post_id   Post ID.
 	 * @param string $url       URL to unlink.
@@ -4172,61 +4543,412 @@ class TSOLIIN_Scanner {
 		if ( ! $post ) {
 			return false;
 		}
-		$url      = (string) $url;
-		$variants = array_unique( array_filter( array_merge(
-			$this->url_content_variants( $url, $post_id ),
-			array( urldecode( $url ), rawurldecode( $url ) )
-		) ) );
-		$content  = $post->post_content;
-		$changed  = false;
+
+		$content     = (string) $post->post_content;
+		$new_content = $this->unlink_in_html_content( $content, (string) $url, $link_type, $post_id );
+		if ( null !== $new_content && $new_content !== $content ) {
+			$this->maybe_create_post_revision( $post_id );
+			$r = $this->update_post_content( $post_id, $new_content );
+			if ( ! $r ) {
+				return false;
+			}
+			$this->purge_cache( $post_id );
+			return true;
+		}
+
+		$new_content = $this->unlink_in_parsed_blocks( $content, (string) $url, $link_type, $post_id );
+		if ( null !== $new_content && $new_content !== $content ) {
+			$this->maybe_create_post_revision( $post_id );
+			$r = $this->update_post_content( $post_id, $new_content );
+			if ( ! $r ) {
+				return false;
+			}
+			$this->purge_cache( $post_id );
+			return true;
+		}
+
+		return false;
+	}
+
+	/**
+	 * Unlink inside raw HTML (classic editor or block innerHTML).
+	 *
+	 * @param string $content   HTML fragment.
+	 * @param string $url       Stored URL.
+	 * @param string $link_type link|image|iframe.
+	 * @param int    $post_id   Post ID.
+	 * @return string|null
+	 */
+	private function unlink_in_html_content( $content, $url, $link_type, $post_id ) {
+		$content = (string) $content;
+		if ( '' === trim( $content ) ) {
+			return null;
+		}
 
 		if ( 'image' === $link_type ) {
-			foreach ( $variants as $v ) {
-				if ( '' === $v ) {
-					continue;
-				}
-				$new = preg_replace( '#<img\s[^>]*src=["\']' . preg_quote( $v, '#' ) . '["\'][^>]*/?\s*>#is', '', $content );
-				if ( null !== $new && $new !== $content ) {
-					$content = $new;
-					$changed = true;
-					break;
-				}
-			}
-		} elseif ( 'iframe' === $link_type ) {
-			foreach ( $variants as $v ) {
-				if ( '' === $v ) {
-					continue;
-				}
-				$new = preg_replace( '#<iframe\s[^>]*src=["\']' . preg_quote( $v, '#' ) . '["\'][^>]*>.*?</iframe>#is', '', $content );
-				if ( null !== $new && $new !== $content ) {
-					$content = $new;
-					$changed = true;
-					break;
-				}
-			}
-		} else {
-			foreach ( $variants as $v ) {
-				if ( '' === $v ) {
-					continue;
-				}
-				$new = preg_replace( '#<a\s[^>]*href=["\']' . preg_quote( $v, '#' ) . '["\'][^>]*>(.*?)</a>#is', '$1', $content );
-				if ( null !== $new && $new !== $content ) {
-					$content = $new;
-					$changed = true;
-					break;
-				}
-			}
+			return $this->unlink_image_in_html_content( $content, $url, $post_id );
+		}
+		if ( 'iframe' === $link_type ) {
+			return $this->unlink_iframe_in_html_content( $content, $url, $post_id );
+		}
+		return $this->unlink_link_in_html_content( $content, $url, $post_id );
+	}
+
+	/**
+	 * @param string $content   HTML.
+	 * @param string $url       Stored href URL.
+	 * @param int    $post_id   Post ID.
+	 * @return string|null
+	 */
+	private function unlink_link_in_html_content( $content, $url, $post_id ) {
+		$content = (string) $content;
+		if ( ! preg_match_all(
+			'#<a\b[^>]*\bhref\s*=\s*(["\'])([^"\']*)\1[^>]*>(.*?)</a>#is',
+			$content,
+			$matches,
+			PREG_OFFSET_CAPTURE
+		) ) {
+			return null;
 		}
 
+		foreach ( $matches[2] as $i => $href_part ) {
+			$href = (string) $href_part[0];
+			if ( ! $this->url_attribute_matches_stored( (string) $url, $href, $post_id ) ) {
+				continue;
+			}
+			$snippet = (string) $matches[0][ $i ][0];
+			$inner   = (string) $matches[3][ $i ][0];
+			$pos     = (int) $matches[0][ $i ][1];
+			return substr_replace( $content, $inner, $pos, strlen( $snippet ) );
+		}
+
+		$candidates = $this->build_url_replace_candidates_for_content( (string) $url, $post_id, $content );
+		foreach ( $candidates as $spelling ) {
+			$snippet = $this->extract_anchor_tag_snippet_for_href( $content, $spelling );
+			if ( '' === $snippet || ! preg_match( '#^(<a\b[^>]*>)(.*?)(</a>)$#is', $snippet, $parts ) ) {
+				continue;
+			}
+			$pos = strpos( $content, $snippet );
+			if ( false === $pos ) {
+				$pos = stripos( $content, $snippet );
+				if ( false === $pos ) {
+					continue;
+				}
+			}
+			return substr_replace( $content, $parts[2], $pos, strlen( $snippet ) );
+		}
+
+		return null;
+	}
+
+	/**
+	 * @param string $content HTML.
+	 * @param string $url     Stored src URL.
+	 * @param int    $post_id Post ID.
+	 * @return string|null
+	 */
+	private function unlink_image_in_html_content( $content, $url, $post_id ) {
+		$content     = (string) $content;
+		$stored_urls = array_values( array_unique( array_filter( array( (string) $url ) ) ) );
+		$candidates  = array();
+		foreach ( $stored_urls as $stored ) {
+			$candidates = array_merge(
+				$candidates,
+				$this->build_url_replace_candidates_for_content( $stored, $post_id, $content )
+			);
+		}
+		$candidates = array_values( array_unique( array_filter( $candidates ) ) );
+
+		foreach ( $candidates as $spelling ) {
+			$snippet = $this->extract_tag_snippet_for_attr_value( $content, 'src', $spelling );
+			if ( '' === $snippet || false === stripos( $snippet, '<img' ) ) {
+				continue;
+			}
+			$pos = strpos( $content, $snippet );
+			if ( false === $pos ) {
+				$pos = stripos( $content, $snippet );
+				if ( false === $pos ) {
+					continue;
+				}
+			}
+			return substr_replace( $content, '', $pos, strlen( $snippet ) );
+		}
+
+		$attachment_id = TSOLIIN_Support::resolve_attachment_id_from_url( (string) $url );
+		if ( $attachment_id > 0 && preg_match(
+			'#<img\b[^>]*\bclass=(["\'])[^"\']*\bwp-image-' . preg_quote( (string) $attachment_id, '#' ) . '\b[^"\']*\1[^>]*/?>#is',
+			$content,
+			$matches,
+			PREG_OFFSET_CAPTURE
+		) ) {
+			$snippet = (string) $matches[0][0];
+			$pos     = (int) $matches[0][1];
+			return substr_replace( $content, '', $pos, strlen( $snippet ) );
+		}
+
+		return null;
+	}
+
+	/**
+	 * @param string $content HTML.
+	 * @param string $url     Stored src URL.
+	 * @param int    $post_id Post ID.
+	 * @return string|null
+	 */
+	private function unlink_iframe_in_html_content( $content, $url, $post_id ) {
+		$content = (string) $content;
+		if ( ! preg_match_all(
+			'#<iframe\b[^>]*\bsrc\s*=\s*(["\'])([^"\']*)\1[^>]*>.*?</iframe>#is',
+			$content,
+			$matches,
+			PREG_OFFSET_CAPTURE
+		) ) {
+			return null;
+		}
+
+		foreach ( $matches[2] as $i => $src_part ) {
+			$src = (string) $src_part[0];
+			if ( ! $this->url_attribute_matches_stored( (string) $url, $src, $post_id ) ) {
+				continue;
+			}
+			$snippet = (string) $matches[0][ $i ][0];
+			$pos     = (int) $matches[0][ $i ][1];
+			return substr_replace( $content, '', $pos, strlen( $snippet ) );
+		}
+
+		$candidates = $this->build_url_replace_candidates_for_content( (string) $url, $post_id, $content );
+		foreach ( $candidates as $spelling ) {
+			$snippet = $this->extract_tag_snippet_for_attr_value( $content, 'src', $spelling );
+			if ( '' === $snippet || false === stripos( $snippet, '<iframe' ) ) {
+				continue;
+			}
+			$close_pos = stripos( $content, '</iframe>', strpos( $content, $snippet ) );
+			if ( false === $close_pos ) {
+				continue;
+			}
+			$end     = $close_pos + 9;
+			$pos     = strpos( $content, $snippet );
+			if ( false === $pos ) {
+				$pos = stripos( $content, $snippet );
+				if ( false === $pos ) {
+					continue;
+				}
+			}
+			$full_snippet = substr( $content, $pos, $end - $pos );
+			return substr_replace( $content, '', $pos, strlen( $full_snippet ) );
+		}
+
+		return null;
+	}
+
+	/**
+	 * Unlink inside Gutenberg block attrs / innerHTML.
+	 *
+	 * @param string $raw       post_content.
+	 * @param string $url       Stored URL.
+	 * @param string $link_type link|image|iframe.
+	 * @param int    $post_id   Post ID.
+	 * @return string|null
+	 */
+	private function unlink_in_parsed_blocks( $raw, $url, $link_type, $post_id = 0 ) {
+		if ( ! function_exists( 'parse_blocks' ) || ! function_exists( 'serialize_blocks' ) ) {
+			return null;
+		}
+		$raw = (string) $raw;
+		if ( '' === trim( $raw ) ) {
+			return null;
+		}
+		$blocks = parse_blocks( $raw );
+		if ( empty( $blocks ) ) {
+			return null;
+		}
+		$candidates = $this->build_url_replace_candidates_for_content( (string) $url, $post_id, $raw );
+		if ( empty( $candidates ) ) {
+			return null;
+		}
+		$changed = false;
+		$blocks  = $this->unlink_in_blocks_recursive( $blocks, (string) $url, $candidates, $link_type, $post_id, $changed );
 		if ( ! $changed ) {
+			return null;
+		}
+		return serialize_blocks( $blocks );
+	}
+
+	/**
+	 * @param array[]  $blocks     Parsed blocks.
+	 * @param string   $url        Stored URL.
+	 * @param string[] $candidates URL variants to match.
+	 * @param string   $link_type  link|image|iframe.
+	 * @param int      $post_id    Post ID.
+	 * @param bool     $changed    Set true when modified.
+	 * @return array[]
+	 */
+	private function unlink_in_blocks_recursive( array $blocks, $url, array $candidates, $link_type, $post_id, &$changed ) {
+		$result = array();
+		foreach ( $blocks as $block ) {
+			if ( ! is_array( $block ) ) {
+				$result[] = $block;
+				continue;
+			}
+			if ( 'image' === $link_type && $this->block_matches_media_unlink( $block, $candidates ) ) {
+				$changed = true;
+				continue;
+			}
+			if ( 'iframe' === $link_type && $this->block_matches_media_unlink( $block, $candidates ) ) {
+				$changed = true;
+				continue;
+			}
+			if ( ! empty( $block['innerHTML'] ) && is_string( $block['innerHTML'] ) ) {
+				$next = $this->unlink_in_html_content( $block['innerHTML'], (string) $url, $link_type, $post_id );
+				if ( null !== $next && $next !== $block['innerHTML'] ) {
+					$block['innerHTML'] = $next;
+					$changed            = true;
+				}
+			}
+			if ( ! empty( $block['innerContent'] ) && is_array( $block['innerContent'] ) ) {
+				foreach ( $block['innerContent'] as $idx => $part ) {
+					if ( ! is_string( $part ) || '' === $part ) {
+						continue;
+					}
+					$next = $this->unlink_in_html_content( $part, (string) $url, $link_type, $post_id );
+					if ( null !== $next && $next !== $part ) {
+						$block['innerContent'][ $idx ] = $next;
+						$changed                       = true;
+					}
+				}
+			}
+			if ( ! empty( $block['attrs'] ) && is_array( $block['attrs'] ) ) {
+				if ( 'link' === $link_type ) {
+					$next = $this->clear_link_urls_in_array( $block['attrs'], $candidates, $changed );
+					if ( $next !== $block['attrs'] ) {
+						$block['attrs'] = $next;
+					}
+				} elseif ( 'image' === $link_type ) {
+					$next = $this->remove_matching_images_from_block_attrs( $block['attrs'], $candidates, $changed );
+					if ( $next !== $block['attrs'] ) {
+						$block['attrs'] = $next;
+					}
+				} elseif ( 'iframe' === $link_type ) {
+					$next = $this->clear_link_urls_in_array( $block['attrs'], $candidates, $changed );
+					if ( $next !== $block['attrs'] ) {
+						$block['attrs'] = $next;
+					}
+				}
+			}
+			if ( ! empty( $block['innerBlocks'] ) && is_array( $block['innerBlocks'] ) ) {
+				$block['innerBlocks'] = $this->unlink_in_blocks_recursive(
+					$block['innerBlocks'],
+					$url,
+					$candidates,
+					$link_type,
+					$post_id,
+					$changed
+				);
+			}
+			$result[] = $block;
+		}
+		return $result;
+	}
+
+	/**
+	 * Whether a parsed block should be dropped when unlinking an image or iframe URL.
+	 *
+	 * @param array    $block      Parsed block.
+	 * @param string[] $candidates URL variants.
+	 * @return bool
+	 */
+	private function block_matches_media_unlink( array $block, array $candidates ) {
+		$name = isset( $block['blockName'] ) ? (string) $block['blockName'] : '';
+		if ( 'core/gallery' === $name ) {
 			return false;
 		}
-		$r = $this->update_post_content( $post_id, $content );
-		if ( ! $r ) {
+		if ( empty( $block['attrs'] ) || ! is_array( $block['attrs'] ) ) {
 			return false;
 		}
-		$this->purge_cache( $post_id );
-		return true;
+		if ( ! $this->array_tree_contains_url_candidate( $block['attrs'], $candidates ) ) {
+			return false;
+		}
+		$name = isset( $block['blockName'] ) ? (string) $block['blockName'] : '';
+		$media_blocks = array(
+			'core/image',
+			'core/gallery',
+			'core/cover',
+			'core/media-text',
+			'core/video',
+			'core/audio',
+			'core/file',
+			'core/embed',
+			'core/html',
+		);
+		if ( in_array( $name, $media_blocks, true ) ) {
+			return true;
+		}
+		return ( '' !== $name && ( false !== strpos( $name, 'image' ) || false !== strpos( $name, 'gallery' ) || false !== strpos( $name, 'embed' ) ) );
+	}
+
+	/**
+	 * Clear href/url fields in block attrs while keeping visible link text.
+	 *
+	 * @param array    $data       Block attrs or nested array.
+	 * @param string[] $candidates URL variants to match.
+	 * @param bool     $changed    Set true when a value changes.
+	 * @param int      $depth      Recursion guard.
+	 * @return array
+	 */
+	private function clear_link_urls_in_array( array $data, array $candidates, &$changed, $depth = 0 ) {
+		if ( $depth > 12 ) {
+			return $data;
+		}
+		$url_keys = array( 'url', 'href', 'linkurl', 'buttonurl', 'fileurl', 'mediaurl' );
+		foreach ( $data as $key => $value ) {
+			if ( is_array( $value ) ) {
+				if ( 'link' === strtolower( (string) $key ) ) {
+					$next = $this->clear_link_urls_in_array( $value, $candidates, $changed, $depth + 1 );
+					if ( $next !== $value ) {
+						$data[ $key ] = $next;
+					}
+					continue;
+				}
+				$data[ $key ] = $this->clear_link_urls_in_array( $value, $candidates, $changed, $depth + 1 );
+				continue;
+			}
+			if ( ! is_string( $value ) ) {
+				continue;
+			}
+			$key_lower = strtolower( (string) $key );
+			$looks_url = in_array( $key_lower, $url_keys, true )
+				|| (bool) preg_match( '/(?:url|link|href)$/i', $key_lower );
+			if ( $looks_url && $this->url_value_matches_candidates( $value, $candidates ) ) {
+				$data[ $key ] = '';
+				$changed      = true;
+			}
+		}
+		return $data;
+	}
+
+	/**
+	 * Remove gallery image entries whose URL tree matches the stored URL.
+	 *
+	 * @param array    $attrs      Block attrs.
+	 * @param string[] $candidates URL variants.
+	 * @param bool     $changed    Set true when modified.
+	 * @return array
+	 */
+	private function remove_matching_images_from_block_attrs( array $attrs, array $candidates, &$changed ) {
+		if ( ! empty( $attrs['images'] ) && is_array( $attrs['images'] ) ) {
+			$next = array();
+			foreach ( $attrs['images'] as $image ) {
+				if ( is_array( $image ) && $this->array_tree_contains_url_candidate( $image, $candidates ) ) {
+					$changed = true;
+					continue;
+				}
+				$next[] = $image;
+			}
+			if ( count( $next ) !== count( $attrs['images'] ) ) {
+				$attrs['images'] = array_values( $next );
+			}
+		}
+		return $attrs;
 	}
 
 	/**
