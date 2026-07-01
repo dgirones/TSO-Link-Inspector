@@ -3852,7 +3852,7 @@ class TSOLIIN_Scanner {
 
 		$new_alt    = sanitize_text_field( (string) $new_alt );
 		$candidates = array();
-		foreach ( array_unique( array_filter( array( (string) $match_src, (string) $old_url ) ) ) ) as $stored ) {
+		foreach ( array_unique( array_filter( array( (string) $match_src, (string) $old_url ) ) ) as $stored ) {
 			$candidates = array_merge(
 				$candidates,
 				$this->build_url_replace_candidates_for_content( $stored, $post_id, $raw )
