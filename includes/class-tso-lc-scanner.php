@@ -1615,8 +1615,169 @@ class TSOLIIN_Scanner {
 	 * @return string
 	 */
 	private function render_content( $raw ) {
+		$raw  = (string) $raw;
 		$html = do_blocks( $raw );
-		return ( '' === trim( $html ) && '' !== trim( $raw ) ) ? $raw : $html;
+		if ( '' === trim( $html ) && '' !== trim( $raw ) ) {
+			$html = $raw;
+		}
+		if ( false !== strpos( $html, '[' ) && function_exists( 'do_shortcode' ) ) {
+			$expanded = do_shortcode( $html );
+			if ( is_string( $expanded ) && '' !== trim( $expanded ) ) {
+				$html = $expanded;
+			}
+		}
+		return $html;
+	}
+
+	/**
+	 * Images referenced by Classic Editor [gallery] shortcodes (ids are stored, not <img> URLs).
+	 *
+	 * @param string $content Raw post_content.
+	 * @param int    $post_id Post ID (for [gallery] without ids).
+	 * @return array[]
+	 */
+	private function extract_gallery_shortcode_images( $content, $post_id = 0 ) {
+		$content = (string) $content;
+		$post_id = absint( $post_id );
+		if ( '' === $content || false === stripos( $content, '[gallery' ) ) {
+			return array();
+		}
+		if ( ! preg_match_all( '/\[gallery\b([^\]]*)\]/i', $content, $matches ) ) {
+			return array();
+		}
+
+		$items = array();
+		$seen  = array();
+		foreach ( $matches[1] as $attr_string ) {
+			$atts = shortcode_parse_atts( 'gallery ' . trim( (string) $attr_string ) );
+			if ( ! is_array( $atts ) ) {
+				$atts = array();
+			}
+			$size = ! empty( $atts['size'] ) ? sanitize_key( (string) $atts['size'] : 'thumbnail';
+			if ( '' === $size ) {
+				$size = 'thumbnail';
+			}
+			foreach ( $this->get_gallery_shortcode_attachment_ids( $atts, $post_id ) as $attachment_id ) {
+				$url = $this->attachment_image_url_for_size( $attachment_id, $size );
+				if ( '' === $url || isset( $seen[ $url ] ) ) {
+					continue;
+				}
+				$seen[ $url ] = true;
+				$items[]      = array(
+					'url'    => $url,
+					'anchor' => $this->attachment_label( $attachment_id ),
+					'type'   => 'image',
+				);
+			}
+		}
+		return $items;
+	}
+
+	/**
+	 * Attachment IDs listed in a [gallery] shortcode attribute set.
+	 *
+	 * @param array $atts    Parsed shortcode attributes.
+	 * @param int   $post_id Parent post when ids are omitted.
+	 * @return int[]
+	 */
+	private function get_gallery_shortcode_attachment_ids( array $atts, $post_id = 0 ) {
+		$ids = array();
+		if ( ! empty( $atts['ids'] ) ) {
+			$ids = array_map( 'absint', preg_split( '/\s*,\s*/', (string) $atts['ids'] ) );
+		} elseif ( ! empty( $atts['include'] ) ) {
+			$ids = array_map( 'absint', preg_split( '/\s*,\s*/', (string) $atts['include'] ) );
+		} elseif ( $post_id > 0 ) {
+			$ids = get_posts(
+				array(
+					'post_parent'    => $post_id,
+					'post_type'      => 'attachment',
+					'post_mime_type' => 'image',
+					'posts_per_page' => -1,
+					'post_status'    => 'inherit',
+					'orderby'        => 'menu_order',
+					'order'          => 'ASC',
+					'fields'         => 'ids',
+				)
+			);
+			if ( ! empty( $atts['exclude'] ) ) {
+				$exclude = array_map( 'absint', preg_split( '/\s*,\s*/', (string) $atts['exclude'] ) );
+				$ids     = array_values( array_diff( array_map( 'absint', (array) $ids ), $exclude ) );
+			}
+		}
+		return array_values( array_filter( array_map( 'absint', $ids ) ) );
+	}
+
+	/**
+	 * @param int    $attachment_id Attachment post ID.
+	 * @param string $size          Image size slug.
+	 * @return string
+	 */
+	private function attachment_image_url_for_size( $attachment_id, $size = 'thumbnail' ) {
+		$attachment_id = absint( $attachment_id );
+		if ( $attachment_id <= 0 ) {
+			return '';
+		}
+		if ( function_exists( 'wp_get_attachment_image_src' ) ) {
+			$src = wp_get_attachment_image_src( $attachment_id, $size );
+			if ( is_array( $src ) && ! empty( $src[0] ) ) {
+				$url = $this->clean_url( (string) $src[0] );
+				if ( '' !== $url ) {
+					return $url;
+				}
+			}
+		}
+		$file_url = wp_get_attachment_url( $attachment_id );
+		return is_string( $file_url ) ? $this->clean_url( $file_url ) : '';
+	}
+
+	/**
+	 * Whether an attachment ID is referenced by a [gallery] shortcode in post content.
+	 *
+	 * @param string $content       Raw post_content.
+	 * @param int    $attachment_id Attachment post ID.
+	 * @param int    $post_id       Post ID.
+	 * @return bool
+	 */
+	private function attachment_id_in_classic_gallery_shortcodes( $content, $attachment_id, $post_id = 0 ) {
+		$content       = (string) $content;
+		$attachment_id = absint( $attachment_id );
+		$post_id       = absint( $post_id );
+		if ( '' === $content || $attachment_id <= 0 || false === stripos( $content, '[gallery' ) ) {
+			return false;
+		}
+		if ( ! preg_match_all( '/\[gallery\b([^\]]*)\]/i', $content, $matches ) ) {
+			return false;
+		}
+		foreach ( $matches[1] as $attr_string ) {
+			$atts = shortcode_parse_atts( 'gallery ' . trim( (string) $attr_string ) );
+			if ( ! is_array( $atts ) ) {
+				$atts = array();
+			}
+			$ids = $this->get_gallery_shortcode_attachment_ids( $atts, $post_id );
+			if ( in_array( $attachment_id, $ids, true ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a media URL belongs to a Classic Editor [gallery] shortcode in the post.
+	 *
+	 * @param string $content Raw post_content.
+	 * @param string $url     Image URL.
+	 * @param int    $post_id Post ID.
+	 * @return bool
+	 */
+	private function url_in_classic_gallery_shortcode( $content, $url, $post_id = 0 ) {
+		if ( ! function_exists( 'attachment_url_to_postid' ) ) {
+			return false;
+		}
+		$attachment_id = TSOLIIN_Support::resolve_attachment_id_from_url( (string) $url );
+		if ( $attachment_id <= 0 ) {
+			return false;
+		}
+		return $this->attachment_id_in_classic_gallery_shortcodes( $content, $attachment_id, $post_id );
 	}
 
 	// -------------------------------------------------------------------------
@@ -1671,12 +1832,15 @@ class TSOLIIN_Scanner {
 			}
 		}
 
-		// img src (rendered + raw post_content).
+		// img src (rendered + raw post_content + classic [gallery] shortcodes).
 		if ( $force_all || $this->opt( 'scan_images' ) ) {
 			foreach ( $this->extract_images( $post->post_content ) as $item ) {
 				$this->push_scan_item( $items, $seen, $item, $post_id );
 			}
 			foreach ( $this->extract_images( $html ) as $item ) {
+				$this->push_scan_item( $items, $seen, $item, $post_id );
+			}
+			foreach ( $this->extract_gallery_shortcode_images( $post->post_content, $post_id ) as $item ) {
 				$this->push_scan_item( $items, $seen, $item, $post_id );
 			}
 		}
@@ -2898,7 +3062,6 @@ class TSOLIIN_Scanner {
 	 * @return bool
 	 */
 	public function is_url_editable_in_post( $post_id, $url, $link_type = 'link' ) {
-		unset( $link_type );
 		$post_id = absint( $post_id );
 		$url     = (string) $url;
 		if ( $post_id <= 0 || '' === $url ) {
@@ -2909,6 +3072,12 @@ class TSOLIIN_Scanner {
 			return false;
 		}
 		if ( $this->url_located_in_string( $post->post_content, $url, $post_id ) ) {
+			return true;
+		}
+		if ( 'image' === (string) $link_type && $this->url_in_classic_gallery_shortcode( $post->post_content, $url, $post_id ) ) {
+			return true;
+		}
+		if ( $this->url_in_gutenberg_media_block( $post->post_content, $url, $post_id ) ) {
 			return true;
 		}
 		return $this->locate_url_in_post_meta( $post_id, $url )['found'];
