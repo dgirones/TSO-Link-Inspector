@@ -1631,6 +1631,7 @@ class TSOLIIN_Scanner {
 
 	/**
 	 * Images referenced by Classic Editor [gallery] shortcodes (ids are stored, not <img> URLs).
+	 * Build marker: tsoliin-gallery-shortcode-scan-v2 (line ~1657 must be $size = 'thumbnail';).
 	 *
 	 * @param string $content Raw post_content.
 	 * @param int    $post_id Post ID (for [gallery] without ids).
