@@ -1653,9 +1653,9 @@ class TSOLIIN_Scanner {
 			if ( ! is_array( $atts ) ) {
 				$atts = array();
 			}
-			$size = ! empty( $atts['size'] ) ? sanitize_key( (string) $atts['size'] : 'thumbnail';
-			if ( '' === $size ) {
-				$size = 'thumbnail';
+			$size = 'thumbnail';
+			if ( ! empty( $atts['size'] ) ) {
+				$size = sanitize_key( (string) $atts['size'] );
 			}
 			foreach ( $this->get_gallery_shortcode_attachment_ids( $atts, $post_id ) as $attachment_id ) {
 				$url = $this->attachment_image_url_for_size( $attachment_id, $size );
