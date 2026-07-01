@@ -5,7 +5,7 @@ Tags: broken links, link checker, seo, maintenance, links
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 2.1.5
+Stable tag: 2.1.6
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -99,6 +99,11 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 2. Filter tabs: All, Broken, Redirect, OK, HTTP insecure, Manual locks, Not checked.
 
 == Changelog ==
+
+= 2.1.6 =
+* Fix: Alt text can be saved for Gutenberg gallery and image blocks when the URL is stored in block JSON (sizes, thumbnails) instead of a plain `<img>` tag.
+* Fix: Alt text replacement works when `src` is the first attribute on an `<img>` tag.
+* Fix: Alt text updates also sync to the media-library attachment when the URL maps to one.
 
 = 2.1.5 =
 * Fix: Edit modal treats equivalent URL variants (trailing slash, www, relative paths) as unchanged — fewer false save errors.
@@ -353,6 +358,9 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 * Initial release.
 
 == Upgrade Notice ==
+
+= 2.1.6 =
+Recommended update. Fixes saving alt text on gallery and Gutenberg image blocks (including thumbnail URLs like `-150x150`).
 
 = 2.1.5 =
 Recommended update. Editor focus, inline edit reliability, and Recheck/cron sync improvements. Run **Scan now** once after updating.

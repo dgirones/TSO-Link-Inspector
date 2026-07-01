@@ -3754,26 +3754,256 @@ class TSOLIIN_Scanner {
 			return false;
 		}
 
+		$content     = (string) $post->post_content;
 		$match_src   = null !== $new_src ? (string) $new_src : (string) $old_url;
 		$new_content = $this->replace_alt_on_img_src(
-			$post->post_content,
+			$content,
 			(string) $old_url,
 			(string) $new_alt,
 			$post_id,
 			$match_src
 		);
-		if ( null === $new_content ) {
-			return false;
+
+		$content_saved = false;
+		if ( null !== $new_content && $new_content !== $content ) {
+			$this->maybe_create_post_revision( $post_id );
+
+			$r = $this->update_post_content( $post_id, $new_content );
+			if ( ! $r ) {
+				return false;
+			}
+			$this->purge_cache( $post_id );
+			$content_saved = true;
+			$content       = $new_content;
 		}
 
-		$this->maybe_create_post_revision( $post_id );
+		if ( ! $content_saved ) {
+			$block_content = $this->replace_alt_in_parsed_blocks(
+				$content,
+				(string) $old_url,
+				(string) $new_alt,
+				$post_id,
+				$match_src
+			);
+			if ( null !== $block_content && $block_content !== $content ) {
+				$this->maybe_create_post_revision( $post_id );
 
-		$r = $this->update_post_content( $post_id, $new_content );
-		if ( ! $r ) {
+				$r = $this->update_post_content( $post_id, $block_content );
+				if ( ! $r ) {
+					return false;
+				}
+				$this->purge_cache( $post_id );
+				$content_saved = true;
+			}
+		}
+
+		$meta_saved = $this->sync_attachment_image_alt_meta( $match_src, (string) $old_url, (string) $new_alt );
+
+		return $content_saved || $meta_saved;
+	}
+
+	/**
+	 * Store alt text on the media-library attachment when the URL maps to one.
+	 *
+	 * @param string $primary_url  Preferred image URL.
+	 * @param string $fallback_url Secondary URL variant.
+	 * @param string $new_alt      Alt text.
+	 * @return bool
+	 */
+	private function sync_attachment_image_alt_meta( $primary_url, $fallback_url, $new_alt ) {
+		$attachment_id = 0;
+		foreach ( array( (string) $primary_url, (string) $fallback_url ) as $url ) {
+			if ( '' === $url ) {
+				continue;
+			}
+			$attachment_id = TSOLIIN_Support::resolve_attachment_id_from_url( $url );
+			if ( $attachment_id > 0 ) {
+				break;
+			}
+		}
+		if ( $attachment_id <= 0 ) {
 			return false;
 		}
-		$this->purge_cache( $post_id );
-		return true;
+		return (bool) update_post_meta( $attachment_id, '_wp_attachment_image_alt', sanitize_text_field( (string) $new_alt ) );
+	}
+
+	/**
+	 * Replace alt text inside Gutenberg block attrs (gallery/image JSON).
+	 *
+	 * @param string $raw        post_content.
+	 * @param string $old_url    Stored URL.
+	 * @param string $new_alt    New alt text.
+	 * @param int    $post_id    Post ID.
+	 * @param string $match_src  Src URL to match after a URL change.
+	 * @return string|null
+	 */
+	private function replace_alt_in_parsed_blocks( $raw, $old_url, $new_alt, $post_id = 0, $match_src = '' ) {
+		if ( ! function_exists( 'parse_blocks' ) || ! function_exists( 'serialize_blocks' ) ) {
+			return null;
+		}
+		$raw = (string) $raw;
+		if ( '' === trim( $raw ) ) {
+			return null;
+		}
+		$blocks = parse_blocks( $raw );
+		if ( empty( $blocks ) ) {
+			return null;
+		}
+
+		$new_alt    = sanitize_text_field( (string) $new_alt );
+		$candidates = array();
+		foreach ( array_unique( array_filter( array( (string) $match_src, (string) $old_url ) ) ) ) as $stored ) {
+			$candidates = array_merge(
+				$candidates,
+				$this->build_url_replace_candidates_for_content( $stored, $post_id, $raw )
+			);
+		}
+		$candidates = array_values( array_unique( array_filter( $candidates ) ) );
+		if ( empty( $candidates ) ) {
+			return null;
+		}
+
+		$changed = false;
+		$blocks  = $this->replace_alt_in_blocks_recursive( $blocks, $candidates, $new_alt, $changed );
+		if ( ! $changed ) {
+			return null;
+		}
+		return serialize_blocks( $blocks );
+	}
+
+	/**
+	 * @param array[]  $blocks     Parsed blocks.
+	 * @param string[] $candidates URL variants to match.
+	 * @param string   $new_alt    Replacement alt text.
+	 * @param bool     $changed    Set true when a value changes.
+	 * @return array[]
+	 */
+	private function replace_alt_in_blocks_recursive( array $blocks, array $candidates, $new_alt, &$changed ) {
+		foreach ( $blocks as &$block ) {
+			if ( ! is_array( $block ) ) {
+				continue;
+			}
+			if ( ! empty( $block['attrs'] ) && is_array( $block['attrs'] ) ) {
+				$next = $this->replace_alt_in_block_attrs( $block['attrs'], $candidates, $new_alt, $changed );
+				if ( $next !== $block['attrs'] ) {
+					$block['attrs'] = $next;
+				}
+			}
+			if ( ! empty( $block['innerBlocks'] ) && is_array( $block['innerBlocks'] ) ) {
+				$block['innerBlocks'] = $this->replace_alt_in_blocks_recursive( $block['innerBlocks'], $candidates, $new_alt, $changed );
+			}
+		}
+		unset( $block );
+		return $blocks;
+	}
+
+	/**
+	 * @param array    $attrs      Block attrs.
+	 * @param string[] $candidates URL variants to match.
+	 * @param string   $new_alt    Replacement alt text.
+	 * @param bool     $changed    Set true when a value changes.
+	 * @return array
+	 */
+	private function replace_alt_in_block_attrs( array $attrs, array $candidates, $new_alt, &$changed ) {
+		return $this->replace_alt_in_array( $attrs, $candidates, $new_alt, $changed );
+	}
+
+	/**
+	 * @param array    $data       Block attrs or nested array.
+	 * @param string[] $candidates URL variants to match.
+	 * @param string   $new_alt    Replacement alt text.
+	 * @param bool     $changed    Set true when a value changes.
+	 * @param int      $depth      Recursion guard.
+	 * @return array
+	 */
+	private function replace_alt_in_array( array $data, array $candidates, $new_alt, &$changed, $depth = 0 ) {
+		if ( $depth > 12 ) {
+			return $data;
+		}
+
+		foreach ( $data as $key => $value ) {
+			if ( is_array( $value ) ) {
+				$data[ $key ] = $this->replace_alt_in_array( $value, $candidates, $new_alt, $changed, $depth + 1 );
+			}
+		}
+
+		if ( $this->array_is_image_alt_owner( $data ) && $this->array_tree_contains_url_candidate( $data, $candidates ) ) {
+			if ( ! isset( $data['alt'] ) || (string) $data['alt'] !== (string) $new_alt ) {
+				$data['alt'] = $new_alt;
+				$changed     = true;
+			}
+		}
+
+		return $data;
+	}
+
+	/**
+	 * Whether an associative array represents a Gutenberg image object that owns alt text.
+	 *
+	 * @param array $data Block attrs fragment.
+	 * @return bool
+	 */
+	private function array_is_image_alt_owner( array $data ) {
+		if ( ! empty( $data['id'] ) && is_numeric( $data['id'] ) ) {
+			return true;
+		}
+		if ( array_key_exists( 'alt', $data ) ) {
+			return true;
+		}
+		if ( ! empty( $data['sizes'] ) && is_array( $data['sizes'] ) ) {
+			return true;
+		}
+		if ( ! empty( $data['url'] ) && is_string( $data['url'] ) && $this->url_looks_like_image_file( $data['url'] ) ) {
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * @param array    $data       Nested block attrs.
+	 * @param string[] $candidates URL variants to match.
+	 * @param int      $depth      Recursion guard.
+	 * @return bool
+	 */
+	private function array_tree_contains_url_candidate( array $data, array $candidates, $depth = 0 ) {
+		if ( $depth > 12 ) {
+			return false;
+		}
+		$url_keys = array( 'url', 'link', 'href', 'linkurl', 'buttonurl', 'fileurl', 'mediaurl', 'src' );
+		foreach ( $data as $key => $value ) {
+			if ( is_string( $value ) ) {
+				$key_lower = strtolower( (string) $key );
+				$looks_url = in_array( $key_lower, $url_keys, true )
+					|| (bool) preg_match( '/(?:url|link|href)$/i', $key_lower );
+				if ( $looks_url && $this->url_value_matches_candidates( $value, $candidates ) ) {
+					return true;
+				}
+			} elseif ( is_array( $value ) && $this->array_tree_contains_url_candidate( $value, $candidates, $depth + 1 ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * @param string   $value      URL from block attrs.
+	 * @param string[] $candidates URL variants to match.
+	 * @return bool
+	 */
+	private function url_value_matches_candidates( $value, array $candidates ) {
+		$value = trim( (string) $value );
+		if ( '' === $value ) {
+			return false;
+		}
+		foreach ( $candidates as $variant ) {
+			if ( '' === $variant ) {
+				continue;
+			}
+			if ( 0 === strcasecmp( $value, (string) $variant ) ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -3787,44 +4017,82 @@ class TSOLIIN_Scanner {
 	 * @return string|null
 	 */
 	private function replace_alt_on_img_src( $content, $old_url, $new_alt, $post_id, $match_src ) {
-		$new_alt = sanitize_text_field( (string) $new_alt );
-		$candidates = array_unique( array_filter( array_merge(
-			$this->build_url_replace_candidates( $match_src, $post_id ),
-			$this->build_url_replace_candidates( $old_url, $post_id )
-		) ) );
+		$new_alt     = sanitize_text_field( (string) $new_alt );
+		$content     = (string) $content;
+		$escaped_alt = esc_attr( $new_alt );
+		$stored_urls = array_values( array_unique( array_filter( array( (string) $match_src, (string) $old_url ) ) ) );
+		$candidates  = array();
 
-		usort(
-			$candidates,
-			static function ( $a, $b ) {
-				return strlen( (string) $b ) - strlen( (string) $a );
-			}
-		);
+		foreach ( $stored_urls as $stored ) {
+			$candidates = array_merge(
+				$candidates,
+				$this->build_url_replace_candidates_for_content( $stored, $post_id, $content )
+			);
+		}
+		$candidates = array_values( array_unique( array_filter( $candidates ) ) );
 
-		foreach ( $candidates as $v ) {
-			if ( '' === $v ) {
+		foreach ( $candidates as $spelling ) {
+			$snippet = $this->extract_tag_snippet_for_attr_value( $content, 'src', $spelling );
+			if ( '' === $snippet || false === stripos( $snippet, '<img' ) ) {
 				continue;
 			}
-			$quoted      = preg_quote( (string) $v, '#' );
-			$pattern     = '#(<img\b)(\s[^>]*?\ssrc=(["\'])' . $quoted . '\3)([^>]*)(>)#is';
-			$escaped_alt = esc_attr( $new_alt );
-			$count       = 0;
-			$next        = preg_replace_callback(
-				$pattern,
-				static function ( $m ) use ( $escaped_alt ) {
-					$attrs = $m[2] . $m[4];
-					$attrs = preg_replace( '#\salt=(["\']).*?\1#is', '', $attrs );
-					return $m[1] . $attrs . ' alt="' . $escaped_alt . '"' . $m[5];
-				},
-				$content,
-				1,
-				$count
-			);
-			if ( $count > 0 && is_string( $next ) && $next !== $content ) {
-				return $next;
+			$updated = $this->replace_alt_in_img_tag_snippet( $snippet, $escaped_alt );
+			if ( $updated === $snippet ) {
+				continue;
+			}
+			$pos = strpos( $content, $snippet );
+			if ( false === $pos ) {
+				$pos = stripos( $content, $snippet );
+				if ( false === $pos ) {
+					continue;
+				}
+			}
+			return substr_replace( $content, $updated, $pos, strlen( $snippet ) );
+		}
+
+		$attachment_id = 0;
+		foreach ( $stored_urls as $stored ) {
+			$attachment_id = TSOLIIN_Support::resolve_attachment_id_from_url( $stored );
+			if ( $attachment_id > 0 ) {
+				break;
+			}
+		}
+		if ( $attachment_id > 0 && preg_match(
+			'#<img\b[^>]*\bclass=(["\'])[^"\']*\bwp-image-' . preg_quote( (string) $attachment_id, '#' ) . '\b[^"\']*\1[^>]*/?>#is',
+			$content,
+			$matches,
+			PREG_OFFSET_CAPTURE
+		) ) {
+			$snippet = (string) $matches[0][0];
+			$pos     = (int) $matches[0][1];
+			$updated = $this->replace_alt_in_img_tag_snippet( $snippet, $escaped_alt );
+			if ( $updated !== $snippet ) {
+				return substr_replace( $content, $updated, $pos, strlen( $snippet ) );
 			}
 		}
 
 		return null;
+	}
+
+	/**
+	 * Set or replace alt="" on a single <img> tag snippet.
+	 *
+	 * @param string $snippet     Full <img …> tag.
+	 * @param string $escaped_alt Escaped alt attribute value.
+	 * @return string
+	 */
+	private function replace_alt_in_img_tag_snippet( $snippet, $escaped_alt ) {
+		$snippet = (string) $snippet;
+		if ( preg_match( '#\salt=(["\']).*?\1#is', $snippet ) ) {
+			$next = preg_replace( '#\salt=(["\']).*?\1#is', ' alt="' . $escaped_alt . '"', $snippet, 1 );
+			return is_string( $next ) ? $next : $snippet;
+		}
+		if ( preg_match( '#/\s*>$#', $snippet ) ) {
+			$next = preg_replace( '#/\s*>$#', ' alt="' . $escaped_alt . '" />', $snippet, 1 );
+			return is_string( $next ) ? $next : $snippet;
+		}
+		$next = preg_replace( '#>$#', ' alt="' . $escaped_alt . '">', $snippet, 1 );
+		return is_string( $next ) ? $next : $snippet;
 	}
 
 	/**
