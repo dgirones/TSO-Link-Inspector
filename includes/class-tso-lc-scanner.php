@@ -1620,15 +1620,11 @@ class TSOLIIN_Scanner {
 		if ( '' === trim( $html ) && '' !== trim( $raw ) ) {
 			$html = $raw;
 		}
-		// Expand only [gallery] shortcodes — not every shortcode (avoids inflating scan counts).
-		if ( false !== stripos( $html, '[gallery' ) && function_exists( 'do_shortcode' ) ) {
-			$html = (string) preg_replace_callback(
-				'/\[gallery\b[^\]]*\]/i',
-				static function ( $match ) {
-					return do_shortcode( $match[0] );
-				},
-				$html
-			);
+		if ( false !== strpos( $html, '[' ) && function_exists( 'do_shortcode' ) ) {
+			$expanded = do_shortcode( $html );
+			if ( is_string( $expanded ) && '' !== trim( $expanded ) ) {
+				$html = $expanded;
+			}
 		}
 		return $html;
 	}
