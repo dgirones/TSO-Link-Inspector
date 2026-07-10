@@ -1848,16 +1848,48 @@ class TSOLIIN_DB {
 
 	public function cleanup_misclassified_plain_image_rows() {
 		global $wpdb;
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		$wpdb->query(
-			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 			"UPDATE {$this->table}
 			SET link_type = 'image'
 			WHERE link_type = 'plain'
 			  AND link_url REGEXP '\\.(jpe?g|png|gif|webp|avif|svg|bmp|ico)([?#]|$)'
 			  AND link_url REGEXP '/(wp-content/)?uploads/'"
 		);
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectDatabaseQuery.NoCaching
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+	}
+
+	/**
+	 * Remove WordPress attachment page URLs (/attachment/slug, ?attachment_id=) from stored rows.
+	 *
+	 * @return int Rows deleted.
+	 */
+	public function cleanup_attachment_permalink_rows() {
+		global $wpdb;
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$rows = $wpdb->get_results(
+			"SELECT id, link_url, post_id FROM {$this->table}
+			WHERE link_url LIKE '%/attachment/%'
+			   OR link_url LIKE '%attachment_id=%'"
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+		if ( empty( $rows ) ) {
+			return 0;
+		}
+
+		$deleted = 0;
+		foreach ( $rows as $row ) {
+			if ( ! TSOLIIN_HTTP::is_attachment_permalink_url( (string) $row->link_url, (int) $row->post_id ) ) {
+				continue;
+			}
+			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			if ( false !== $wpdb->delete( $this->table, array( 'id' => (int) $row->id ), array( '%d' ) ) ) {
+				++$deleted;
+			}
+			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		}
+		return $deleted;
 	}
 
 	/**
@@ -1867,16 +1899,15 @@ class TSOLIIN_DB {
 	public function cleanup_trivial_redirects() {
 		global $wpdb;
 		// Find records where redirect_url = link_url + "/" only.
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		$wpdb->query(
-			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 			"UPDATE {$this->table}
 			SET status_code = 200, redirect_url = '', is_broken = 0
 			WHERE redirect_url != ''
 			  AND ( CONCAT(link_url, '/') = redirect_url
 			     OR CONCAT(RTRIM(REPLACE(link_url, '/', '')), '/') = RTRIM(REPLACE(redirect_url, '/', '')) )"
 		);
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 	}
 
 	/**

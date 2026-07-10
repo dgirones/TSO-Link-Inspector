@@ -257,6 +257,75 @@ class TSOLIIN_HTTP {
 	}
 
 	/**
+	 * Whether a URL is a WordPress attachment post permalink (not the media file in uploads).
+	 *
+	 * Gallery/image blocks often store both the file URL and an /attachment/slug page URL;
+	 * only the uploads file is useful for link checking.
+	 *
+	 * @param string $url     Absolute or relative URL.
+	 * @param int    $post_id Optional post context for internal URL resolution.
+	 * @return bool
+	 */
+	public static function is_attachment_permalink_url( $url, $post_id = 0 ) {
+		$url = trim( str_replace( array( "\0", "\r", "\n" ), '', (string) $url ) );
+		if ( '' === $url || ! self::is_internal_link_url( $url, $post_id ) ) {
+			return false;
+		}
+
+		if ( self::parse_attachment_id_from_url( $url ) > 0 ) {
+			return true;
+		}
+
+		$path = wp_parse_url( $url, PHP_URL_PATH );
+		if ( is_string( $path ) && preg_match( '#/attachment(?:/|$)#i', $path ) ) {
+			return true;
+		}
+
+		if ( is_string( $path ) ) {
+			if ( false !== stripos( $path, '/wp-content/uploads/' ) ) {
+				return false;
+			}
+			if ( preg_match( '/\.(?:jpe?g|png|gif|webp|avif|svg|bmp|ico|mp4|mp3|pdf|zip)(?:[?#]|$)/i', $path ) ) {
+				return false;
+			}
+		}
+
+		if ( ! function_exists( 'url_to_postid' ) ) {
+			return false;
+		}
+
+		$abs = $url;
+		if ( preg_match( '#^(?:/|\./|\.\./)#', $abs ) ) {
+			$abs = home_url( $abs );
+		} elseif ( 0 === strpos( $abs, '//' ) ) {
+			$abs = ( is_ssl() ? 'https:' : 'http:' ) . $abs;
+		}
+
+		$attachment_id = (int) url_to_postid( $abs );
+		if ( $attachment_id <= 0 ) {
+			return false;
+		}
+
+		$post = get_post( $attachment_id );
+		if ( ! $post || 'attachment' !== $post->post_type ) {
+			return false;
+		}
+
+		$file_url = wp_get_attachment_url( $attachment_id );
+		if ( ! is_string( $file_url ) || '' === $file_url ) {
+			return true;
+		}
+
+		$file_path = wp_parse_url( $file_url, PHP_URL_PATH );
+		$url_path  = wp_parse_url( $abs, PHP_URL_PATH );
+		if ( is_string( $file_path ) && is_string( $url_path ) && $file_path === $url_path ) {
+			return false;
+		}
+
+		return true;
+	}
+
+	/**
 	 * For ?attachment_id= URLs, return the wp-content/uploads file URL when available.
 	 *
 	 * Used only for optional suggestions — not for the primary check(), which must test
