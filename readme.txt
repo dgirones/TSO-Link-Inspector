@@ -1,436 +1,1983 @@
-=== TSO Link Inspector ===
-Contributors: deadko
-Donate link: https://ko-fi.com/deadko_cat
-Tags: broken links, link checker, seo, maintenance, links
-Requires at least: 6.0
-Tested up to: 7.0
-Requires PHP: 7.4
-Stable tag: 2.1.5
-License: GPL-2.0-or-later
-License URI: https://www.gnu.org/licenses/gpl-2.0.html
-
-Find and fix broken links across your entire WordPress site without opening each post.
-
-== Description ==
-
-**TSO Link Inspector** scans all published posts, pages and custom post types for links, then checks each one via HTTP to detect broken links, redirects, insecure HTTP URLs and connection errors. All results are displayed in a dashboard where you can fix links directly without opening the editor.
-
-= Key Features =
-
-* **Scans** posts, pages, and any custom post type.
-* **Detects** HTTP errors: 404, 410, 500, DNS failures, SSL errors, timeouts, and redirects.
-* **Edit URLs inline** for post content from the admin panel, or **Go to edit** for comments, widgets, menus, and terms in their native WordPress screens.
-* **Smart URL Suggester**: automatically tests HTTPS upgrade, follows redirect chains, and tries www/non-www variants.
-* **Unlink**: removes the `<a>` tag but keeps the visible text.
-* **Bulk actions**: re-check, unlink, mark as OK, or delete multiple links at once.
-* **Export CSV**: export any filtered view to a spreadsheet.
-* **Per-article view**: click any article to see all its links in one place.
-* **Posts with issues**: summary of articles that contain broken, redirected, or unchecked links.
-* **Internal / External** scope tabs to separate same-site and outbound links.
-* **Quality filters**: empty anchor text, generic anchors (“click here”), and links to unpublished posts.
-* **View post at link**: open the front end with the matching link highlighted (post content, plain-text URLs, and comments).
-* **Plain-text URLs** in post content are listed separately (not treated as hyperlinks) with **Go to edit** to open the post.
-* **Convert to /path**: optional row and bulk action to replace same-site absolute URLs with site-relative paths.
-* **Dashboard widget** with broken/unchecked counts and shortcuts.
-* **Export CSV and PDF** for any filtered view.
-* **Settings Help tab** with full documentation.
-* **Configurable automatic checks**: recheck intervals for OK and broken links, plus hourly batch size.
-* **HTTP insecure detection**: flags active links still using HTTP instead of HTTPS.
-* **Ignore list**: add domains or URL prefixes to never scan or check.
-* **Scan images and iframes**: optionally detect broken `<img src>` and embedded videos.
-* **Scan user comments**: optionally check links in approved comments.
-* **Custom fields (ACF)**: optionally scan URL fields added by plugins like Advanced Custom Fields.
-* **Daily automatic scan** and **hourly batch check** via WP-Cron. Can close the browser while checking.
-* **Email alerts** for fully broken links (no redirect): send one summary after automated checks, or a periodic digest (7 / 15 / 30 days), with an optional notification address.
-* **Nofollow broken links**: automatically adds `rel="nofollow"` to broken links so search engines ignore them.
-* **Preserve post dates**: editing a link does not update the post modification date.
-* Compatible with LiteSpeed Cache, WP Rocket, W3 Total Cache, WP Super Cache, SG Optimizer, Breeze, and Cloudflare.
-* **Extended scanning**: plain-text URLs in posts, Gutenberg block JSON, navigation menus, responsive media (srcset/picture), page-builder `data-*` attributes, widget sidebars, taxonomy descriptions, Site Editor templates/reusable blocks, and plain URLs in custom fields.
-* **Third-party sources**: register extra link collectors with `tsoliin_register_link_source()`.
-* Includes Catalan and Spanish translations.
-
-= How it works =
-
-1. Click **Scan now** to extract all links from your posts.
-2. Click **Check now** to send HTTP requests to every URL (runs server-side, you can close the browser).
-3. Review results using the **Broken**, **Redirect**, **HTTP insecure** and other filter tabs.
-4. Fix links using **Edit URL**, **Suggestion**, **Unlink** or **Mark as OK** from each row.
-
-= Redirect intelligence =
-
-The plugin follows the full redirect chain manually so it captures the real final destination, not just the last HTTP code. It automatically ignores trivial redirects (trailing slashes, CDN tokens, WP attachment pages, login walls) to avoid false positives.
-
-== Installation ==
-
-1. Upload the `tso-link-inspector` folder to the `/wp-content/plugins/` directory.
-2. Activate the plugin from the **Plugins** menu in WordPress.
-3. Go to **Tools > TSO Link Inspector**.
-4. Click **Scan now** to run the first scan, then **Check now** to verify all links.
-
-== Frequently Asked Questions ==
-
-= When does the automatic scan run? =
-A full scan runs once daily. The link check runs hourly in small batches. Both use WP-Cron. The next scheduled runs are shown at the top of the dashboard.
-
-= Can I fix links without opening each post? =
-Yes. Use **Edit URL** to replace a URL, **Unlink** to remove the anchor tag while keeping the text, or **Suggestion** to automatically find a working alternative.
-
-= Is it compatible with Gutenberg? =
-Yes. The plugin processes `post_content` using WordPress standard filters and works with the Block Editor, Classic Editor, and most page builders.
-
-= Will it scan custom fields (ACF)? =
-Yes. Enable **Custom fields (ACF / Meta)** in Settings. The plugin scans URL, HTML and text fields. You can add keys to the exclusion list to skip specific fields.
-
-= What does the HTTP Insecure filter show? =
-Links that are working (not broken) but still use `http://` instead of `https://`. Use the Suggestion button to upgrade them with one click.
-
-= What is the Ignore List? =
-A list of domains or URL prefixes (one per line) that will never be scanned or checked. Useful for domains that block bots (Amazon, Facebook) or your own site.
-
-= Does it change the post modification date? =
-Only if you want it to. Enable **Do not update modification date** in Settings to edit links without changing `post_modified`.
-
-= What does "Mark as OK" do? =
-It sets the link status to 200 OK manually without making an HTTP request. The post is not modified. Useful for URLs that are temporarily blocked but you know they work.
-
-== Screenshots ==
-
-1. Main dashboard with statistics and link list.
-2. Filter tabs: All, Broken, Redirect, OK, HTTP insecure, Manual locks, Not checked.
-
-== Changelog ==
-
-= 2.1.5 =
-* Fix: Edit modal treats equivalent URL variants (trailing slash, www, relative paths) as unchanged — fewer false save errors.
-* Fix: Partial inline saves when only URL or only link text can be updated, with clear warnings.
-* Fix: **Go to edit** gallery focus opens visual mode; block editor posts no longer load duplicate classic focus scripts.
-* Fix: Edit row button stays in sync after save (jQuery data cache).
-* Improvement: Catalan and Spanish translations updated.
-
-= 2.1.0 =
-* New: **Go to edit** row action for comments, widgets, navigation menus, and taxonomy terms — edit at the source instead of the inline modal.
-* Fix: Gallery and image block URLs are classified as **image**, not plain text (Gutenberg JSON is no longer scanned as bare URLs).
-* Fix: WordPress media-library images (including `-150x150` thumbnails in galleries) are no longer misclassified as plain-text URLs.
-* Fix: Automatic DB cleanup reclassifies existing `plain` rows under `/uploads/` with image extensions to `image`.
-* Fix: **Recheck** re-reads WordPress sources (post, comment, menu, widget, term, template) before HTTP — works after editing in native WP screens.
-* New: **Go to edit comment** opens the WordPress comment editor (replaces inline Edit link for all comment rows).
-* New: **Plain-text URL** link type for bare `http(s)://` strings in post content (distinct icon and list behaviour).
-* New: **Go to edit** with deep-link (`tsoliin_link`) for post-stored links and plain-text URLs; front-end highlight on **View post at link**.
-* Improvement: Widget edit links include sidebar/widget query args; menu rows open the correct menu screen.
-* Improvement: Coloured **type icons** in the link list (post, comment, menu, widget, plain text, etc.).
-* Improvement: URLs inside `<a href>` are stored as **links** even when the target is an image file (e.g. `.webp` downloads).
-* Improvement: Widget scan removes stale rows when widgets or URLs disappear; widget rows can be rescanned on Recheck.
-* Improvement: Hourly cron and background checks re-read a WordPress source only when the stored URL is missing, then check the current URL (or remove the row).
-* Improvement: Fewer duplicate database schema checks on admin load.
-* Fix: Comment author website URLs support **Unlink** (clears `comment_author_url`) with clearer Delete tooltips.
-* Fix: Editor focus assets are not loaded on the block widgets screen (avoids `wp-editor` conflicts).
-* Fix: Post title in the link list opens the editor without unwanted deep-link focus; gallery images open in visual mode.
-* Fix: Smart Suggest **Apply** works for comment links.
-* Improvement: Catalan and Spanish translations updated.
-
-= 2.0.0 =
-* New: WordPress **dashboard widget** with broken/unchecked counts and quick links.
-* New: **Posts with issues** view — articles grouped by link problems.
-* New: **Internal / External** scope tabs and sortable link type column.
-* New: **Quality filters** — empty anchor, generic anchor, unpublished target.
-* New: Settings **Help** tab with full documentation (Scan, cron, filters, actions, ACF, export).
-* New: Dismissible **getting-started** banner on the main screen.
-* New: **Open URL** and **Ignore domain** row actions.
-* New: **View post at this link** — highlights the matching link on the front end (post content and comments).
-* New: Optional **Convert to /path** (row action and bulk) for same-site absolute URLs.
-* New: **Export report (PDF)** alongside CSV.
-* New: Configurable **automatic HTTP checks** — OK/broken recheck intervals and hourly batch size.
-* New: Optional WordPress **revision** before Edit link or Convert to /path.
-* Improvement: ACF/Meta scanning — Link fields, relative URLs, recursive meta search, default SEO key exclusions.
-* Improvement: Bulk actions with progress, delete confirmation, external-filter pagination, and list-table refresh fixes.
-* Improvement: HTTP checks and scans handle www variants, HEAD→GET, `?attachment_id=` URLs, and relative paths without duplicating subfolder paths.
-* Fix: Edit link static-method fatal, front-end focus links (`TSOLIIN_Support` bootstrap), and edit-link fixes from 1.9.9 (images, Manual locks UX, version badge).
-
-= 1.9.9 =
-* Fix: Edit link on images updates alt text (not anchor text inside `<a>` tags).
-* Fix: URL save no longer reports failure when only link text could not be updated; partial success saves the URL and refreshes the modal.
-* Fix: Edit link modal keeps the saved URL in the row after save (no stale absolute URL until hard reload).
-* Fix: Relative URL edits also update matching URLs inside `srcset` attributes.
-* Improvement: Edit modal shows “Alt text” for images and hides link text for iframes.
-* Improvement: “Not broken” explains Manual locks (confirmation dialog, tooltips, success notice).
-* Improvement: Current plugin version shown next to the admin page title.
-
-= 1.9.8 =
-* New: Edit link modal — change URL and anchor text inline; supports site-relative URLs (/path, ./, ../).
-* Fix: Search across post titles works with filter tabs and bulk actions (SQL join fix).
-* Fix: Filter tabs remove or refresh rows without F5 after edit, recheck, Smart Suggest, mark-as-OK, bulk unlink/recheck, and HTTP insecure filter.
-* Fix: Bulk unlink/delete reload list and pagination; accurate unlink progress counts.
-* Fix: Export CSV respects the current search query.
-* Fix: Check now runs a full recheck instead of resuming unchecked rows only.
-* Fix: Comment edit/unlink finds comments by URL equivalence, not exact SQL match.
-* Fix: Redirect tab excludes transparent redirects on load; AJAX status matches normalized DB values.
-* Fix: PHP 8.5 admin compatibility (nullable HTTP dependency in list table).
-* Fix: Stat and tab counts use localized number formatting (no raw `&nbsp;` in UI).
-* Fix: Background check progress when nonce fails; recheck button restores label on error.
-* Fix: PHP 7.4 compatibility for host suffix matching in HTTP checks.
-* Improvement: Catalan and Spanish translations updated (filter tabs, edit link strings).
-* Improvement: On-screen help explaining Scan (find links) vs Check (HTTP test); Stop scan/check buttons; confirmation before full-site Check.
-* Improvement: Check this post on a single article’s link list (only that post’s URLs).
-* Fix: Edit link URL replacement limited to href/src attributes (prevents corrupting closing HTML tags when trailing slash differs).
-
-= 1.9.7 =
-* New: Widget sidebar scanning (Text, Custom HTML, and block widgets).
-* New: Taxonomy term description scanning (categories, tags, and custom taxonomies).
-* New: Site Editor scanning for templates, template parts, and reusable blocks (`wp_block`).
-* New: Plain-text URLs inside custom fields when ACF/Meta scanning is enabled.
-* New: Third-party link source API — `tsoliin_register_link_source()` for plugins and themes.
-* New: Settings toggles under **Extended sources** (enabled by default until you save Settings).
-* Improvement: List table shows source type icons and links to Widgets, Menus, terms, or the Site Editor where inline edit is not available.
-* Fix: WordPress logout/action URLs detected and labelled separately; confirmation before opening from the admin list.
-* Fix: Smart Suggest keeps meaningful redirect destinations even when re-check is bot-blocked; Apply trusts stored 301/302 targets.
-* Fix: Query-stripping redirects (e.g. FilmAffinity search URLs) treated as transparent OK instead of false redirect rows.
-* Fix: Stale transparent redirect rows cleaned on list load and after background checks; Redirect filter stays in sync without F5.
-* Fix: Ignore-list vs server-blocked URLs use distinct statuses (-1 skipped, -7 blocked); smarter host pattern matching.
-* Fix: Status badge layout on narrow screens; broken rows highlighted in the list table.
-* Fix: Bulk unlink/delete refresh the list and pagination automatically; bulk unlink reports unlinked, skipped, and failed counts.
-* Fix: Filter tabs remove rows that no longer match the active view after edit, Smart Suggest Apply, recheck, or mark-as-OK (no manual F5).
-* Fix: Background check progress counts pending rows correctly (includes manual locks).
-* Fix: `save_post` rescans respect Settings when **Force scan all posts** is disabled.
-* Fix: Inline recheck/update passes `post_id` for relative internal URLs.
-* Fix: Auth-redirect detection uses stricter path/query rules (fewer false bot-wall positives).
-* Fix: Status code 0 on non-HTTP URLs shows as unknown, not broken.
-* Improvement: Catalan and Spanish translations updated for new strings.
-
-= 1.9.6 =
-* Fix: Transparent redirects (YouTube youtu.be→watch, trailing slash, CDN noise, etc.) are stored as OK and no longer fill the Redirect tab forever.
-* Fix: Automatic cleanup of existing transparent redirect rows on upgrade and after a full background check.
-
-= 1.9.5 =
-* New: Plain-text http(s) URLs in post content are scanned (same detection as comments — pasted URLs without `<a>` tags).
-* New: Gutenberg block attribute scanning via `parse_blocks()` (button, file, and other blocks that store URLs in JSON).
-* New: Navigation menu scanning — custom menu item URLs are checked during batch scans.
-* New: Responsive media scanning — `srcset`, `<picture>` / `<source>`, `video`, `audio`, `embed`, and `<object data>`.
-* New: Page-builder `data-url`, `data-href`, `data-link`, and related attributes in HTML and block markup.
-* New: Settings section **Extended scanning** to toggle each source (enabled by default on existing sites until you save Settings).
-* Fix: Smart Suggest follows the full redirect chain and proposes the real destination (e.g. `http://twitter.com/…` → `https://x.com/…`) instead of an intermediate HTTPS hop.
-* Fix: Smart Suggest **Apply** is shown only when the server confirms HTTP 2xx; 403/401/429 bot-blocks are informational (verify in a browser before editing).
-* Fix: Bulk unlink no longer modifies post content for navigation menu rows; menu Edit/Unlink actions are hidden (use **Appearance → Menus**).
-* Fix: Unlink removes `<img>` and `<iframe>` elements from post content, not only `<a>` tags.
-* Fix: Export CSV respects the per-post filter view; deleting all plugin records clears comment/menu scan cursors.
-* Fix: Saving a post rescans all link types in that post even when optional scanners are disabled in Settings.
-* Fix: Protocol-relative redirect URLs (`//cdn…`) are resolved correctly during HTTP checks.
-* Fix: Ignored URLs show a neutral **Skipped** badge instead of broken styling.
-* Fix: Live dashboard counts refresh after row actions; filter tabs keep locale number formatting.
-* Fix: Comment plain-text URL unlink; suggestion panel close button; duplicate suggestion panels.
-* Fix: YouTube `youtu.be` → `watch` treated as a transparent redirect (same video).
-* Fix: Recheck updates redirect sub-line and manual-lock badge without reload; **Mark as OK** keeps row actions.
-* Fix: Background check re-enables **Check now** if progress polling fails.
-* Improvement: Catalan and Spanish translations updated for new strings.
-
-= 1.9.4 =
-* Fix: Comment scan now detects plain-text http(s) URLs in comment bodies (not only `<a href>` links), so broken links like pasted URLs are found and checked.
-* Improvement: Relative and root-relative internal links (e.g. `/other-post/`) are resolved to the full site URL before HTTP checks, so links between articles on the same WordPress site are verified correctly (including deleted targets returning 404).
-* Improvement: Edit/Unlink and stale-link cleanup recognise the same URL whether it is stored or written as a relative or absolute href.
-* Fix: Redirect chains that end on an error page (for example 301 to www then 404) are stored as broken with the final status; they are no longer treated as a successful redirect with a misleading suggestion target.
-* Improvement: Smart suggestions skip misleading www-only or HTTP-only “fixes”; Apply is shown only for actionable alternatives.
-* Improvement: Broken-link notification emails are HTML with a TSO Link Inspector header, clickable URLs, and a button to open the inspector.
-* Improvement: Removed legacy migration code (old checker table and `tso_lc_*` options).
-* Fix: Dashboard stats query (`get_stats`) is cached per request (no duplicate SQL on admin load).
-* Fix: Frontend `rel="nofollow"` for broken links caches broken URLs per post (no duplicate SQL when `the_content` and `wp_trim_excerpt` run multiple times).
-* Fix: PHP 8.1+ deprecation on the hidden Settings screen (`strip_tags(null)` in admin-header).
-* Improvement: Tested up to WordPress 7.0.
-
-= 1.9.3 =
-* Security: Block SSRF targets in the HTTP checker (private/reserved IPs, unsafe hosts, redirect chains) using `wp_http_validate_url`, DNS resolution checks, and `reject_unsafe_urls`.
-* Security: Validate edited URLs with `esc_url_raw()` and the same safety rules (public `http`/`https` only).
-* Security: Escape admin JavaScript output for smart suggestions and diagnostics (XSS hardening).
-* Fix: Apply the ignore list during scans and HTTP checks (domains/prefixes in Settings are now honored).
-
-= 1.9.2 =
-* Fix: Plugin **Description** on the Plugins screen now translates to Catalan and Spanish when the site (or bundled language files) uses those locales.
-* Fix: Translation files include the English plugin header string as `msgid` (matches the plugin header text).
-* Improvement: Load translations when the plugin boots so metadata strings are available before the Plugins list is built.
-
-= 1.9.1 =
-* New: Optional email notifications for **hard-broken** links only (broken with **no** redirect destination): immediate mode sends **one summary email** per automated check batch (full background check or hourly cron), never after manual row/bulk rechecks; digest modes send every **7, 15, or 30 days** only when there is something to report.
-* New: Configurable **recipient email** for notifications (falls back to the site admin email when left blank).
-* New: **Manual locks** filter tab for links marked “Not broken”; manually locked rows are excluded from Broken / Redirect / OK / HTTP insecure / Not checked tabs so the same URL is not counted twice.
-* Improvement: A full **Check now** clears `last_checked` for **all** rows (including manual locks) so regressions are detected reliably.
-* Fix: PHP deprecation from registering a hidden settings submenu with a null parent slug (now attached to Tools and removed from the menu).
-* Fix: **Last checked** falls back to **Date found** when a historic row has no check timestamp but already has status data.
-* Fix: Bulk **Unlink** completion message no longer says “rechecked”.
-* Fix: Clearing the list search when switching filter tabs (search query no longer sticks across tabs).
-* Fix: CSV export encoding (**UTF-8 BOM**) for Excel and other spreadsheets.
-* Improvement: Admin list layout for empty filter views, spacing, centered Tools wrapper, and tighter settings layout on small screens.
-* Improvement: Immediate notification email wording uses correct singular/plural forms; translations updated (Catalan and Spanish).
-
-= 1.9.0 =
-* New: Comment links use an internal `source_key`, so the same URL can appear both in post content and in comments without overwriting each other in the database.
-* Improvement: Comment scanning advances via a persistent cursor (`comment_ID`) so large sites eventually scan **all** approved comments; the daily cron also keeps draining comments after the post batch finishes (within the time budget).
-* Improvement: After scanning each comment, stale inspector rows for that comment are removed when URLs disappear from comment body or author website fields.
-* New: When a comment is permanently deleted in WordPress, matching inspector rows are removed (`deleted_comment` hook).
-* Fix: Editing a comment URL from the plugin now fails with an error if the URL cannot be found in that comment (no silent “database-only” update).
-* Improvement: More redirects treated as trivial noise — drop **one interior path segment** on the same host (common permalink/category consolidation next to trailing-slash normalization).
-
-= 1.8.4 =
-* Fix: Plain `http://` links that return 200 are no longer shown as green “OK”; they use the warning style and an explicit “HTTP — use HTTPS” label. The “OK” filter and OK stat count exclude these rows (they remain under **HTTP insecure**).
-
-= 1.8.3 =
-* WordPress.org compliance: internal code prefix renamed from `tso_lc_` / `TSO_LC_` to `tsoliin_` / `TSOLIIN_` (classes, defines, options, AJAX actions, cron hooks, script handles, nonces, and admin CSS/JS hooks). Existing installs migrate stored options and legacy cron events automatically on upgrade.
-* Bootstrap entry point is now `tsoliin_link_inspector()`; custom hook after post updates is `tsoliin_after_post_update` (replace `tso_lc_after_post_update` in any custom integrations).
-
-= 1.8.2 =
-* Improvement: Treat WordPress login redirects (for example `/wp-admin/` -> `wp-login.php?redirect_to=...`) as authentication walls, not actionable redirect issues.
-
-= 1.8.1 =
-* Improvement: "Check now" resumes partial background progress when unchecked links are pending, instead of always restarting from 0%.
-
-= 1.8.0 =
-* Rebrand: plugin display name changed to **TSO Link Inspector** and admin page slugs moved to `tso-link-inspector`.
-* i18n slug updated to `tso-link-inspector` in plugin headers, text-domain constant, and PHP translation calls.
-* Prefix hardening: bootstrap function renamed to `tsoliin_link_inspector()` (superseded by the fuller `tsoliin_` / `TSOLIIN_` prefix in 1.8.3).
-
-= 1.7.11 =
-* Improvement: Retry with GET when HEAD returns `401` (some sites, including Facebook, block HEAD but answer GET).
-
-= 1.7.10 =
-* Improvement: More “transparent” redirects — `www` canonicalisation compares paths case-insensitively and with decoded segments (fixes edge cases like `publico.es` → `www.publico.es`).
-* Improvement: Chrome Web Store migration (`chrome.google.com/webstore/...` → `chromewebstore.google.com/detail/...` + optional `ucbcb`) treated as OK, not as a redirect to “fix”.
-* Improvement: LiberKey legacy catalog/browse URLs redirecting to `/{lang}.html` on the same host treated as transparent (marketing consolidation, not a broken link).
-
-= 1.7.9 =
-* Improvement: Treat Telegram `/dl/…` “latest installer” redirects to a versioned `.exe` on `*.telegram.org` as transparent — no redirect noise, and no Smart Suggestion to replace the stable URL (which would pin the post to one version).
-
-= 1.7.8 =
-* Improvement: Treat common “canonical” redirects as transparent — same hostname with/without `www`, optional `http`→`https`, same path, and query string adds only tracking/consent-style parameters (for example YouTube `ucbcb` / `cbrd`, UTM, `gclid`, `fbclid`).
-
-= 1.7.7 =
-* Improvement: URLs with a `#fragment` and a server redirect are treated as OK when the final response is successful (anchors are not sent over HTTP; redirect targets omit them).
-* Improvement: "Recheck" (single and bulk) no longer clears "Not broken" — manual OK stays until the URL fails or you edit the URL in the post.
-* Improvement: Hide "Suggestion" for manually verified rows; clearer lock icon tooltip.
-
-= 1.7.6 =
-* Improvement: Complete language selector flow for `ca`, `es_ES`, and `en`, including runtime fallback parsing from `.po` files when needed.
-* Improvement: Unified list-table strings and bulk actions under plugin text domain for consistent translations.
-* Improvement: Mobile responsive layout fixes for dashboard cards, filter tabs, list rows, and settings textarea to prevent horizontal overflow.
-* Fix: PHPCS warning in bulk actions output (`OutputNotEscaped`) by restructuring option rendering.
-* Fix: Readme metadata consistency (`Stable tag` aligned with plugin version).
-
-= 1.4.3 =
-* New: HTTP insecure filter tab and stat card for active links using http://.
-* New: Per-article view — click the list icon next to any article to see all its links.
-* Improvement: search box now searches URL, anchor text, article title and redirect URL simultaneously.
-
-= 1.4.2 =
-* New: Ignore list — add domains or URL prefixes to skip during scan and check.
-* New: Export CSV — export any filtered view to a CSV file (Excel-compatible with UTF-8 BOM).
-* New: Nofollow broken links — automatically adds rel="nofollow" to broken links on the frontend.
-* New: Preserve post dates — option to not update post_modified when editing a link.
-
-= 1.4.0 =
-* Fix: Redirect false positives — trailing slash, CDN assets, WP attachment pages, download tokens and login walls are now treated as transparent.
-* Fix: Fragment URLs (#comment-1898) no longer incorrectly detected as redirects.
-* Fix: Smart suggest now shows already-detected redirect URL as first suggestion instantly.
-* Fix: Suggest button now also appears for redirect and http:// links.
-* Fix: "Data desconeguda" shown instead of "Mai" for records with status but no check date.
-* Fix: Timezone double-conversion corrected (dates now store UTC).
-* Fix: Next cron run times shown on dashboard.
-
-= 1.3.0 =
-* New: Redirect chain follows up to 8 hops manually (captures real final URL).
-* New: 303 See Other label added.
-* New: Trailing slash redirects suppressed automatically.
-* New: Auth/login wall redirects (Facebook, Google) shown as 401 warning, not redirect.
-* New: CDN asset and download token redirects suppressed.
-* Improvement: URL column wider with full URL on hover tooltip.
-
-= 1.2.0 =
-* Rewritten from scratch to eliminate accumulated PHP parse errors.
-* New: Scan images (img src), iframes, and user comments.
-* New: Smart URL Suggester (HTTPS upgrade, redirect follow, www variant).
-* New: Mark as OK button.
-* New: Bulk unlink and bulk mark as OK.
-* New: link_type column (link, image, iframe, comment).
-* Fix: URLs with {} characters no longer corrupted by esc_url_raw.
-* Fix: Comment links correctly handled by Unlink and Edit URL.
-
-= 1.0.0 =
-* Initial release.
-
-== Upgrade Notice ==
-
-= 2.1.5 =
-Recommended update. Editor focus, inline edit reliability, and Recheck/cron sync improvements. Run **Scan now** once after updating.
-
-= 2.1.0 =
-Recommended update. External sources use **Go to edit**; gallery images classify correctly; **Recheck** syncs from WordPress before HTTP. Run **Scan now** after updating to refresh link types.
-
-= 2.0.0 =
-Major update: dashboard widget, Posts with issues, internal/external and quality filters, Help tab, view-post-at-link highlight, Convert to /path, PDF export, configurable cron schedule, ACF/meta improvements, and many admin fixes. Run **Scan now** after updating, then **Check now** once.
-
-= 1.9.9 =
-Recommended update. Edit link fixes for images and relative URLs, clearer Manual locks (“Not broken”) flow, and version badge in the admin header.
-
-= 1.9.8 =
-Recommended update. Clearer Scan vs Check UI with Stop buttons, per-post checking, plus anchor editing, search/filter fixes, and PHP 8.5/7.4 compatibility.
-
-= 1.9.7 =
-Recommended update. Extended scanning (widgets, terms, FSE, meta plain URLs, third-party API), many admin and redirect fixes, and automatic list refresh after bulk actions. Run **Scan now** after updating, then **Check now** once to normalize existing rows.
-
-= 1.9.6 =
-Recommended update. YouTube and other harmless redirects no longer clutter the Redirect filter; run **Check now** once after updating to normalize existing rows.
-
-= 1.9.5 =
-Recommended update. Scans many more link sources (plain-text URLs, Gutenberg JSON, menus, srcset/picture, data attributes), safer Smart Suggest (Apply only on confirmed 2xx), and numerous admin/HTTP fixes. Run **Scan now** after updating.
-
-= 1.9.4 =
-Recommended update. Internal link checks, redirect-to-404 handling, smarter suggestions, HTML broken-link emails, performance fix, Settings screen PHP 8.1 fix, WordPress 7.0 tested.
-
-= 1.9.3 =
-Recommended security update. Hardens HTTP checks against SSRF, validates edited URLs, fixes XSS in admin suggestion UI, and applies the ignore list during scans.
-
-= 1.9.2 =
-Recommended update. Fixes the plugin description not appearing in Catalan or Spanish on the Plugins screen; updates bundled translations.
-
-= 1.9.1 =
-Recommended update. Adds optional broken-link email alerts (summary/digest), a Manual locks tab with clearer tab counts, full-recheck behavior for locked rows, several admin UI fixes (search tabs, CSV encoding, empty lists), and a submenu registration fix for newer PHP versions.
-
-= 1.9.0 =
-Recommended update. Fixes comment scanning/link bookkeeping (`source_key` rows), stale cleanup after edits, cleanup when comments are deleted, stricter inline Edit URL for comments, and broader trivial redirect detection.
-
-= 1.8.4 =
-Recommended update. Corrects status display and counts for working HTTP-only links.
-
-= 1.8.3 =
-Recommended update. Renames internal identifiers to meet WordPress.org prefix length rules; migrates options and cron automatically.
-
-= 1.8.2 =
-Recommended update. Reduces false redirect warnings for protected `/wp-admin/` links that correctly route through WordPress login.
-
-= 1.8.1 =
-Recommended update. Background checks now resume from partial progress instead of restarting.
-
-= 1.8.0 =
-Recommended update. Includes the repository-required rename to TSO Link Inspector and slug/domain alignment.
-
-= 1.7.11 =
-Recommended update. Slightly better HTTP probing when servers return 401 to HEAD requests.
-
-= 1.7.10 =
-Recommended update. Fewer false redirect rows for www canonicalisation, Chrome Web Store, and LiberKey catalog URLs.
-
-= 1.7.9 =
-Recommended update. Better handling of “always latest” vendor download links (Telegram desktop).
-
-= 1.7.8 =
-Recommended update. Fewer false “redirect” rows for bare domain vs `www` plus harmless query parameters.
-
-= 1.7.7 =
-Recommended update. Better handling of hash/anchor links with redirects, and more reliable "Not broken" locking.
-
-= 1.7.6 =
-Recommended update. Improves multilingual behavior, mobile usability, and admin quality checks.
-
-= 1.4.3 =
-Recommended update. Adds HTTP insecure detection and per-article view. No database changes required.
-
-= 1.4.2 =
-Recommended update. Adds ignore list, CSV export, nofollow option and preserve dates. No database changes required.
-
-= 1.3.0 =
-Recommended update. Significantly improves redirect detection accuracy. Run "Check now" after updating to refresh existing redirect records.
+# TSO Link Inspector – Catalan translation
+# Copyright (C) 2024 Tu Soporte Online
+# This file is distributed under the same license as the TSO Link Inspector plugin.
+msgid ""
+msgstr ""
+"Project-Id-Version: TSO Link Inspector 2.1.0\n"
+"Report-Msgid-Bugs-To: https://tusoporteonline.es\n"
+"POT-Creation-Date: 2024-01-01 00:00:00+00:00\n"
+"PO-Revision-Date: 2026-05-09 14:21+0200\n"
+"Last-Translator: Tu Soporte Online <info@tusoporteonline.es>\n"
+"Language-Team: Catalan\n"
+"Language: ca\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"X-Generator: Poedit 3.9\n"
+
+msgid "Find and fix broken links across your entire WordPress site without opening each post."
+msgstr "Comprova tots els enllaços trencats del lloc web i permet editar-los sense obrir l'article."
+
+msgid "Comprova tots els enllaços trencats del lloc web i permet editar-los sense obrir l'article."
+msgstr "Comprova tots els enllaços trencats del lloc web i permet editar-los sense obrir l'article."
+
+msgid "TSO Link Inspector"
+msgstr "TSO Link Inspector"
+
+msgid "Configuració – TSO Link Inspector"
+msgstr "Configuració – TSO Link Inspector"
+
+msgid "Configuració"
+msgstr "Configuració"
+
+msgid "No tens permisos suficients per accedir a aquesta pàgina."
+msgstr "No tens permisos suficients per accedir a aquesta pàgina."
+
+msgid "Escanejar ara"
+msgstr "Escanejar ara"
+
+msgid "Escaneig completat!"
+msgstr "Escaneig completat!"
+
+msgid "Escanejant..."
+msgstr "Escanejant..."
+
+msgid "Comprovant..."
+msgstr "Comprovant..."
+
+msgid "Desant..."
+msgstr "Desant..."
+
+msgid "Segur que vols eliminar l'etiqueta d'aquest enllaç? El text es mantindrà però el link desapareixerà."
+msgstr "Segur que vols eliminar l'etiqueta d'aquest enllaç? El text es mantindrà però el link desapareixerà."
+
+msgid "Segur que vols eliminar aquest registre de la llista?"
+msgstr "Segur que vols eliminar aquest registre de la llista?"
+
+msgid "S'ha produït un error. Torna-ho a intentar."
+msgstr "S'ha produït un error. Torna-ho a intentar."
+
+msgid "Nova URL:"
+msgstr "Nova URL:"
+
+msgid "Desar URL"
+msgstr "Desar URL"
+
+msgid "Cancel·lar"
+msgstr "Cancel·lar"
+
+msgid "Editar URL de l'enllaç"
+msgstr "Editar URL de l'enllaç"
+
+msgid "Current URL:"
+msgstr "URL actual:"
+
+msgid "URL updated:"
+msgstr "URL actualitzada:"
+
+msgid "☕ Support this plugin"
+msgstr "☕ Dona suport al plugin"
+
+msgid "Donate"
+msgstr "Donar"
+
+msgid "Skipped (ignore list)"
+msgstr "Omesa (llista d'ignorats)"
+
+msgid "Enllaços totals"
+msgstr "Enllaços totals"
+
+msgid "Trencats"
+msgstr "Trencats"
+
+msgid "Redirecció"
+msgstr "Redirecció"
+
+msgid "Correctes"
+msgstr "Correctes"
+
+msgid "Pendents"
+msgstr "Pendents"
+
+msgid "Posts escanejats"
+msgstr "Posts escanejats"
+
+msgid "URL de l'enllaç"
+msgstr "URL de l'enllaç"
+
+msgid "Text de l'enllaç"
+msgstr "Text de l'enllaç"
+
+msgid "Article / Pàgina"
+msgstr "Article / Pàgina"
+
+msgid "Estat"
+msgstr "Estat"
+
+msgid "Última comprovació"
+msgstr "Última comprovació"
+
+msgid "Enllaç"
+msgstr "Enllaç"
+
+msgid "Enllaços"
+msgstr "Enllaços"
+
+msgid "Recomprovar seleccionats"
+msgstr "Recomprovar seleccionats"
+
+msgid "Eliminar de la llista"
+msgstr "Eliminar de la llista"
+
+msgid "No s'han trobat enllaços. Executa una escaneig primer."
+msgstr "No s'han trobat enllaços. Executa una escaneig primer."
+
+msgid "Tots (%d)"
+msgstr "Tots (%d)"
+
+msgid "Trencats (%d)"
+msgstr "Trencats (%d)"
+
+msgid "Redirecció (%d)"
+msgstr "Redirecció (%d)"
+
+msgid "Correctes (%d)"
+msgstr "Correctes (%d)"
+
+msgid "No comprovats (%d)"
+msgstr "No comprovats (%d)"
+
+msgid "Editar URL"
+msgstr "Editar URL"
+
+msgid "Recomprovar"
+msgstr "Recomprovar"
+
+msgid "Desenllaçar"
+msgstr "Desenllaçar"
+
+msgid "(sense títol)"
+msgstr "(sense títol)"
+
+msgid "Cercar URL"
+msgstr "Cercar URL"
+
+msgid "URL actualitzada correctament."
+msgstr "URL actualitzada correctament."
+
+msgid "Configuració desada."
+msgstr "Configuració desada."
+
+msgid "Tots els registres han estat eliminats."
+msgstr "Tots els registres han estat eliminats."
+
+msgid "Segur que vols eliminar tots els registres? Hauràs de tornar a escanejar."
+msgstr "Segur que vols eliminar tots els registres? Hauràs de tornar a escanejar."
+
+msgid "Esborrar tots els registres d'enllaços"
+msgstr "Esborrar tots els registres d'enllaços"
+
+msgid "Eina de manteniment"
+msgstr "Eina de manteniment"
+
+msgid "Desar la configuració"
+msgstr "Desar la configuració"
+
+msgid "Tipus de contingut a escanejar"
+msgstr "Tipus de contingut a escanejar"
+
+msgid "Temps d'espera de connexió (segons)"
+msgstr "Temps d'espera de connexió (segons)"
+
+msgid "Recomanat: 15 segons. Valors alts alentiran el procés."
+msgstr "Recomanat: 15 segons. Valors alts alentiran el procés."
+
+msgid "TSO Link Inspector – Configuració"
+msgstr "TSO Link Inspector – Configuració"
+
+msgid "Últim escaneig: %s"
+msgstr "Últim escaneig: %s"
+
+msgid "Última comprovació automàtica: %s"
+msgstr "Última comprovació automàtica: %s"
+
+msgid "Mai s'ha realitzat cap escaneig. Fes clic a \"Escanejar ara\" per iniciar."
+msgstr "Mai s'ha realitzat cap escaneig. Fes clic a \"Escanejar ara\" per iniciar."
+
+msgid "Escanejant posts %1$d de %2$d..."
+msgstr "Escanejant posts %1$d de %2$d..."
+
+msgid "%d elements processats."
+msgstr "%d elements processats."
+
+msgid "Permís denegat."
+msgstr "Permís denegat."
+
+msgid "ID invàlid."
+msgstr "ID invàlid."
+
+msgid "Dades incorrectes."
+msgstr "Dades incorrectes."
+
+msgid "Registre eliminat."
+msgstr "Registre eliminat."
+
+msgid "No has seleccionat cap element."
+msgstr "No has seleccionat cap element."
+
+msgid "Etiqueta eliminada correctament."
+msgstr "Etiqueta eliminada correctament."
+
+msgid "No s'ha pogut trobar l'URL original al contingut del post."
+msgstr "No s'ha pogut trobar l'URL original al contingut del post."
+
+msgid "No s'ha pogut eliminar l'etiqueta de l'enllaç."
+msgstr "No s'ha pogut desenllaçar l'enllaç."
+
+msgid "No es pot connectar"
+msgstr "No es pot connectar"
+
+msgid "OK"
+msgstr "OK"
+
+msgid "Redirecció permanent"
+msgstr "Redirecció permanent"
+
+msgid "Redirecció temporal"
+msgstr "Redirecció temporal"
+
+msgid "Sol·licitud incorrecta"
+msgstr "Sol·licitud incorrecta"
+
+msgid "No autoritzat"
+msgstr "No autoritzat"
+
+msgid "Accés prohibit"
+msgstr "Accés prohibit"
+
+msgid "No trobat"
+msgstr "No trobat"
+
+msgid "Eliminat"
+msgstr "Eliminat"
+
+msgid "Massa peticions"
+msgstr "Massa peticions"
+
+msgid "Error del servidor"
+msgstr "Error del servidor"
+
+msgid "Servei no disponible"
+msgstr "Servei no disponible"
+
+msgid "Error servidor (%d)"
+msgstr "Error servidor (%d)"
+
+msgid "Error client (%d)"
+msgstr "Error client (%d)"
+
+msgid "Codi %d"
+msgstr "Codi %d"
+
+msgid "No comprovat"
+msgstr "No comprovat"
+
+msgid "Mai"
+msgstr "Mai"
+
+msgid "Escanejar camps personalitzats (ACF / meta)"
+msgstr "Escanejar camps personalitzats (ACF / meta)"
+
+msgid "Activar escaneig de camps meta (ACF, CPT UI, camps personalitzats)"
+msgstr "Activar escaneig de camps meta (ACF, CPT UI, camps personalitzats)"
+
+msgid "Camps personalitzats (ACF / Meta)"
+msgstr "Camps personalitzats (ACF / Meta)"
+
+msgid "Escanejarà camps de tipus URL, HTML i text. Pot augmentar el temps d'escaneig."
+msgstr "Escanejarà camps de tipus URL, HTML i text. Pot augmentar el temps d'escaneig."
+
+msgid "Claus meta a excloure"
+msgstr "Claus meta a excloure"
+
+msgid "Una clau per línia. Les claus internes de WP i SEO ja s'exclouen per defecte."
+msgstr "Una clau per línia. Les claus internes de WP i SEO ja s'exclouen per defecte."
+
+msgid "Comprovar ara"
+msgstr "Comprovar ara"
+
+msgid "Comprovant enllaços..."
+msgstr "Comprovant enllaços..."
+
+msgid "Comprovació completada!"
+msgstr "Comprovació completada!"
+
+msgid "Comprovant %1$d de %2$d..."
+msgstr "Comprovant %1$d de %2$d..."
+
+msgid "Comprovació iniciada al servidor. Pots continuar navegant."
+msgstr "Comprovació iniciada al servidor. Pots continuar navegant."
+
+msgid "Introdueix una URL vàlida."
+msgstr "Introdueix una URL vàlida."
+
+msgid "Executant diagnòstic..."
+msgstr "Executant diagnòstic..."
+
+msgid "Resultat del diagnòstic:"
+msgstr "Resultat del diagnòstic:"
+
+msgid "Idioma del plugin"
+msgstr "Idioma del plugin"
+
+msgid "Automàtic (idioma del WordPress)"
+msgstr "Automàtic (idioma del WordPress)"
+
+msgid "Sobreescriu l'idioma del WordPress per a aquest plugin."
+msgstr "Sobreescriu l'idioma del WordPress per a aquest plugin."
+
+msgid "Veure post"
+msgstr "Veure post"
+
+msgid "Domini no existeix (DNS)"
+msgstr "Domini no existeix (DNS)"
+
+msgid "Connexió refusada"
+msgstr "Connexió refusada"
+
+msgid "Error de certificat SSL"
+msgstr "Error de certificat SSL"
+
+msgid "Accés restringit (bot?)"
+msgstr "Accés restringit (bot?)"
+
+msgid "Accés prohibit (bot?)"
+msgstr "Accés prohibit (bot?)"
+
+msgid "Massa peticions (bot?)"
+msgstr "Massa peticions (bot?)"
+
+msgid "No disponible per llei"
+msgstr "No disponible per llei"
+
+msgid "Mètode no permès"
+msgstr "Mètode no permès"
+
+msgid "Temps d'espera esgotat"
+msgstr "Temps d'espera esgotat"
+
+msgid "Porta d'enllaç incorrecta"
+msgstr "Porta d'enllaç incorrecta"
+
+msgid "Temps d'espera del servidor"
+msgstr "Temps d'espera del servidor"
+
+msgid "Creat"
+msgstr "Creat"
+
+msgid "Sense contingut"
+msgstr "Sense contingut"
+
+msgid "Eliminat permanentment"
+msgstr "Eliminat permanentment"
+
+msgid "%d elements eliminats."
+msgstr "%d elements eliminats."
+
+msgid "enllaços recomprovats."
+msgstr "enllaços recomprovats."
+
+msgid "Imatges HTML"
+msgstr "Imatges HTML"
+
+msgid "Vídeos incrustats (iframes)"
+msgstr "Vídeos incrustats (iframes)"
+
+msgid "Comentaris d'usuaris"
+msgstr "Comentaris d'usuaris"
+
+msgid "Escanejar etiquetes <img src> (imatges trencades)"
+msgstr "Escanejar etiquetes <img src> (imatges trencades)"
+
+msgid "Escanejar iframes (YouTube, Vimeo, Google Maps…)"
+msgstr "Escanejar iframes (YouTube, Vimeo, Google Maps…)"
+
+msgid "Escanejar comentaris aprovats (enllaços i URL d'autors)"
+msgstr "Escanejar comentaris aprovats (enllaços i URL d'autors)"
+
+msgid "Pot augmentar el temps d'escaneig en llocs amb molts comentaris."
+msgstr "Pot augmentar el temps d'escaneig en llocs amb molts comentaris."
+
+msgid "Comentari #%d"
+msgstr "Comentari #%d"
+
+msgid "Autor comentari #%d"
+msgstr "Autor comentari #%d"
+
+msgid "Tipus"
+msgstr "Tipus"
+
+msgid "Imatge"
+msgstr "Imatge"
+
+msgid "Iframe"
+msgstr "Iframe"
+
+msgid "Comentari"
+msgstr "Comentari"
+
+msgid "Versió segura HTTPS disponible"
+msgstr "Versió segura HTTPS disponible"
+
+msgid "URL final després de redireccions"
+msgstr "URL final després de redireccions"
+
+msgid "Variant amb www"
+msgstr "Variant amb www"
+
+msgid "URL suggerida"
+msgstr "URL suggerida"
+
+msgid "Buscant alternatives..."
+msgstr "Buscant alternatives..."
+
+msgid "No s'han trobat alternatives per a aquest URL."
+msgstr "No s'han trobat alternatives per a aquest URL."
+
+msgid "Aplicar aquesta URL"
+msgstr "Aplicar aquesta URL"
+
+msgid "Alt nivell de confiança"
+msgstr "Alt nivell de confiança"
+
+msgid "Nivell de confiança mitjà"
+msgstr "Nivell de confiança mitjà"
+
+msgid "Suggeriment URL"
+msgstr "Suggeriment URL"
+
+msgid "Re-comprovar cada (dies)"
+msgstr "Re-comprovar cada (dies)"
+
+msgid "El cron horari re-comprova automàticament els links més antics d'aquest nombre de dies. Per defecte: 7 dies."
+msgstr "El cron horari re-comprova automàticament els links més antics d'aquest nombre de dies. Per defecte: 7 dies."
+
+msgid "No s'ha pogut eliminar l'etiqueta. Per a comentaris, edita'l manualment des de Comentaris."
+msgstr "No s'ha pogut desenllaçar l'enllaç. Per a comentaris, edita'l manualment des de Comentaris."
+
+msgid "No és trencat"
+msgstr "No és trencat"
+
+msgid "Marcar com a correcte i moure a la llista OK"
+msgstr "Marcar com a correcte i moure a la llista OK"
+
+msgid "Marcat com a correcte."
+msgstr "Marcat com a correcte."
+
+msgid "OK (manual)"
+msgstr "OK (manual)"
+
+msgid "Elimina l'entrada de la llista de comprovació (l'article no canvia)"
+msgstr "Elimina l'entrada de la llista de comprovació (l'article no canvia)"
+
+# English source strings for WordPress i18n compliance.
+msgid "TSO Link Inspector - Settings"
+msgstr "TSO Link Inspector - Configuració"
+
+msgid "Settings"
+msgstr "Configuració"
+
+msgid "Settings saved."
+msgstr "Configuració desada."
+
+msgid "Records deleted."
+msgstr "Registres eliminats."
+
+msgid "Content types"
+msgstr "Tipus de contingut"
+
+msgid "HTML Images"
+msgstr "Imatges HTML"
+
+msgid "Scan img src tags (broken images)"
+msgstr "Escanejar etiquetes img src (imatges trencades)"
+
+msgid "Embedded videos (iframes)"
+msgstr "Vídeos incrustats (iframes)"
+
+msgid "Scan iframes (YouTube, Vimeo, Google Maps)"
+msgstr "Escanejar iframes (YouTube, Vimeo, Google Maps)"
+
+msgid "Comments"
+msgstr "Comentaris"
+
+msgid "Scan approved comments"
+msgstr "Escanejar comentaris aprovats"
+
+msgid "ACF / Meta custom fields"
+msgstr "Camps personalitzats ACF / Meta"
+
+msgid "Scan custom fields (ACF, PODS, CPT UI...)"
+msgstr "Escanejar camps personalitzats (ACF, PODS, CPT UI...)"
+
+msgid ""
+"Find links in fields added by plugins like ACF. Useful when you have URL, HTML, or editor fields in your posts. It may "
+"slow down scanning."
+msgstr ""
+"Busca links en camps afegits per plugins com ACF. Útil si tens camps de tipus URL, HTML o editor als teus articles. Pot "
+"alentir l'escaneig."
+
+msgid "Meta keys to exclude"
+msgstr "Claus meta a excloure"
+
+msgid "One key per line."
+msgstr "Una clau per línia."
+
+msgid "Timeout (seconds)"
+msgstr "Timeout (segons)"
+
+msgid "Recommended: 15 s."
+msgstr "Recomanat: 15 s."
+
+msgid "Recheck every (days)"
+msgstr "Re-comprovar cada (dies)"
+
+msgid "Cron rechecks links older than this age. Default: 7 days."
+msgstr "El cron re-comprova links més antics d'aquesta edat. Per defecte: 7 dies."
+
+msgid "Post modified date"
+msgstr "Data de modificació del article"
+
+msgid "Do not update modified date when editing a link"
+msgstr "No actualitzar la data de modificació en editar un link"
+
+msgid "If enabled, editing or unlinking a link will not change the post modified date."
+msgstr "Si activat, editar o desenllaçar un link no canviarà la data de modificació del article."
+
+msgid "Broken links and search engines"
+msgstr "Links trencats als cercadors"
+
+msgid "Automatically add rel=\"nofollow\" to broken links"
+msgstr "Afegir rel=\"nofollow\" als links trencats automàticament"
+
+msgid ""
+"Prevents search engines from following broken links on your site. It only affects post content (not comments or custom "
+"fields)."
+msgstr ""
+"Evita que Google i altres cercadors segueixin links trencats del teu lloc. Només afecta el contingut dels articles (no "
+"comentaris ni camps personalitzats)."
+
+msgid "Catalan"
+msgstr "Català"
+
+msgid "Spanish"
+msgstr "Espanyol"
+
+msgid "Plugin language"
+msgstr "Idioma del plugin"
+
+msgid "Ignore list"
+msgstr "Llista d'ignorats"
+
+msgid ""
+"One domain or URL per line. Example: amazon.com or https://example.com/page. These links will be skipped during scan and "
+"check."
+msgstr ""
+"Un domini o URL per línia. Exemple: amazon.com o https://example.com/page. Aquests links no seran escanejats ni comprovats."
+
+msgid "Save settings"
+msgstr "Desar la configuració"
+
+msgid "Maintenance"
+msgstr "Manteniment"
+
+msgid "Clears the plugin internal table: found links, HTTP status, check dates, and redirect URLs."
+msgstr "Esborra la taula interna del plugin: links trobats, estats HTTP, dates de comprovació i URLs de redirecció."
+
+msgid "Posts, pages, and comments are NOT modified."
+msgstr "Els articles, pàgines i comentaris NO es modifiquen."
+
+msgid "After that, run Scan now and Check now again."
+msgstr "Després haureu de tornar a fer Escanejar ara i Comprovar ara."
+
+msgid "Are you sure? All plugin records will be deleted. Posts will not be changed."
+msgstr "Segur? Tots els registres del plugin seran eliminats. Els articles no canviaran."
+
+msgid "Delete all plugin records"
+msgstr "Esborrar tots els registres del plugin"
+
+msgid "Recheck"
+msgstr "Recomprovar"
+
+msgid "Insufficient permissions."
+msgstr "Permisos insuficients."
+
+msgid "Broken"
+msgstr "Trencats"
+
+msgid "Check now"
+msgstr "Comprovar ara"
+
+msgid "Checking..."
+msgstr "Comprovant..."
+
+msgid "Scan now"
+msgstr "Escanejar ara"
+
+msgid "Link not found."
+msgstr "Enllaç no trobat."
+
+msgid "Link"
+msgstr "Enllaç"
+
+msgid "Links"
+msgstr "Enllaços"
+
+msgid "Recheck selected"
+msgstr "Recomprovar seleccionats"
+
+msgid "Unlink all"
+msgstr "Desenllaçar tots"
+
+msgid "Mark as OK"
+msgstr "Marcar com a correctes"
+
+msgid "Delete from list"
+msgstr "Eliminar de la llista"
+
+msgid "Comment"
+msgstr "Comentari"
+
+msgid "Not broken"
+msgstr "No és trencat"
+
+msgid "Unlink"
+msgstr "Desenllaçar"
+
+msgid "Delete this record. The post link is not modified."
+msgstr "Elimina aquest registre. El link del post no canvia."
+
+msgid "Clear the comment author website field (URL)"
+msgstr "Buida el camp URL del autor del comentari"
+
+msgid "Remove the link tag from content; visible text is kept."
+msgstr "Elimina l'etiqueta d'enllaç del contingut; el text visible es manté."
+
+msgid "Cannot unlink this item."
+msgstr "No es pot desenllaçar aquest element."
+
+msgid "Delete this record from the list only. The source content is not modified."
+msgstr "Elimina només aquest registre de la llista. El contingut d'origen no es modifica."
+
+msgid "Delete this record from the list only. The author URL in the comment is not cleared — use Unlink for that."
+msgstr "Elimina només aquest registre de la llista. L'URL de l'autor al comentari no s'esborra — fes servir Desenllaçar per això."
+
+msgid "Delete this record from the list only. The comment is not modified."
+msgstr "Elimina només aquest registre de la llista. El comentari no es modifica."
+
+msgid "Delete this record from the list. The post link is not modified."
+msgstr "Elimina aquest registre de la llista. L'enllaç de l'entrada no es modifica."
+
+msgid "Delete"
+msgstr "Eliminar"
+
+msgid "Suggestion"
+msgstr "Suggeriment"
+
+msgid "(no title)"
+msgstr "(sense títol)"
+
+msgid "Back to all links"
+msgstr "Tornar a tots els links"
+
+msgid "View all links for this post"
+msgstr "Veure tots els links d'aquest article"
+
+msgid "No links found. Run a scan first."
+msgstr "No hi ha enllaços. Executa un escaneig primer."
+
+msgid "All (%s)"
+msgstr "Tots (%s)"
+
+msgid "Broken (%s)"
+msgstr "Trencats (%s)"
+
+msgid "OK (%s)"
+msgstr "Correctes (%s)"
+
+msgid "Links found but not checked by HTTP yet. Cron will check them automatically, or click Check now."
+msgstr "Links trobats però encara sense comprovar per HTTP. El cron els comprovarà automàticament, o clica Comprovar ara."
+
+msgid "Active links using HTTP instead of HTTPS. Consider updating them for security and SEO."
+msgstr "Links actius que usen HTTP en lloc de HTTPS. Considera actualitzar-los per seguretat i SEO."
+
+msgid "Comment #%d"
+msgstr "Comentari #%d"
+
+msgid "Comment author #%d"
+msgstr "Autor comentari #%d"
+
+msgid "Total"
+msgstr "Total"
+
+msgid "English"
+msgstr "Anglès"
+
+msgid "URL"
+msgstr "URL"
+
+msgid "Text"
+msgstr "Text"
+
+msgid "Article"
+msgstr "Article"
+
+msgid "Comprovat"
+msgstr "Comprovat"
+
+msgid "Data desconeguda"
+msgstr "Data desconeguda"
+
+msgid "Veure article"
+msgstr "Veure article"
+
+msgid "Verificat manualment. El cron no sobreescriu aquest estat."
+msgstr "Verificat manualment. El cron no sobreescriu aquest estat."
+
+msgid "HTTP insegur (%d)"
+msgstr "HTTP insegur (%d)"
+
+msgid "S'ha produit un error."
+msgstr "S'ha produït un error."
+
+msgid "%d links"
+msgstr "%d links"
+
+msgid "Nonce invalid."
+msgstr "Nonce invàlid."
+
+msgid "Apply"
+msgstr "Aplicar"
+
+msgid "links rechecked."
+msgstr "links recomprovats."
+
+msgid "links unlinked."
+msgstr "links desenllaçats."
+
+msgid "rows skipped (menu/widget/term)."
+msgstr "files omeses (menú/widget/terme)."
+
+msgid "requests failed."
+msgstr "peticions fallides."
+
+msgid "Unlinking…"
+msgstr "Desenllaçant…"
+
+msgid "Manual locks (%s)"
+msgstr "Bloquejats manuals (%s)"
+
+msgid "Links manually marked as not broken."
+msgstr "Enllaços marcats manualment com a no trencats."
+
+msgid "Are you sure? The text will remain but the link will be removed."
+msgstr "Segur? El text es mantindrà però el link desapareixerà."
+
+msgid "Delete this record from the list. The post will not be changed. Continue?"
+msgstr "Elimina el registre de la llista. El post no canvia. Continuar?"
+
+msgid "Scanning..."
+msgstr "Escanejant..."
+
+msgid "Scan completed!"
+msgstr "Escaneig completat!"
+
+msgid "Check completed!"
+msgstr "Comprovació completada!"
+
+msgid "Check started. You can continue browsing."
+msgstr "Comprovació iniciada. Pots continuar navegant."
+
+msgid "Stopped"
+msgstr "Aturat"
+
+msgid "Saving..."
+msgstr "Desant..."
+
+msgid "URL updated successfully."
+msgstr "URL actualitzada correctament."
+
+msgid "Marked as OK."
+msgstr "Marcat com a correcte."
+
+msgid "Diagnostics"
+msgstr "Diagnòstic"
+
+msgid "Running diagnostics..."
+msgstr "Executant diagnòstic..."
+
+msgid "Diagnostics result:"
+msgstr "Resultat del diagnòstic:"
+
+msgid "Looking for alternatives..."
+msgstr "Buscant alternatives..."
+
+msgid "Suggested URL"
+msgstr "URL suggerida"
+
+msgid "No working alternative was found for this link."
+msgstr "No s'ha trobat cap alternativa que funcioni per a aquest enllaç."
+
+msgid "No alternative URL could fix this broken link. The destination may be permanently gone — update or remove the link manually."
+msgstr "Cap URL alternativa pot corregir aquest enllaç trencat. El destí pot haver desaparegut de manera permanent — actualitza o elimina l'enllaç manualment."
+
+msgid "No alternatives found."
+msgstr "No s'han trobat alternatives."
+
+msgid "Invalid data."
+msgstr "Dades incorrectes."
+
+msgid "Original URL not found in post. Check whether the link was edited manually."
+msgstr "URL original no trobada al post. Comprova que el link no ha estat editat manualment."
+
+msgid "Cannot unlink this item. For comments, edit manually."
+msgstr "No es pot desenllaçar aquest element. Per a comentaris, edita'l manualment."
+
+msgid "Link tag removed."
+msgstr "Etiqueta eliminada."
+
+msgid "Invalid ID."
+msgstr "ID invàlid."
+
+msgid "Record deleted."
+msgstr "Registre eliminat."
+
+msgid "No items selected."
+msgstr "Cap element seleccionat."
+
+msgid "Unlinking %1$d of %2$d..."
+msgstr "Desenllaçant %1$d de %2$d..."
+
+msgid "%d marked as OK."
+msgstr "%d marcats com a correctes."
+
+msgid "%d deleted."
+msgstr "%d eliminats."
+
+msgid "Destination detected (last check)"
+msgstr "Destinació detectada (última comprovació)"
+
+msgid "Secure HTTPS version available"
+msgstr "Versió segura HTTPS disponible"
+
+msgid "Final URL after redirects"
+msgstr "URL final després de redireccions"
+
+msgid "www variant"
+msgstr "Variant amb www"
+
+msgid "Cannot connect"
+msgstr "No es pot connectar"
+
+msgid "Domain does not exist (DNS)"
+msgstr "Domini no existeix (DNS)"
+
+msgid "Timed out"
+msgstr "Temps d'espera esgotat"
+
+msgid "Connection refused"
+msgstr "Connexió refusada"
+
+msgid "SSL error (server cannot verify)"
+msgstr "Error SSL (el servidor no pot verificar)"
+
+msgid "SSL error"
+msgstr "Error SSL"
+
+msgid "Permanent redirect"
+msgstr "Redirecció permanent"
+
+msgid "Temporary redirect"
+msgstr "Redirecció temporal"
+
+msgid "Redirect (See Other)"
+msgstr "Redirecció (See Other)"
+
+msgid "Bad request"
+msgstr "Sol·licitud incorrecta"
+
+msgid "Access restricted (bot?)"
+msgstr "Accés restringit (bot?)"
+
+msgid "Access forbidden (bot?)"
+msgstr "Accés prohibit (bot?)"
+
+msgid "Extension unavailable"
+msgstr "Extensió no disponible"
+
+msgid "Not found"
+msgstr "No trobat"
+
+msgid "Method not allowed"
+msgstr "Mètode no permès"
+
+msgid "Permanently removed"
+msgstr "Eliminat permanentment"
+
+msgid "Too many requests (bot?)"
+msgstr "Massa peticions (bot?)"
+
+msgid "Server error"
+msgstr "Error del servidor"
+
+msgid "Service unavailable"
+msgstr "Servei no disponible"
+
+msgid "Server error (%d)"
+msgstr "Error del servidor (%d)"
+
+msgid "Client error (%d)"
+msgstr "Error client (%d)"
+
+msgid "Code %d"
+msgstr "Codi %d"
+
+msgid "Not checked"
+msgstr "No comprovat"
+
+msgid "Redirect destination already detected"
+msgstr "Destinació ja detectada"
+
+msgid "Redirect"
+msgstr "Redirecció"
+
+msgid "Unchecked"
+msgstr "No comprovats"
+
+msgid "Links found but not checked by HTTP yet. Cron or Check now will verify them."
+msgstr "Links trobats però sense comprovar per HTTP. El cron o Comprovar ara els verificarà."
+
+msgid "HTTP insecure"
+msgstr "HTTP insegur"
+
+msgid "Active links using HTTP. Consider updating them to HTTPS for security and SEO."
+msgstr "Links actius amb HTTP. Considera actualitzar-los a HTTPS per seguretat i SEO."
+
+msgid "Scanned"
+msgstr "Escanejats"
+
+msgid "Last scan: %s"
+msgstr "Últim escaneig: %s"
+
+msgid "No scan has been run yet. Click Scan now."
+msgstr "Cap escaneig realitzat. Fes clic a Escanejar ara."
+
+msgid "(no pending links)"
+msgstr "(cap link pendent)"
+
+msgid "Last automatic check: %s"
+msgstr "Última comprovació auto: %s"
+
+msgid "Links never checked or older than %d days. Cron will check them automatically."
+msgstr "Links mai comprovats o més antics de %d dies. El cron els anirà comprovant de forma automàtica."
+
+msgid "%d to check"
+msgstr "%d per comprovar"
+
+msgid "All links were checked recently."
+msgstr "Tots els links han estat comprovats recentment."
+
+msgid "All up to date"
+msgstr "Tots actualitzats"
+
+msgid "Next automatic scan: %s"
+msgstr "Proper escaneig auto: %s"
+
+msgid "Next automatic check: %s"
+msgstr "Propera comprovació auto: %s"
+
+msgid "Export CSV"
+msgstr "Exportar CSV"
+
+msgid "Edit post"
+msgstr "Editar article"
+
+msgid "View post"
+msgstr "Veure article"
+
+msgid "Back"
+msgstr "Tornar"
+
+msgid "Search URLs..."
+msgstr "Cercar URLs..."
+
+msgid "Searching..."
+msgstr "Cercant..."
+
+msgid "Search"
+msgstr "Cercar"
+
+msgid "Edit URL"
+msgstr "Editar URL"
+
+msgid "New URL:"
+msgstr "Nova URL:"
+
+msgid "Save URL"
+msgstr "Desar URL"
+
+msgid "Cancel"
+msgstr "Cancel·lar"
+
+msgid "Checking %1$d of %2$d..."
+msgstr "Comprovant %1$d de %2$d..."
+
+msgid "Automatic"
+msgstr "Automàtic"
+
+msgid "Post"
+msgstr "Entrada"
+
+msgid "Page"
+msgstr "Pàgina"
+
+msgid "Media"
+msgstr "Mèdia"
+
+msgid "Type"
+msgstr "Tipus"
+
+msgid "Select All"
+msgstr "Seleccionar-ho tot"
+
+msgid "Sort ascending."
+msgstr "Ordenar ascendent."
+
+msgid "Sort descending."
+msgstr "Ordenar descendent."
+
+msgid "Pagination"
+msgstr "Paginació"
+
+msgid "Status"
+msgstr "Estat"
+
+msgid "Last checked"
+msgstr "Comprovat"
+
+msgid "Image"
+msgstr "Imatge"
+
+msgid "Unknown date"
+msgstr "Data desconeguda"
+
+msgid "Never"
+msgstr "Mai"
+
+msgid "Redirect (%s)"
+msgstr "Redirecció (%s)"
+
+msgid "Unchecked (%s)"
+msgstr "No comprovats (%s)"
+
+msgid "HTTP insecure (%s)"
+msgstr "HTTP insegur (%s)"
+
+msgid "Bulk actions"
+msgstr "Accions en massa"
+
+msgid "Select bulk action"
+msgstr "Selecciona acció en massa"
+
+msgid "Marked OK by you. Re-checks keep this unless the URL fails. Edit the URL in the post to clear."
+msgstr ""
+"Marcat com a correcte per tu. Les recomprovacions mantenen això tret que l'URL falli. Edita l'URL a l'article per treure "
+"el bloqueig."
+
+msgid "An error occurred."
+msgstr "S'ha produït un error."
+
+msgid "OK (HTTP — use HTTPS)"
+msgstr "OK (HTTP — cal HTTPS)"
+
+msgid "%d OK (HTTP — use HTTPS)"
+msgstr "%d OK (HTTP — cal HTTPS)"
+
+msgid "Broken links email notifications"
+msgstr "Notificacions per correu dels enllaços trencats"
+
+msgid "Disabled"
+msgstr "Desactivat"
+
+msgid "Send immediately when a broken link is detected"
+msgstr "Enviar immediatament quan es detecti un enllaç trencat"
+
+msgid "Summary email every 7 days"
+msgstr "Correu resum cada 7 dies"
+
+msgid "Summary email every 15 days"
+msgstr "Correu resum cada 15 dies"
+
+msgid "Summary email every 30 days"
+msgstr "Correu resum cada 30 dies"
+
+msgid ""
+"Only links that are fully broken are included (no redirect destination). Summary emails are skipped when there are no "
+"broken links."
+msgstr ""
+"Només s'inclouen enllaços completament trencats (sense destinació de redirecció). No s'envia correu resum quan no hi ha "
+"enllaços trencats."
+
+msgid "Sent to: %s"
+msgstr "Enviat a: %s"
+
+msgid "%1$d new broken link was detected on %2$s:"
+msgid_plural "%1$d new broken links were detected on %2$s:"
+msgstr[0] "S'ha detectat %1$d enllaç trencat nou a %2$s:"
+msgstr[1] "S'han detectat %1$d enllaços trencats nous a %2$s:"
+
+msgid "Broken URL:"
+msgstr "URL trencada:"
+
+msgid "Status code:"
+msgstr "Codi d'estat:"
+
+msgid "Post ID:"
+msgstr "ID de l'entrada:"
+
+msgid "Post title:"
+msgstr "Títol de l'entrada:"
+
+msgid "Edit post:"
+msgstr "Editar entrada:"
+
+msgid "Inspector:"
+msgstr "Inspector:"
+
+msgid "[%1$s] Broken links report (%2$d)"
+msgstr "[%1$s] Informe d'enllaços trencats (%2$d)"
+
+msgid "There are currently %1$d broken links without redirection on %2$s."
+msgstr "Actualment hi ha %1$d enllaços trencats sense redirecció a %2$s."
+
+msgid "...and %d more broken links."
+msgstr "...i %d enllaços trencats més."
+
+msgid "Recipient email"
+msgstr "Correu destinatari"
+
+msgid "Address used for broken link notifications. Leave empty to use the WordPress admin email."
+msgstr "Adreça usada per a notificacions d'enllaços trencats. Deixa-ho buit per usar el correu d'administració de WordPress."
+
+msgid "www / non-www variant (HTTPS)"
+msgstr "Variant amb www / sense www (HTTPS)"
+
+msgid ""
+"No HTTPS upgrade or other useful alternative was found. The site may only offer HTTP, so there is nothing helpful to apply—"
+"changing www alone would not fix the insecure HTTP link."
+msgstr ""
+"No s'ha trobat cap millora a HTTPS ni cap altra alternativa útil. El lloc pot oferir només HTTP; per tant no hi ha res útil "
+"a aplicar: canviar només el www no solucionaria l'enllaç HTTP insegur."
+
+msgid "Broken links report"
+msgstr "Informe d'enllaços trencats"
+
+msgid "Open broken links in inspector"
+msgstr "Obrir enllaços trencats a l'inspector"
+
+msgid "This notification was sent by %1$s on %2$s."
+msgstr "Aquesta notificació l'ha enviat %1$s a %2$s."
+
+msgid "Article:"
+msgstr "Article:"
+
+msgid "Post #%d"
+msgstr "Entrada #%d"
+
+msgid "%1$d new broken link was detected on %2$s."
+msgid_plural "%1$d new broken links were detected on %2$s."
+msgstr[0] "S'ha detectat %1$d enllaç trencat nou a %2$s."
+msgstr[1] "S'han detectat %1$d enllaços trencats nous a %2$s."
+
+msgid "Extended scanning"
+msgstr "Escaneig ampliat"
+
+msgid "Plain-text URLs in post content (without <a> tags)"
+msgstr "URL en text pla al contingut (sense etiquetes <a>)"
+
+msgid "Plain-text URLs in post content (without <a> tags). Checked for broken links; edit the post manually to change or remove them."
+msgstr "URL en text pla al contingut (sense etiquetes <a>). Es comproven si estan trencades; edita l'entrada manualment per canviar-les o eliminar-les."
+
+msgid "Plain text URL"
+msgstr "URL en text pla"
+
+msgid "This URL is plain text in the content, not an HTML link. Edit the post manually, or use Delete to remove this record from the list."
+msgstr "Aquesta URL és text pla al contingut, no un enllaç HTML. Edita l'entrada manualment o fes servir Eliminar per treure aquest registre de la llista."
+
+msgid "Gutenberg block attributes (parse_blocks JSON)"
+msgstr "Atributs de blocs Gutenberg (JSON parse_blocks)"
+
+msgid "Navigation menus (custom menu links)"
+msgstr "Menús de navegació (enllaços personalitzats)"
+
+msgid "Responsive media (srcset, picture, video, audio, embed)"
+msgstr "Mitjans responsius (srcset, picture, vídeo, àudio, embed)"
+
+msgid "Page builder data-* link attributes"
+msgstr "Atributs data-* d'enllaç de page builders"
+
+msgid "These sources are enabled by default. Uncheck any you want to skip during scans."
+msgstr "Aquestes fonts estan activades per defecte. Desmarca les que vulguis ometre durant l'escaneig."
+
+msgid "Menu item #%d"
+msgstr "Element de menú #%d"
+
+msgid "Menu"
+msgstr "Menú"
+
+msgid "Menu links must be edited under Appearance > Menus."
+msgstr "Els enllaços de menú s'han d'editar a Aparença > Menús."
+
+msgid "Close"
+msgstr "Tancar"
+
+msgid "Destination detected (re-checked now)"
+msgstr "Destí detectat (recomprovat ara)"
+
+msgid "The destination blocks automated checks (403/401/429). It may work in a browser, but your server cannot confirm it — verify manually before editing the link."
+msgstr "La destinació bloqueja comprovacions automàtiques (403/401/429). Pot funcionar al navegador, però el servidor no ho pot confirmar — verifica manualment abans d'editar l'enllaç."
+
+msgid "Extended sources (Phase 2)"
+msgstr "Fonts ampliades (Fase 2)"
+
+msgid "Widget sidebars (Text, Custom HTML, block widgets)"
+msgstr "Sidebars de widgets (Text, HTML personalitzat, widgets de blocs)"
+
+msgid "Taxonomy term descriptions (categories, tags, etc.)"
+msgstr "Descripcions de termes taxonòmics (categories, etiquetes, etc.)"
+
+msgid "Site Editor templates, template parts, and reusable blocks"
+msgstr "Plantilles de l'editor del lloc, parts de plantilla i blocs reutilitzables"
+
+msgid "Plain-text URLs inside custom fields (requires ACF/Meta scan above)"
+msgstr "URLs en text pla dins camps personalitzats (requereix l'escaneig ACF/Meta de dalt)"
+
+msgid "Third-party plugins can register extra sources with the tsoliin_register_link_source() API."
+msgstr "Els plugins de tercers poden registrar fonts addicionals amb l'API tsoliin_register_link_source()."
+
+msgid "Widget links must be edited under Appearance > Widgets."
+msgstr "Els enllaços de widgets s'han d'editar a Aparença > Widgets."
+
+msgid "Term description links must be edited in the taxonomy editor."
+msgstr "Els enllaços de la descripció del terme s'han d'editar a l'editor de taxonomia."
+
+msgid "This link must be edited at its original source."
+msgstr "Aquest enllaç s'ha d'editar a la font original."
+
+msgid "Widget"
+msgstr "Widget"
+
+msgid "Term"
+msgstr "Terme"
+
+msgid "Template"
+msgstr "Plantilla"
+
+msgid "Reusable block"
+msgstr "Bloc reutilitzable"
+
+msgid "Widget %1$s / %2$s"
+msgstr "Widget %1$s / %2$s"
+
+msgid "%1$s: %2$s"
+msgstr "%1$s: %2$s"
+
+msgid "Action link (logout)"
+msgstr "Enllaç d'acció (tancar sessió)"
+
+msgid "Warning: this link logs you out. Open only if you intend to end your session."
+msgstr "Avís: aquest enllaç tanca la sessió. Obre'l només si vols tancar la sessió."
+
+msgid "This link ends your WordPress session. Open it anyway?"
+msgstr "Aquest enllaç tanca la sessió de WordPress. El vols obrir igualment?"
+
+msgid "Blocked (cannot check from server)"
+msgstr "Bloquejat (no es pot comprovar des del servidor)"
+
+msgid "Redirect destination already detected by scan (re-check blocked)"
+msgstr "Destí de redirecció ja detectat per l'escaneig (recomprovació bloquejada)"
+
+msgid "Edit link"
+msgstr "Editar enllaç"
+
+msgid "Link text:"
+msgstr "Text de l'enllaç:"
+
+msgid "Inspector label (read-only):"
+msgstr "Etiqueta interna (només lectura):"
+
+msgid "Link text in comment (read-only):"
+msgstr "Text de l'enllaç al comentari (només lectura):"
+
+msgid "This is an internal label, not the visible link text in the comment. Edit the comment in WordPress to change what visitors see."
+msgstr "Això és una etiqueta interna, no el text visible de l'enllaç al comentari. Edita el comentari a WordPress per canviar el que veuen els visitants."
+
+msgid "Only the URL can be changed here. To edit the visible link text, open the comment in WordPress."
+msgstr "Aquí només es pot canviar la URL. Per editar el text visible de l'enllaç, obre el comentari a WordPress."
+
+msgid "Link text cannot be changed here for this comment. Edit the comment in WordPress to change visible text."
+msgstr "El text de l'enllaç no es pot canviar aquí per a aquest comentari. Edita el comentari a WordPress per canviar el text visible."
+
+msgid "No changes to save."
+msgstr "No hi ha canvis per desar."
+
+msgid "Stop scan"
+msgstr "Aturar escaneig"
+
+msgid "Check this post"
+msgstr "Comprovar aquest article"
+
+msgid "Scan stopped."
+msgstr "Escaneig aturat."
+
+msgid "Scan complete. Starting HTTP check…"
+msgstr "Escaneig completat. S'inicia la comprovació HTTP…"
+
+msgid "Check now will send an HTTP request to every link saved in the database. On large sites this can take a long time. Continue?"
+msgstr "Comprovar ara enviarà una petició HTTP a cada enllaç guardat a la base de dades. En llocs grans pot trigar molt. Continuar?"
+
+msgid "Scan:"
+msgstr "Escaneig:"
+
+msgid "Check:"
+msgstr "Comprovació:"
+
+msgid "Reads your content and adds links to this list. It does not test whether URLs work yet."
+msgstr "Llegeix el contingut i afegeix enllaços a aquesta llista. Encara no comprova si les URLs funcionen."
+
+msgid "Tests every saved URL on the site over HTTP (can take a while). Use Stop to cancel. After editing one post, open its link list or use Recheck on a row."
+msgstr "Comprova cada URL guardada del lloc per HTTP (pot trigar). Usa Aturar per cancel·lar. Després d'editar un article, obre la seva llista d'enllaços o fes Recomprovar en una fila."
+
+msgid "Tests each saved URL in this post over HTTP. Use Stop to cancel."
+msgstr "Comprova cada URL d'aquest article per HTTP. Usa Aturar per cancel·lar."
+
+msgid "Checking links in this post. You can continue browsing."
+msgstr "Comprovant enllaços d'aquest article. Pots continuar navegant."
+
+msgid "Alt text:"
+msgstr "Text alternatiu:"
+
+msgid "URL updated, but link text could not be changed in the post. Edit the post manually or leave the link text field unchanged next time."
+msgstr "URL actualitzada, però el text de l'enllaç no s'ha pogut canviar a l'article. Edita l'article manualment o deixa el camp de text sense canvis la propera vegada."
+
+msgid "Link text updated, but the URL could not be changed in the post. Edit the post manually or leave the URL field unchanged next time."
+msgstr "Text de l'enllaç actualitzat, però la URL no s'ha pogut canviar a l'article. Edita l'article manualment o deixa el camp URL sense canvis la propera vegada."
+
+msgid "Original image URL not found in post. Check whether the image was edited manually."
+msgstr "No s'ha trobat la URL original de la imatge a l'article. Comprova si la imatge s'ha editat manualment."
+
+msgid "Marked as OK and moved to Manual locks. It leaves that list only if the URL or redirect changes, or a check finds it broken."
+msgstr "Marcat com a OK i mogut a Bloquejos manuals. Deixa aquesta llista només si canvia la URL o la redirecció, o si una comprovació el troba trencat."
+
+msgid "Mark this link as OK?"
+msgstr "Marcar aquest enllaç com a OK?"
+
+msgid "• It moves to Manual locks and leaves the Broken/Redirect lists."
+msgstr "• Es mou a Bloquejos manuals i surt de les llistes Trencats/Redirecció."
+
+msgid "• Background checks (Check now / cron) still run."
+msgstr "• Les comprovacions en segon pla (Comprovar ara / cron) continuen executant-se."
+
+msgid "• It returns to the normal lists only if the URL or redirect changes, or a check finds it broken again."
+msgstr "• Torna a les llistes normals només si canvia la URL o la redirecció, o si una comprovació el troba trencat de nou."
+
+msgid "Mark the selected links as OK?"
+msgstr "Marcar els enllaços seleccionats com a OK?"
+
+msgid "They move to Manual locks and leave the Broken/Redirect lists. Background checks still run. They return to the normal lists only if the URL or redirect changes, or a check finds them broken again."
+msgstr "Es mouen a Bloquejos manuals i surten de les llistes Trencats/Redirecció. Les comprovacions en segon pla continuen. Tornen a les llistes normals només si canvia la URL o la redirecció, o si una comprovació els troba trencats."
+
+msgid "Mark as OK: moves this link to Manual locks. Background checks still run; it returns to Broken/Redirect only if the URL or redirect changes, or a check finds it broken."
+msgstr "Marcar com a OK: mou l'enllaç a Bloquejos manuals. Les comprovacions en segon pla continuen; torna a Trencats/Redirecció només si canvia la URL o la redirecció, o si una comprovació el troba trencat."
+
+msgid "Links you marked as OK. They stay here while nothing changes. Background checks still run; they leave this list if the URL or redirect changes, or a check finds them broken."
+msgstr "Enllaços que has marcat com a OK. Es queden aquí mentre no canviï res. Les comprovacions en segon pla continuen; surten d'aquesta llista si canvia la URL o la redirecció, o si una comprovació els troba trencats."
+
+msgid "Manual lock: marked OK by you. Background checks still run. Cleared if the URL or redirect changes, or if a check finds it broken."
+msgstr "Bloqueig manual: marcat com a OK per tu. Les comprovacions en segon pla continuen. Es desbloqueja si canvia la URL o la redirecció, o si una comprovació el troba trencat."
+
+msgid "%d marked as OK and moved to Manual locks."
+msgstr "%d marcats com a OK i moguts a Bloquejos manuals."
+
+msgid "Getting started"
+msgstr "Primers passos"
+
+msgid "Review Broken"
+msgstr "Revisa Trencats"
+
+msgid "open the Broken filter and fix links with Edit link, Suggestion, or Not broken."
+msgstr "obre el filtre Trencats i corregeix enllaços amb Editar enllaç, Suggeriment o No és trencat."
+
+msgid "Open Broken links"
+msgstr "Obrir enllaços trencats"
+
+msgid "Read help"
+msgstr "Llegir ajuda"
+
+msgid "Help"
+msgstr "Ajuda"
+
+msgid "Settings sections"
+msgstr "Seccions de configuració"
+
+msgid "How it works"
+msgstr "Com funciona"
+
+msgid "Scan finds links in posts, comments, menus, widgets, custom fields, and other enabled sources, then saves them in the database. Check sends HTTP requests to test whether each URL works. Run Scan after editing content; run Check when you want fresh status codes."
+msgstr "L'escaneig troba enllaços a articles, comentaris, menús, widgets, camps personalitzats i altres fonts activades i els desa a la base de dades. Comprovar envia peticions HTTP per veure si cada URL funciona. Executa Escaneig després d'editar contingut; Comprovar quan vulguis codis d'estat actuals."
+
+msgid "Automatic checks (cron)"
+msgstr "Comprovacions automàtiques (cron)"
+
+msgid "A full Scan runs once per day. HTTP checks run hourly in configurable batches via WP-Cron. When a stored URL no longer appears in WordPress, the cron re-reads that source once before checking (or removes the row if the link is gone). Priority order: never-checked links first, then broken links past the broken recheck interval, then OK links past the OK recheck interval. The main dashboard shows the check queue, throughput, and next scheduled run. Adjust batch size and intervals in Settings."
+msgstr "Un escaneig complet s'executa un cop al dia. Les comprovacions HTTP s'executen cada hora en lots configurables via WP-Cron. Si una URL guardada ja no apareix a WordPress, el cron torna a llegir aquest origen una vegada abans de comprovar (o elimina la fila si l'enllaç ja no existeix). Ordre de prioritat: primer enllaços sense comprovar, després enllaços trencats que superin l'interval de recomprovació de trencats, i després enllaços OK que superin l'interval de recomprovació OK. El tauler principal mostra la cua de comprovació, el rendiment i la propera execució programada. Ajusta la mida del lot i els intervals a Configuració."
+
+msgid "WP-Cron only runs when your site receives visits. On low-traffic or cached sites, schedule a server cron job to call wp-cron.php every hour for reliable automatic checks."
+msgstr "WP-Cron només s'executa quan el lloc rep visites. En llocs amb poc trànsit o amb memòria cau, programa un cron del servidor que cridi wp-cron.php cada hora per a comprovacions automàtiques fiables."
+
+msgid "Posts with issues"
+msgstr "Articles amb problemes"
+
+msgid "Open Posts with issues from the main screen to see articles that contain broken, redirected, or unchecked links. Click a post to filter the list to that post only."
+msgstr "Obre Articles amb problemes des de la pantalla principal per veure articles amb enllaços trencats, redirigits o sense comprovar. Fes clic en un article per filtrar la llista només a aquest article."
+
+msgid "Open posts view"
+msgstr "Obrir vista d'articles"
+
+msgid "List filters"
+msgstr "Filtres de la llista"
+
+msgid "Status filter tabs"
+msgstr "Pestanyes de filtre d'estat"
+
+msgid "Quality filters"
+msgstr "Filtres de qualitat"
+
+msgid "Optional second row: Empty anchor (missing text), Generic anchor (non-descriptive phrases such as “click here”), Unpublished target (internal links to draft, private, pending, or trashed posts). Combine with status filters and Internal/External scope."
+msgstr "Segona fila opcional: Àncora buida (sense text), Àncora genèrica (frases poc descriptives com «feu clic aquí»), Destí no publicat (enllaços interns a esborranys, privats, pendents o a la paperera). Combina amb filtres d'estat i abast Intern/Extern."
+
+msgid "Internal and external links"
+msgstr "Enllaços interns i externs"
+
+msgid "Scope tabs filter by destination: internal (same site or relative paths) vs external (other domains). Useful on large sites with many outbound links."
+msgstr "Les pestanyes d'abast filtren per destí: intern (mateix lloc o camins relatius) vs extern (altres dominis). Útil en llocs grans amb molts enllaços sortints."
+
+msgid "Row and bulk actions"
+msgstr "Accions de fila i en massa"
+
+msgid "Editing and fixing links"
+msgstr "Editar i corregir enllaços"
+
+msgid "Edit link changes the URL in the stored source (post content, comment, menu, widget, or term). Unlink removes the <a> tag but keeps the visible text. Recheck re-reads the WordPress source (post, comment, menu, widget, term, or template) and then runs one HTTP test. Not broken locks the link as OK. Suggestion offers HTTPS upgrades when available. Edit and Unlink are not available for some source types (images, templates, etc.) — open the post or source editor instead."
+msgstr "Editar enllaç canvia la URL a l'origen guardat (contingut de l'article, comentari, menú, widget o terme). Desenllaçar elimina l'etiqueta <a> però conserva el text visible. Recomprovar torna a llegir l'origen a WordPress (article, comentari, menú, widget, terme o plantilla) i després fa una prova HTTP. No és trencat bloqueja l'enllaç com a OK. Suggeriment ofereix millores HTTPS quan n'hi ha. Editar i Desenllaçar no estan disponibles per a alguns tipus d'origen (imatges, plantilles, etc.) — obre l'editor de l'article o de l'origen."
+
+msgid "Bulk actions"
+msgstr "Accions en massa"
+
+msgid "Select rows and apply Recheck selected, Unlink all, Mark as OK, Convert selected to /path (when enabled in Settings), or Delete from list. Delete only removes the database row, not the link in your content."
+msgstr "Selecciona files i aplica Recomprovar seleccionats, Desenllaçar tot, Marcar com a OK, Convertir seleccionats a /path (quan està activat a Configuració) o Eliminar de la llista. Eliminar només esborra la fila de la base de dades, no l'enllaç del contingut."
+
+msgid "View post at link"
+msgstr "Veure l'article a l'enllaç"
+
+msgid "The external-link icon opens the front end and highlights the matching link in post content, or scrolls to a comment. Works for links stored in post content and approved comments."
+msgstr "La icona d'enllaç extern obre el front-end i ressalta l'enllaç coincident al contingut de l'article, o desplaça fins a un comentari. Funciona per a enllaços al contingut de l'article i comentaris aprovats."
+
+msgid "Settings and maintenance"
+msgstr "Configuració i manteniment"
+
+msgid "Custom fields (ACF / Meta)"
+msgstr "Camps personalitzats (ACF / Meta)"
+
+msgid "Enable ACF / Meta custom fields in Settings to find URLs in fields added by plugins like ACF, PODS, or CPT UI. Plain-text URLs inside meta also require Extended sources (Phase 2). Internal SEO keys are excluded by default; add extra keys to exclude to speed up scans."
+msgstr "Activa Camps personalitzats ACF / Meta a Configuració per trobar URLs en camps afegits per plugins com ACF, PODS o CPT UI. Les URLs en text pla dins meta també requereixen Fonts ampliades (Fase 2). Les claus SEO internes s'exclouen per defecte; afegeix claus extra a excloure per accelerar els escaneigs."
+
+msgid "Open meta settings"
+msgstr "Obrir configuració de meta"
+
+msgid "Broken links email notifications"
+msgstr "Notificacions per correu d'enllaços trencats"
+
+msgid "Choose immediate alerts, confirmed alerts (two consecutive failed checks), or periodic summaries every 7, 15, or 30 days. Only hard-broken links (no redirect destination) are included. Summary emails are skipped when there are none."
+msgstr "Tria alertes immediates, alertes confirmades (dues comprovacions fallides consecutives) o resums periòdics cada 7, 15 o 30 dies. Només s'inclouen enllaços totalment trencats (sense destí de redirecció). Els correus de resum es salten quan no n'hi ha."
+
+msgid "Relative URLs and Convert to /path"
+msgstr "URLs relatives i Convertir a /path"
+
+msgid "Edit link accepts site-relative paths such as /page/, ./file.html, or ../other/. They are stored as written and checked against your site. The edit modal shows an HTML preview of the matched tag before you save. Enable post revisions in Settings to keep a restore point. Optional: enable “Convert to /path” to bulk-replace absolute same-site URLs with /path automatically."
+msgstr "Editar enllaç accepta camins relatius al lloc com /pagina/, ./fitxer.html o ../altre/. Es desen tal com s'escriuen i es comproven contra el teu lloc. El modal d'edició mostra una previsualització HTML de l'etiqueta coincident abans de desar. Activa revisions d'article a Configuració per tenir un punt de restauració. Opcional: activa «Convertir a /path» per substituir en massa URLs absolutes del mateix lloc per /path automàticament."
+
+msgid "nofollow on broken links"
+msgstr "nofollow en enllaços trencats"
+
+msgid "When enabled in Settings, adds rel=\"nofollow\" to broken links in post content on the front end so search engines are less likely to follow them. Does not affect comments or custom fields."
+msgstr "Quan està activat a Configuració, afegeix rel=\"nofollow\" als enllaços trencats al contingut de l'article al front-end perquè els motors de cerca els segueixin menys. No afecta comentaris ni camps personalitzats."
+
+msgid "Export CSV and PDF"
+msgstr "Exportar CSV i PDF"
+
+msgid "Export buttons on the main screen respect the active status filter, quality filter, scope, search, and post view. PDF reports are limited to a subset of rows; use CSV for the full filtered list."
+msgstr "Els botons d'exportació de la pantalla principal respecten el filtre d'estat actiu, el filtre de qualitat, l'abast, la cerca i la vista d'article. Els informes PDF estan limitats a un subconjunt de files; usa CSV per a la llista filtrada completa."
+
+msgid "Delete all plugin records"
+msgstr "Eliminar tots els registres del plugin"
+
+msgid "Maintenance in Settings empties the link database and scan/check progress but does not edit posts, comments, or other content. Plugin Settings are kept. Run Scan now, then Check now, to rebuild the list."
+msgstr "El manteniment a Configuració buida la base de dades d'enllaços i el progrés d'escaneig/comprovació però no edita articles, comentaris ni altre contingut. Es conserva la Configuració del plugin. Executa Escanejar ara i després Comprovar ara per reconstruir la llista."
+
+msgid "Not broken (Manual locks)"
+msgstr "No és trencat (Bloquejos manuals)"
+
+msgid "Marks a link as OK and moves it to the Manual locks tab. Background checks still run. The link returns to Broken or Redirect only if the URL or redirect outcome changes, or if a check finds it broken again."
+msgstr "Marca un enllaç com a OK i el mou a la pestanya Bloquejos manuals. Les comprovacions en segon pla continuen. Torna a Trencats o Redirecció només si canvia la URL o la redirecció, o si una comprovació el troba trencat de nou."
+
+msgid "Domains or URL prefixes on the ignore list are skipped during Scan and Check (useful for sites that block bots). You can add entries in Settings or use Ignore domain on any row."
+msgstr "Els dominis o prefixos URL de la llista d'ignorats es salten durant l'escaneig i la comprovació (útil per llocs que bloquegen bots). Pots afegir entrades a Configuració o usar Ignorar domini en qualsevol fila."
+
+msgid "Open ignore list"
+msgstr "Obrir llista d'ignorats"
+
+msgid "Broken: HTTP errors and timeouts. Redirect: non-transparent redirects. OK: working links. Unchecked: found but not tested yet. HTTP insecure: active http:// links. Manual locks: links you marked Not broken."
+msgstr "Trencats: errors HTTP i temps d'espera. Redirecció: redireccions no transparents. OK: enllaços que funcionen. Sense comprovar: trobats però no provats. HTTP insegur: enllaços http:// actius. Bloquejos manuals: enllaços marcats com No és trencat."
+
+msgid "Open URL"
+msgstr "Obrir URL"
+
+msgid "Ignore domain"
+msgstr "Ignorar domini"
+
+msgid "Add %s to the ignore list? This link will be skipped during scans and HTTP checks. You can edit the list in Settings."
+msgstr "Afegir %s a la llista d'ignorats? Aquest enllaç es saltarà durant escaneigs i comprovacions HTTP. Pots editar la llista a Configuració."
+
+msgid "Added %s to the ignore list. This link is now skipped."
+msgstr "S'ha afegit %s a la llista d'ignorats. Aquest enllaç ara es salta."
+
+msgid "This domain or URL is already on the ignore list."
+msgstr "Aquest domini o URL ja és a la llista d'ignorats."
+
+msgid "Could not derive an ignore pattern from this URL."
+msgstr "No s'ha pogut obtenir un patró d'ignorar d'aquesta URL."
+
+msgid "Add %s to the ignore list (skip during scan and check)"
+msgstr "Afegir %s a la llista d'ignorats (saltar en escaneig i comprovació)"
+
+msgid "sends HTTP requests to every saved URL (runs in the background; you can close this tab)."
+msgstr "envia peticions HTTP a cada URL guardada (s'executa en segon pla; pots tancar aquesta pestanya)."
+
+msgid "This action only clears data stored by Link Inspector. Your website content is not edited."
+msgstr "Aquesta acció només esborra dades guardades per Link Inspector. El contingut del lloc web no s'edita."
+
+msgid "What is deleted:"
+msgstr "Què s'esborra:"
+
+msgid "Every row in the link list (URLs found during scans, anchor text, link type)."
+msgstr "Totes les files de la llista d'enllaços (URLs trobades en escaneigs, text de l'enllaç, tipus)."
+
+msgid "HTTP results: status codes, broken/OK flags, redirect destinations, and last-checked dates."
+msgstr "Resultats HTTP: codis d'estat, marques trencat/OK, destinacions de redirecció i dates d'última comprovació."
+
+msgid "Manual locks (links you marked Not broken)."
+msgstr "Bloquejos manuals (enllaços marcats com No és trencat)."
+
+msgid "Scan and check progress (last scan date, batch cursors, any running background check)."
+msgstr "Progrés d'escaneig i comprovació (data de l'últim escaneig, cursors de lots, qualsevol comprovació en segon pla en curs)."
+
+msgid "What is kept:"
+msgstr "Què es conserva:"
+
+msgid "Posts, pages, comments, menus, widgets, and all other site content (no links are removed or changed)."
+msgstr "Articles, pàgines, comentaris, menús, widgets i tota la resta de contingut del lloc (no s'elimina ni es canvia cap enllaç)."
+
+msgid "Plugin Settings on this page (ignore list, email alerts, scan options, language)."
+msgstr "La configuració del plugin en aquesta pàgina (llista d'ignorats, avisos per correu, opcions d'escaneig, idioma)."
+
+msgid "After deleting:"
+msgstr "Després d'esborrar:"
+
+msgid "open the main dashboard, click Scan now to rebuild the list from your content, then Check now to test URLs again."
+msgstr "obre el tauler principal, fes Escaneja ara per reconstruir la llista des del contingut i després Comprova ara per tornar a provar les URLs."
+
+msgid "Delete all plugin records?"
+msgstr "Esborrar tots els registres del plugin?"
+
+msgid "This empties the link database and resets scan/check progress. Posts and Settings are not changed. You will need to run Scan now and Check now again."
+msgstr "Això buida la base de dades d'enllaços i reinicia el progrés d'escaneig/comprovació. Els articles i la configuració no canvien. Hauràs d'executar Escaneja ara i Comprova ara de nou."
+
+msgid "Broken links"
+msgstr "Enllaços trencats"
+
+msgid "Unchecked links"
+msgstr "Enllaços sense comprovar"
+
+msgid "Total saved links"
+msgstr "Enllaços guardats en total"
+
+msgid "Open Link Inspector"
+msgstr "Obrir Link Inspector"
+
+msgid "Posts with issues"
+msgstr "Articles amb problemes"
+
+msgid "All links"
+msgstr "Tots els enllaços"
+
+msgid "Internal"
+msgstr "Interns"
+
+msgid "External"
+msgstr "Externs"
+
+msgid "Link scope"
+msgstr "Abast de l'enllaç"
+
+msgid "Links on this site (same domain or relative paths)"
+msgstr "Enllaços d'aquest lloc (mateix domini o camins relatius)"
+
+msgid "Links pointing to other domains"
+msgstr "Enllaços que apunten a altres dominis"
+
+msgid "Use relative URL"
+msgstr "Convertir a /path"
+
+msgid "Convert to /path"
+msgstr "Convertir a /path"
+
+msgid "Convert selected to /path"
+msgstr "Convertir seleccionats a /path"
+
+msgid "Replace https://yoursite.com/page/ with /page/ in the post (same site only)"
+msgstr "Substitueix https://elteusite.com/pagina/ per /pagina/ a l'article (només mateix lloc)"
+
+msgid "Remove the site domain from this link? It will be saved as a path starting with / (e.g. /contact/). Only for links on this site."
+msgstr "Treure el domini del lloc d'aquest enllaç? Es desarà com a camí que comença per / (p. ex. /contacte/). Només per enllaços d'aquest lloc."
+
+msgid "Remove the site domain from the selected same-site links and save them as /path URLs?"
+msgstr "Treure el domini del lloc dels enllaços seleccionats del mateix lloc i desar-los com a URLs /path?"
+
+msgid "Link saved as /path (domain removed)."
+msgstr "Enllaç desat com a /path (domini eliminat)."
+
+msgid "Enable “Convert to /path” in Settings first."
+msgstr "Activa primer «Convertir a /path» a Configuració."
+
+msgid "This link cannot be converted to /path."
+msgstr "Aquest enllaç no es pot convertir a /path."
+
+msgid "%1$d links saved as /path. %2$d skipped or failed."
+msgstr "%1$d enllaços desats com a /path. %2$d omesos o fallits."
+
+msgid "Show “Convert to /path” in the link list"
+msgstr "Mostrar «Convertir a /path» a la llista d'enllaços"
+
+msgid "When enabled, adds a row and bulk action to replace same-site URLs like https://yoursite.com/contact/ with /contact/ in post content. Disabled by default."
+msgstr "Si s'activa, afegeix una acció per fila i en massa per substituir URLs del mateix lloc com https://elteusite.com/contacte/ per /contacte/ al contingut de l'article. Desactivat per defecte."
+
+msgid "Optional: enable “Convert to /path” in Settings to bulk-replace absolute same-site URLs with /path automatically."
+msgstr "Opcional: activa «Convertir a /path» a Configuració per substituir en massa URLs absolutes del mateix lloc per /path automàticament."
+
+msgid "Convert this same-site URL to a root-relative path (e.g. /page/)"
+msgstr "Converteix aquesta URL del mateix lloc en un camí relatiu arrel (p. ex. /pagina/)"
+
+msgid "Convert this internal link to a site-relative URL (e.g. /page/)?"
+msgstr "Convertir aquest enllaç intern en una URL relativa del lloc (p. ex. /pagina/)?"
+
+msgid "Convert the selected internal links to site-relative URLs?"
+msgstr "Convertir els enllaços interns seleccionats en URLs relatives del lloc?"
+
+msgid "URL converted to a relative path."
+msgstr "URL convertida en un camí relatiu."
+
+msgid "This URL cannot be converted to a relative path."
+msgstr "Aquesta URL no es pot convertir en un camí relatiu."
+
+msgid "%1$d converted to relative URLs. %2$d skipped or failed."
+msgstr "%1$d convertits a URLs relatives. %2$d omesos o fallits."
+
+msgid "Articles sorted by broken links, then redirects. Click a title to review and fix links in that post."
+msgstr "Articles ordenats per enllaços trencats i després redireccions. Clica un títol per revisar i corregir els enllaços d'aquest article."
+
+msgid "Total links"
+msgstr "Enllaços totals"
+
+msgid "No posts with broken or redirected links."
+msgstr "No hi ha articles amb enllaços trencats o redirigits."
+
+msgid "Quick health check when scan or check fails: database, settings, and one sample post."
+msgstr "Comprovació ràpida si l'escaneig o la revisió fallen: base de dades, configuració i un article de mostra."
+
+msgid "DB table:"
+msgstr "Taula BD:"
+
+msgid "INSERT test"
+msgstr "Prova INSERT"
+
+msgid "Post types:"
+msgstr "Tipus de contingut:"
+
+msgid "Published posts:"
+msgstr "Articles publicats:"
+
+msgid "First post:"
+msgstr "Primer article:"
+
+msgid "Links in first post:"
+msgstr "Enllaços al primer article:"
+
+msgid "DB records:"
+msgstr "Registres a la BD:"
+
+msgid "HTML preview (only the matched tag attribute will change):"
+msgstr "Previsualització HTML (només canviarà l'atribut de l'etiqueta coincident):"
+
+msgid "Before"
+msgstr "Abans"
+
+msgid "After"
+msgstr "Després"
+
+msgid "Loading preview..."
+msgstr "Carregant previsualització..."
+
+msgid "No matching HTML tag found in the post for this URL."
+msgstr "No s'ha trobat cap etiqueta HTML coincident a l'article per aquesta URL."
+
+msgid "Post revisions"
+msgstr "Revisions de l'article"
+
+msgid "Create a revision before editing a link in post content"
+msgstr "Crear una revisió abans d'editar un enllaç al contingut de l'article"
+
+msgid "When enabled, saves a WordPress revision before Edit link or Convert to /path changes post content. Disabled by default."
+msgstr "Si s'activa, desa una revisió de WordPress abans que Edit link o Convertir a /path modifiquin el contingut. Desactivat per defecte."
+
+msgid "The edit modal shows an HTML preview of the matched tag before you save. Enable post revisions in Settings to keep a restore point."
+msgstr "El modal d'edició mostra una previsualització HTML de l'etiqueta coincident abans de desar. Activa les revisions a Configuració per tenir un punt de restauració."
+
+msgid "A WordPress revision will be saved when you save, so you can restore the previous post content from the post editor (Revisions panel)."
+msgstr "En desar es crearà una revisió de WordPress per poder restaurar el contingut anterior des de l'editor de l'article (panell Revisiones)."
+
+msgid "A post revision was saved. Open the article in the editor to view or restore it under Revisions."
+msgstr "S'ha desat una revisió de l'article. Obre l'entrada a l'editor per veure-la o restaurar-la a Revisiones."
+
+msgid "Go to edit"
+msgstr "Anar a editar"
+
+msgid "Go to edit comment"
+msgstr "Anar a editar el comentari"
+
+msgid "Open the editor and scroll to this link"
+msgstr "Obre l'editor i desplaça't fins a aquest enllaç"
+
+msgid "Edit comment links in WordPress using Go to edit comment."
+msgstr "Edita els enllaços del comentari a WordPress amb Anar a editar el comentari."
+
+msgid "Open the widget editor for this sidebar widget"
+msgstr "Obre l'editor de widgets d'aquest widget de la barra lateral"
+
+msgid "Edit widget links in Appearance > Widgets using Go to edit."
+msgstr "Edita els enllaços del widget a Aparença > Widgets amb Anar a editar."
+
+msgid "Open the navigation menu editor for this link"
+msgstr "Obre l'editor de menús de navegació d'aquest enllaç"
+
+msgid "Open the taxonomy editor for this link"
+msgstr "Obre l'editor de taxonomies d'aquest enllaç"
+
+msgid "Edit menu links in Appearance > Menus using Go to edit."
+msgstr "Edita els enllaços del menú a Aparença > Menús amb Anar a editar."
+
+msgid "Edit term description links in the taxonomy editor using Go to edit."
+msgstr "Edita els enllaços de la descripció del terme a l'editor de taxonomies amb Anar a editar."
+
+msgid "%d hops"
+msgstr "%d salts"
+
+msgid "Export report (PDF)"
+msgstr "Exportar informe (PDF)"
+
+msgid "Empty anchor (%s)"
+msgstr "Àncora buida (%s)"
+
+msgid "Generic anchor (%s)"
+msgstr "Àncora genèrica (%s)"
+
+msgid "Unpublished target (%s)"
+msgstr "Destí no publicat (%s)"
+
+msgid "Quality filters"
+msgstr "Filtres de qualitat"
+
+msgid "Quality:"
+msgstr "Qualitat:"
+
+msgid "Links with no visible anchor text (empty or missing)."
+msgstr "Enllaços sense text d'ancoratge visible (buit o absent)."
+
+msgid "Links using non-descriptive anchor text such as “click here” or “read more”."
+msgstr "Enllaços amb text d'ancoratge poc descriptiu com «clica aquí» o «llegeix més»."
+
+msgid "Internal links pointing to draft, private, pending, or trashed posts."
+msgstr "Enllaços interns que apunten a articles en esborrany, privats, pendents o a la paperera."
+
+msgid "Source post"
+msgstr "Article d'origen"
+
+msgid "Source status"
+msgstr "Estat de l'origen"
+
+msgid "Redirect URL"
+msgstr "URL de redirecció"
+
+msgid "Redirect chain"
+msgstr "Cadena de redirecció"
+
+msgid "Target status"
+msgstr "Estat del destí"
+
+msgid "All links"
+msgstr "Tots els enllaços"
+
+msgid "Redirects"
+msgstr "Redireccions"
+
+msgid "OK links"
+msgstr "Enllaços OK"
+
+msgid "HTTP insecure links"
+msgstr "Enllaços HTTP insegurs"
+
+msgid "Manual locks"
+msgstr "Bloquejos manuals"
+
+msgid "Empty anchor text"
+msgstr "Àncora buida"
+
+msgid "Generic anchor text"
+msgstr "Àncora genèrica"
+
+msgid "Unpublished targets"
+msgstr "Destins no publicats"
+
+msgid "Link report"
+msgstr "Informe d'enllaços"
+
+msgid "Print / Save as PDF"
+msgstr "Imprimir / Desar com a PDF"
+
+msgid "Top broken links"
+msgstr "Principals enllaços trencats"
+
+msgid "Sample: %s"
+msgstr "Mostra: %s"
+
+msgid "No links match this report."
+msgstr "Cap enllaç coincideix amb aquest informe."
+
+msgid "Showing up to 50 links. Export CSV for the full list."
+msgstr "Es mostren fins a 50 enllaços. Exporta CSV per a la llista completa."
+
+msgid "Generated by %s"
+msgstr "Generat per %s"
+
+msgid "Showing %1$d of %2$d links. Export CSV for the full list or raise tsoliin_pdf_export_limit."
+msgstr "Es mostren %1$d de %2$d enllaços. Exporta CSV per a la llista completa o augmenta tsoliin_pdf_export_limit."
+
+msgid "Large report: printing may take a while in the browser."
+msgstr "Informe gran: imprimir pot trigar una estona al navegador."
+
+msgid "This URL is not stored in editable post content. Open the post in the editor to change it, then run Scan again."
+msgstr "Aquesta URL no és al contingut editable de l'entrada. Obre l'entrada a l'editor per canviar-la i torna a escanejar."
+
+msgid "Unverifiable (site blocks bots)"
+msgstr "No verificable (el lloc bloqueja bots)"
+
+msgid "Canonical HTTPS URL (server cannot verify — check in browser)"
+msgstr "URL HTTPS canònica (el servidor no pot verificar — comprova al navegador)"
+
+msgid "Secure HTTPS canonical URL"
+msgstr "URL HTTPS canònica segura"
+
+msgid "Social networks often block server checks. The suggested HTTPS URL should work in a browser — open it to confirm before applying."
+msgstr "Les xarxes socials sovint bloquegen les comprovacions del servidor. La URL HTTPS suggerida hauria de funcionar al navegador — obre-la per confirmar abans d'aplicar."
+
+msgid "Queue: %1$d never checked, %2$d broken (older than %5$d days), %3$d OK (older than %4$d days). Throughput: ~%6$d checks/day. Estimated time to clear queue: ~%7$d days."
+msgstr "Cua: %1$d sense comprovar, %2$d trencats (més de %5$d dies), %3$d OK (més de %4$d dies). Rendiment: ~%6$d comprovacions/dia. Temps estimat per buidar la cua: ~%7$d dies."
+
+msgid "%d in check queue"
+msgstr "%d a la cua de comprovació"
+
+msgid "Automatic HTTP checks"
+msgstr "Comprovacions HTTP automàtiques"
+
+msgid "Recheck OK links every (days)"
+msgstr "Recomprovar enllaços OK cada (dies)"
+
+msgid "Working links are rechecked after this many days since their last HTTP test. Default: 7."
+msgstr "Els enllaços que funcionen es tornen a comprovar després d'aquests dies des de la darrera prova HTTP. Per defecte: 7."
+
+msgid "Recheck broken links every (days)"
+msgstr "Recomprovar enllaços trencats cada (dies)"
+
+msgid "Broken links (not manually locked) are rechecked sooner. Default: 7."
+msgstr "Els enllaços trencats (sense bloqueig manual) es recomproven abans. Per defecte: 7."
+
+msgid "Links per hourly cron run"
+msgstr "Enllaços per execució horària del cron"
+
+msgid "How many links WP-Cron tests each hour (5–100). At the current value, about %d checks per day."
+msgstr "Quants enllaços comprova WP-Cron cada hora (5–100). Amb el valor actual, uns %d comprovacions al dia."
+
+msgid "Send after two consecutive failed checks (fewer false alarms)"
+msgstr "Enviar després de dues comprovacions fallides consecutives (menys falsos positius)"
+
+msgid "%1$d link was confirmed broken after two failed checks on %2$s."
+msgid_plural "%1$d links were confirmed broken after two failed checks on %2$s."
+msgstr[0] "S'ha confirmat %1$d enllaç trencat després de dues comprovacions fallides a %2$s."
+msgstr[1] "S'han confirmat %1$d enllaços trencats després de dues comprovacions fallides a %2$s."
+
+msgid "HTTPS saved. This link now appears under Redirect."
+msgstr "HTTPS desat. Aquest enllaç ara apareix a Redirecció."
+
+msgid "Active links using HTTP instead of HTTPS. Links that also redirect are listed here first; after you switch to HTTPS they move to Redirect."
+msgstr "Enllaços actius amb HTTP en lloc de HTTPS. Els que també redirigeixen surten aquí primer; en passar a HTTPS passen a Redirecció."
+
+msgid "Active links using HTTP. Redirecting HTTP links are listed here first; after HTTPS they move to Redirect."
+msgstr "Enllaços actius amb HTTP. Els HTTP que redirigeixen surten aquí primer; en passar a HTTPS passen a Redirecció."
+
+msgid "Converting to /path…"
+msgstr "Convertint a /path…"
+
+msgid "links converted to /path."
+msgstr "enllaços convertits a /path."
+
+msgid "Converting %1$d of %2$d..."
+msgstr "Convertint %1$d de %2$d..."
+
+msgid "Delete the selected records from the list? The posts will not be changed."
+msgstr "Eliminar els registres seleccionats de la llista? Els articles no es modificaran."
+
+msgid "Original URL not found in the source. Check whether the link was edited manually."
+msgstr "No s'ha trobat la URL original a l'origen. Comprova si l'enllaç s'ha editat manualment."
+
+msgid "View post at this comment"
+msgstr "Veure l'article en aquest comentari"
+
+msgid "View post at this link"
+msgstr "Veure l'article en aquest enllaç"
+
+msgid "Internal WordPress keys (e.g. Yoast, Rank Math) are always excluded. Add extra keys below, one per line."
+msgstr "Les claus internes de WordPress (p. ex. Yoast, Rank Math) s'exclouen sempre. Afegeix claus extra a sota, una per línia."
+
+msgid "Removed from list — link no longer found in content."
+msgstr "Eliminat de la llista: l'enllaç ja no es troba al contingut."
