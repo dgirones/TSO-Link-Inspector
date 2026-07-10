@@ -397,8 +397,9 @@ class TSOLIIN_List_Table extends WP_List_Table {
 
 		$actions['recheck']    = sprintf( '<a href="#" class="tsoliin-recheck" data-id="%d" data-nonce="%s">%s</a>', absint( $item->id ), esc_attr( $nonce ), esc_html__( 'Recheck', 'tso-link-inspector' ) );
 		$actions['not_broken'] = sprintf( '<a href="#" class="tsoliin-not-broken" data-id="%d" data-nonce="%s" title="%s" style="color:#0a7d33;font-weight:600;">%s</a>', absint( $item->id ), esc_attr( $nonce ), esc_attr( $not_broken_title ), esc_html__( 'Not broken', 'tso-link-inspector' ) );
-		$can_edit   = TSOLIIN_Support::shows_edit_link_row_action( $item );
-		$can_unlink = TSOLIIN_Support::can_unlink_link( $item );
+		$can_inline = ( 'comment' === $type ) ? true : TSOLIIN_Support::can_inline_edit_link( $item );
+		$can_edit   = $can_inline && ! in_array( $type, array( 'comment', 'widget', 'menu', 'term' ), true );
+		$can_unlink = $can_inline;
 		if ( TSOLIIN_Support::shows_comment_admin_edit_action( $item ) ) {
 			$actions = array_merge(
 				array(

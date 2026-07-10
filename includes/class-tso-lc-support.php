@@ -16,6 +16,20 @@ if ( ! defined( 'ABSPATH' ) ) {
 class TSOLIIN_Support {
 
 	/**
+	 * Request-scoped cache: normalized image URL => attachment post ID (0 when unknown).
+	 *
+	 * @var array<string,int>
+	 */
+	private static $attachment_id_by_url = array();
+
+	/**
+	 * Request-scoped cache for can_inline_edit_link() per link row.
+	 *
+	 * @var array<string,bool>
+	 */
+	private static $inline_edit_link_cache = array();
+
+	/**
 	 * Ko-fi donation URL shown in the admin UI.
 	 *
 	 * @return string
@@ -104,8 +118,16 @@ class TSOLIIN_Support {
 		if ( ! $link || empty( $link->link_type ) ) {
 			return false;
 		}
+		$cache_key = self::link_row_cache_key( $link );
+		if ( '' !== $cache_key && array_key_exists( $cache_key, self::$inline_edit_link_cache ) ) {
+			return self::$inline_edit_link_cache[ $cache_key ];
+		}
 		$scanner = function_exists( 'tsoliin_link_inspector' ) ? tsoliin_link_inspector()->scanner : null;
-		return $scanner && $scanner->is_url_editable_in_source( $link );
+		$result  = (bool) ( $scanner && $scanner->is_url_editable_in_source( $link ) );
+		if ( '' !== $cache_key ) {
+			self::$inline_edit_link_cache[ $cache_key ] = $result;
+		}
+		return $result;
 	}
 
 	/**
@@ -442,15 +464,63 @@ class TSOLIIN_Support {
 		if ( '' === $url || ! function_exists( 'attachment_url_to_postid' ) ) {
 			return 0;
 		}
-		$id = (int) attachment_url_to_postid( $url );
-		if ( $id > 0 ) {
-			return $id;
+
+		$cache_key = self::attachment_url_cache_key( $url );
+		if ( array_key_exists( $cache_key, self::$attachment_id_by_url ) ) {
+			return (int) self::$attachment_id_by_url[ $cache_key ];
 		}
+
+		$id   = (int) attachment_url_to_postid( $url );
 		$full = preg_replace( '/-\d+x\d+(?=\.(?:jpe?g|png|gif|webp|avif|bmp|ico))/i', '', $url );
-		if ( is_string( $full ) && $full !== $url ) {
-			return (int) attachment_url_to_postid( $full );
+		if ( $id <= 0 && is_string( $full ) && $full !== $url ) {
+			$full_key = self::attachment_url_cache_key( $full );
+			if ( array_key_exists( $full_key, self::$attachment_id_by_url ) ) {
+				$id = (int) self::$attachment_id_by_url[ $full_key ];
+			} else {
+				$id = (int) attachment_url_to_postid( $full );
+				self::$attachment_id_by_url[ $full_key ] = $id;
+			}
 		}
-		return 0;
+
+		self::$attachment_id_by_url[ $cache_key ] = $id;
+		if ( $id > 0 && is_string( $full ) && $full !== $url ) {
+			self::$attachment_id_by_url[ self::attachment_url_cache_key( $full ) ] = $id;
+		}
+		return $id;
+	}
+
+	/**
+	 * Stable cache key for a media URL (ignore query string, normalize case).
+	 *
+	 * @param string $url Image URL.
+	 * @return string
+	 */
+	private static function attachment_url_cache_key( $url ) {
+		$url = trim( (string) $url );
+		$path = wp_parse_url( $url, PHP_URL_PATH );
+		if ( is_string( $path ) && '' !== $path ) {
+			return strtolower( $path );
+		}
+		return strtolower( strtok( $url, '?' ) );
+	}
+
+	/**
+	 * Cache key for a link inspector DB row.
+	 *
+	 * @param object $link Link row.
+	 * @return string
+	 */
+	private static function link_row_cache_key( $link ) {
+		if ( ! empty( $link->id ) ) {
+			return 'id:' . absint( $link->id );
+		}
+		$url = isset( $link->link_url ) ? (string) $link->link_url : '';
+		$sk  = isset( $link->source_key ) ? (string) $link->source_key : '';
+		$type = isset( $link->link_type ) ? (string) $link->link_type : '';
+		if ( '' === $url && '' === $sk ) {
+			return '';
+		}
+		return 'row:' . md5( $type . '|' . $url . '|' . $sk . '|' . absint( $link->post_id ?? 0 ) );
 	}
 
 	/**

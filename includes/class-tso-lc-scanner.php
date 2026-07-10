@@ -21,6 +21,9 @@ class TSOLIIN_Scanner {
 	/** @var array<int,bool> Post IDs that already received a pre-edit revision this request. */
 	private $revision_saved_for_posts = array();
 
+	/** @var array<string,bool> Request-scoped is_url_editable_in_source() results. */
+	private $editable_source_cache = array();
+
 	public function __construct( TSOLIIN_DB $db ) {
 		$this->db = $db;
 	}
@@ -902,10 +905,7 @@ class TSOLIIN_Scanner {
 			return '';
 		}
 
-		$attachment_id = attachment_url_to_postid( $url );
-		if ( ! $attachment_id && preg_match( '#-\d+x\d+(\.[a-z0-9]+)$#i', $url, $m ) ) {
-			$attachment_id = attachment_url_to_postid( preg_replace( '#-\d+x\d+(\.[a-z0-9]+)$#i', '$1', $url ) );
-		}
+		$attachment_id = TSOLIIN_Support::resolve_attachment_id_from_url( $url );
 		if ( ! $attachment_id ) {
 			return '';
 		}
@@ -3097,8 +3097,21 @@ class TSOLIIN_Scanner {
 		if ( ! $link || empty( $link->link_url ) ) {
 			return false;
 		}
+		$cache_key = ! empty( $link->id )
+			? 'id:' . absint( $link->id )
+			: 'row:' . md5(
+				( isset( $link->link_type ) ? (string) $link->link_type : '' ) . '|'
+				. (string) $link->link_url . '|'
+				. ( isset( $link->source_key ) ? (string) $link->source_key : '' ) . '|'
+				. absint( $link->post_id ?? 0 )
+			);
+		if ( array_key_exists( $cache_key, $this->editable_source_cache ) ) {
+			return $this->editable_source_cache[ $cache_key ];
+		}
+
 		$type = isset( $link->link_type ) ? (string) $link->link_type : 'link';
 		if ( 'plain' === $type ) {
+			$this->editable_source_cache[ $cache_key ] = false;
 			return false;
 		}
 		$url = (string) $link->link_url;
@@ -3107,26 +3120,38 @@ class TSOLIIN_Scanner {
 		if ( 'comment' === $type ) {
 			$comment_id = $this->comment_id_from_source_key( $sk, (int) $link->post_id );
 			if ( $comment_id <= 0 ) {
+				$this->editable_source_cache[ $cache_key ] = false;
 				return false;
 			}
 			$comment = get_comment( $comment_id );
-			return $comment && $this->url_located_in_string( (string) $comment->comment_content, $url, (int) $link->post_id );
+			$result  = (bool) ( $comment && $this->url_located_in_string( (string) $comment->comment_content, $url, (int) $link->post_id ) );
+			$this->editable_source_cache[ $cache_key ] = $result;
+			return $result;
 		}
 		if ( 'widget' === $type ) {
 			$content = $this->get_widget_content_by_source_key( $sk );
-			return '' !== $content && $this->url_located_in_string( $content, $url, 0 );
+			$result  = ( '' !== $content && $this->url_located_in_string( $content, $url, 0 ) );
+			$this->editable_source_cache[ $cache_key ] = $result;
+			return $result;
 		}
 		if ( 'menu' === $type && preg_match( '/^mi-(\d+)/', $sk, $m ) ) {
 			$item_url = get_post_meta( absint( $m[1] ), '_menu_item_url', true );
-			return is_string( $item_url ) && '' !== $item_url && $this->urls_match_for_edit( $item_url, $url );
+			$result   = is_string( $item_url ) && '' !== $item_url && $this->urls_match_for_edit( $item_url, $url );
+			$this->editable_source_cache[ $cache_key ] = $result;
+			return $result;
 		}
 		if ( 'term' === $type && preg_match( '/^t-(\d+)-/', $sk, $m ) ) {
-			$term = get_term( absint( $m[1] ) );
-			return $term && ! is_wp_error( $term ) && $this->url_located_in_string( (string) $term->description, $url, 0 );
+			$term   = get_term( absint( $m[1] ) );
+			$result = (bool) ( $term && ! is_wp_error( $term ) && $this->url_located_in_string( (string) $term->description, $url, 0 ) );
+			$this->editable_source_cache[ $cache_key ] = $result;
+			return $result;
 		}
 		if ( ! empty( $link->post_id ) ) {
-			return $this->is_url_editable_in_post( (int) $link->post_id, $url, $type );
+			$result = $this->is_url_editable_in_post( (int) $link->post_id, $url, $type );
+			$this->editable_source_cache[ $cache_key ] = $result;
+			return $result;
 		}
+		$this->editable_source_cache[ $cache_key ] = false;
 		return false;
 	}
 
