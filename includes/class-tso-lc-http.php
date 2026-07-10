@@ -497,7 +497,7 @@ class TSOLIIN_HTTP {
 	 * @return bool
 	 */
 	private function is_static_asset_url( $url ) {
-		return (bool) preg_match( '#\.(?:webp|avif|jpe?g|png|gif|svg|pdf|mp4|webm|mp3|css|js|zip)(?:\?|#|$)#i', (string) $url );
+		return (bool) preg_match( '~\.(?:webp|avif|jpe?g|png|gif|svg|pdf|mp4|webm|mp3|css|js|zip)(?:[?#]|$)~i', (string) $url );
 	}
 
 	/**
