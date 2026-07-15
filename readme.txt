@@ -5,7 +5,7 @@ Tags: broken links, link checker, seo, maintenance, links
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 2.2.5
+Stable tag: 2.2.6
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -99,6 +99,10 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 2. Filter tabs: All, Broken, Redirect, OK, HTTP insecure, Manual locks, Not checked.
 
 == Changelog ==
+
+= 2.2.6 =
+* Fix: Link list table no longer outputs a nested `<thead>` on WordPress 6.6+ (duplicate header broke table layout and could hide rows).
+* Fix: Empty filter views no longer show a duplicate footer header row in the link list.
 
 = 2.2.5 =
 * Fix: Scanner no longer lists WordPress attachment page URLs (`/attachment/slug`, `?attachment_id=`) — only the real media file in `/wp-content/uploads/` is stored.
@@ -367,6 +371,9 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 * Initial release.
 
 == Upgrade Notice ==
+
+= 2.2.6 =
+Recommended update. Fixes duplicate/broken link list table headers on WordPress 6.6+.
 
 = 2.2.5 =
 Recommended update. Stops duplicate gallery attachment-page URLs; keeps only uploads file links. Run **Scan now** after updating.
