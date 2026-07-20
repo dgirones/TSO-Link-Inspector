@@ -162,8 +162,11 @@ class TSOLIIN_Support {
 			return false;
 		}
 		$type = (string) $link->link_type;
-		if ( in_array( $type, array( 'comment', 'widget', 'menu', 'term' ), true ) ) {
+		if ( in_array( $type, array( 'comment', 'widget', 'term' ), true ) ) {
 			return false;
+		}
+		if ( 'menu' === $type ) {
+			return self::is_custom_menu_url_row( $link ) && self::can_inline_edit_link( $link );
 		}
 		return self::can_inline_edit_link( $link );
 	}
@@ -347,7 +350,18 @@ class TSOLIIN_Support {
 			return false;
 		}
 		$type = isset( $link->link_type ) ? (string) $link->link_type : 'link';
-		return in_array( $type, array( 'link', 'image', 'iframe', 'plain', 'template', 'wp_block' ), true );
+		if ( ! in_array( $type, array( 'link', 'image', 'iframe', 'plain', 'template', 'wp_block' ), true ) ) {
+			return false;
+		}
+		if ( empty( $link->post_id ) || empty( $link->link_url ) ) {
+			return false;
+		}
+		$scanner = function_exists( 'tsoliin_link_inspector' ) ? tsoliin_link_inspector()->scanner : null;
+		if ( ! $scanner ) {
+			return true;
+		}
+		// Only deep-link when the URL is in post_content (not meta-only / stale orphan rows).
+		return $scanner->is_url_in_post_body( (int) $link->post_id, (string) $link->link_url, $type );
 	}
 
 	/**
@@ -676,6 +690,7 @@ class TSOLIIN_Support {
 	 */
 	public static function get_menus_admin_edit_url( $source_key = '' ) {
 		$menu_id = 0;
+		$item_id = 0;
 		if ( preg_match( '/^mi-(\d+)/', (string) $source_key, $m ) ) {
 			$item_id = absint( $m[1] );
 			if ( $item_id > 0 ) {
@@ -686,21 +701,53 @@ class TSOLIIN_Support {
 			}
 		}
 
-		if ( wp_is_block_theme() || ! current_theme_supports( 'menus' ) ) {
-			return admin_url( 'site-editor.php' );
-		}
-
-		$url = admin_url( 'nav-menus.php' );
+		// Classic nav menus still live at nav-menus.php even on block themes / when the
+		// Appearance → Menus admin item is hidden (common with WooCommerce + block themes).
+		// Only fall back to the Site Editor when this item is not assigned to a classic menu.
 		if ( $menu_id > 0 ) {
 			$url = add_query_arg(
 				array(
 					'action' => 'edit',
 					'menu'   => $menu_id,
 				),
-				$url
+				admin_url( 'nav-menus.php' )
 			);
+			if ( $item_id > 0 ) {
+				$url .= '#menu-item-' . $item_id;
+			}
+			return $url;
 		}
-		return $url;
+
+		if ( wp_is_block_theme() || ! current_theme_supports( 'menus' ) ) {
+			return admin_url( 'site-editor.php' );
+		}
+
+		return admin_url( 'nav-menus.php' );
+	}
+
+	/**
+	 * Whether a menu inspector row stores a custom URL in _menu_item_url (editable here).
+	 *
+	 * Post-type / taxonomy menu items derive their URL from the linked object and must be
+	 * changed in that object's editor — not via _menu_item_url.
+	 *
+	 * @param object|null $link DB link row.
+	 * @return bool
+	 */
+	public static function is_custom_menu_url_row( $link ) {
+		if ( ! $link || empty( $link->link_type ) || 'menu' !== (string) $link->link_type ) {
+			return false;
+		}
+		$sk = isset( $link->source_key ) ? (string) $link->source_key : '';
+		if ( ! preg_match( '/^mi-(\d+)/', $sk, $m ) ) {
+			return false;
+		}
+		$item_id = absint( $m[1] );
+		if ( $item_id <= 0 ) {
+			return false;
+		}
+		$stored = get_post_meta( $item_id, '_menu_item_url', true );
+		return is_string( $stored ) && '' !== trim( $stored );
 	}
 
 	/**

@@ -597,7 +597,8 @@ class TSOLIIN_Scanner {
 		}
 
 		if ( ! empty( $block['attrs'] ) && is_array( $block['attrs'] ) ) {
-			foreach ( $this->extract_block_attr_link_items( $block['attrs'] ) as $item ) {
+			$block_name = isset( $block['blockName'] ) ? (string) $block['blockName'] : '';
+			foreach ( $this->extract_block_attr_link_items( $block['attrs'], $block_name ) as $item ) {
 				$items[] = $item;
 			}
 		}
@@ -791,10 +792,11 @@ class TSOLIIN_Scanner {
 	/**
 	 * URL + label pairs from Gutenberg block attrs (button, image link, etc.).
 	 *
-	 * @param array $attrs Block attrs.
+	 * @param array  $attrs      Block attrs.
+	 * @param string $block_name Block name (e.g. core/image); empty when unknown.
 	 * @return array[]
 	 */
-	private function extract_block_attr_link_items( $attrs ) {
+	private function extract_block_attr_link_items( $attrs, $block_name = '' ) {
 		$items = array();
 		if ( ! is_array( $attrs ) ) {
 			return $items;
@@ -803,7 +805,7 @@ class TSOLIIN_Scanner {
 		$url = $this->pick_url_from_assoc( $attrs );
 		if ( '' !== $url ) {
 			$label = $this->pick_label_from_assoc( $attrs );
-			if ( '' === $label && ! empty( $attrs['id'] ) ) {
+			if ( '' === $label && ! empty( $attrs['id'] ) && $this->block_name_may_reference_attachment( $block_name ) ) {
 				$label = $this->attachment_label( absint( $attrs['id'] ) );
 			}
 			$items[] = array(
@@ -813,7 +815,9 @@ class TSOLIIN_Scanner {
 			);
 		}
 
-		if ( ! empty( $attrs['id'] ) && empty( $url ) ) {
+		// Only resolve bare attachment IDs on media blocks — many other blocks use "id"
+		// for non-attachment purposes and would otherwise invent false image rows.
+		if ( ! empty( $attrs['id'] ) && empty( $url ) && $this->block_name_may_reference_attachment( $block_name ) ) {
 			$attachment_id = absint( $attrs['id'] );
 			$file_url      = $attachment_id ? wp_get_attachment_url( $attachment_id ) : false;
 			if ( is_string( $file_url ) && '' !== $file_url ) {
@@ -826,6 +830,36 @@ class TSOLIIN_Scanner {
 		}
 
 		return $items;
+	}
+
+	/**
+	 * Whether a Gutenberg block name is expected to store a media library attachment id.
+	 *
+	 * @param string $block_name Block name.
+	 * @return bool
+	 */
+	private function block_name_may_reference_attachment( $block_name ) {
+		$name = (string) $block_name;
+		if ( '' === $name ) {
+			return false;
+		}
+		$media_blocks = array(
+			'core/image',
+			'core/gallery',
+			'core/cover',
+			'core/media-text',
+			'core/file',
+			'core/video',
+			'core/audio',
+			'core/post-featured-image',
+		);
+		if ( in_array( $name, $media_blocks, true ) ) {
+			return true;
+		}
+		return false !== strpos( $name, 'image' )
+			|| false !== strpos( $name, 'gallery' )
+			|| false !== strpos( $name, 'cover' )
+			|| false !== strpos( $name, 'media' );
 	}
 
 	/**
@@ -2144,9 +2178,21 @@ class TSOLIIN_Scanner {
 			if ( ! in_array( $type, array( 'link', 'image', 'iframe', 'plain' ), true ) ) {
 				continue;
 			}
+			$sk = isset( $item['source_key'] ) ? (string) $item['source_key'] : '';
+			// Match upsert eligibility: do not keep rows for URLs found only in rendered HTML
+			// (or other non-editable places) — those produced false "Go to edit" targets.
+			if ( '' !== $sk && class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk ) ) {
+				$active_keys[ $sk ] = true;
+				$active[ $this->scan_url_key( $url, $post_id ) ] = true;
+				continue;
+			}
+			if ( in_array( $type, array( 'link', 'image', 'iframe' ), true )
+				&& ! $this->is_url_editable_in_post( $post_id, $url, $type ) ) {
+				continue;
+			}
 			$active[ $this->scan_url_key( $url, $post_id ) ] = true;
-			if ( ! empty( $item['source_key'] ) ) {
-				$active_keys[ (string) $item['source_key'] ] = true;
+			if ( '' !== $sk ) {
+				$active_keys[ $sk ] = true;
 			}
 		}
 
@@ -3316,16 +3362,55 @@ class TSOLIIN_Scanner {
 		if ( ! $post || ! is_string( $post->post_content ) ) {
 			return false;
 		}
-		if ( $this->url_located_in_string( $post->post_content, $url, $post_id ) ) {
-			return true;
-		}
-		if ( 'image' === (string) $link_type && $this->url_in_classic_gallery_shortcode( $post->post_content, $url, $post_id ) ) {
-			return true;
-		}
-		if ( $this->url_in_gutenberg_media_block( $post->post_content, $url, $post_id ) ) {
+		if ( $this->url_in_post_body_content( $post->post_content, $url, $link_type, $post_id ) ) {
 			return true;
 		}
 		return $this->locate_url_in_post_meta( $post_id, $url )['found'];
+	}
+
+	/**
+	 * Whether a URL appears in post_content (HTML, gallery shortcode, or media blocks) — not meta.
+	 *
+	 * Used for editor deep-link focus: meta-only URLs cannot be scrolled to in the content editor.
+	 *
+	 * @param int    $post_id   Post ID.
+	 * @param string $url       Stored URL.
+	 * @param string $link_type link|image|iframe.
+	 * @return bool
+	 */
+	public function is_url_in_post_body( $post_id, $url, $link_type = 'link' ) {
+		$post_id = absint( $post_id );
+		$url     = (string) $url;
+		if ( $post_id <= 0 || '' === $url ) {
+			return false;
+		}
+		$post = get_post( $post_id );
+		if ( ! $post || ! is_string( $post->post_content ) ) {
+			return false;
+		}
+		return $this->url_in_post_body_content( $post->post_content, $url, $link_type, $post_id );
+	}
+
+	/**
+	 * @param string $content   Raw post_content.
+	 * @param string $url       Stored URL.
+	 * @param string $link_type link|image|iframe.
+	 * @param int    $post_id   Post ID.
+	 * @return bool
+	 */
+	private function url_in_post_body_content( $content, $url, $link_type, $post_id ) {
+		$content = (string) $content;
+		$url     = (string) $url;
+		if ( '' === $content || '' === $url ) {
+			return false;
+		}
+		if ( $this->url_located_in_string( $content, $url, $post_id ) ) {
+			return true;
+		}
+		if ( 'image' === (string) $link_type && $this->url_in_classic_gallery_shortcode( $content, $url, $post_id ) ) {
+			return true;
+		}
+		return $this->url_in_gutenberg_media_block( $content, $url, $post_id );
 	}
 
 	/**

@@ -1581,7 +1581,7 @@
 			self.cancelListReload();
 			self.removeSuggestPanelsForRow( $row );
 
-			// Navigation menu items: explain where to edit; do not search alternatives.
+			// Non-custom menu items: URL comes from the linked object — explain where to edit.
 			if ( 'menu' === linkType ) {
 				var colsMenu = $row.find( 'td' ).length;
 				var noteMenu = ( tsoliinData.i18n.menuSuggestNote )
