@@ -31,14 +31,32 @@ $tsoliin_options = array(
 	'tsoliin_bg_check_checked',
 	'tsoliin_bg_check_total',
 	'tsoliin_bg_check_started',
+	'tsoliin_bg_check_post_id',
 	'tsoliin_total_posts_scanned',
 	'tsoliin_comment_scan_after_id',
+	'tsoliin_menu_scan_after_id',
+	'tsoliin_widget_scan_after_index',
+	'tsoliin_term_scan_after_id',
+	'tsoliin_fse_scan_after_id',
 	'tsoliin_broken_digest_last_sent',
 	'tsoliin_immediate_broken_queue',
 );
 foreach ( $tsoliin_options as $tsoliin_option_name ) {
 	delete_option( $tsoliin_option_name );
 }
+
+$tsoliin_transients = array(
+	'tsoliin_unpub_cnt_all',
+	'tsoliin_unpub_cnt_v2_all',
+	'tsoliin_unpub_cnt_v3_all',
+	'tsoliin_transparent_rd_cleanup',
+);
+foreach ( $tsoliin_transients as $tsoliin_transient_name ) {
+	delete_transient( $tsoliin_transient_name );
+}
+
+// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->usermeta} WHERE meta_key = %s", 'tsoliin_onboarding_dismissed' ) );
 
 // ── Clear all scheduled cron events ─────────────────────────────────────
 $tsoliin_hooks = array(

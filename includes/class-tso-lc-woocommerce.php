@@ -99,7 +99,7 @@ class TSOLIIN_WooCommerce {
 				'post_parent'    => $product_id,
 				'post_type'      => 'product_variation',
 				'post_status'    => array( 'publish', 'private' ),
-				'posts_per_page' => 100,
+				'posts_per_page' => -1,
 				'fields'         => 'ids',
 				'orderby'        => 'ID',
 				'order'          => 'ASC',
@@ -257,7 +257,7 @@ class TSOLIIN_WooCommerce {
 				'post_parent'    => absint( $product_id ),
 				'post_type'      => 'product_variation',
 				'post_status'    => array( 'publish', 'private' ),
-				'posts_per_page' => 100,
+				'posts_per_page' => -1,
 				'fields'         => 'ids',
 			)
 		);

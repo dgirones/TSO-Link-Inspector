@@ -74,7 +74,13 @@
 			} );
 		}
 		if ( data.fileName ) {
-			[ data.fileName, decodeURIComponent( data.fileName ) ].forEach( function ( value ) {
+			var fileNames = [ data.fileName ];
+			try {
+				fileNames.push( decodeURIComponent( data.fileName ) );
+			} catch ( e ) {
+				// Malformed % sequences — keep the raw file name only.
+			}
+			fileNames.forEach( function ( value ) {
 				if ( value && ! seen[ value ] ) {
 					seen[ value ] = true;
 					out.push( value );

@@ -436,11 +436,7 @@ class TSOLIIN_Scanner {
 		if ( ! function_exists( 'attachment_url_to_postid' ) ) {
 			return $this->url_looks_like_wp_uploads_image( $url );
 		}
-		if ( attachment_url_to_postid( $url ) > 0 ) {
-			return true;
-		}
-		$full = preg_replace( '/-\d+x\d+(?=\.(?:jpe?g|png|gif|webp|avif|bmp|ico))/i', '', $url );
-		if ( is_string( $full ) && $full !== $url && attachment_url_to_postid( $full ) > 0 ) {
+		if ( TSOLIIN_Support::resolve_attachment_id_from_url( $url ) > 0 ) {
 			return true;
 		}
 		return $this->url_looks_like_wp_uploads_image( $url );
@@ -1811,6 +1807,147 @@ class TSOLIIN_Scanner {
 			return false;
 		}
 		return $this->attachment_id_in_classic_gallery_shortcodes( $content, $attachment_id, $post_id );
+	}
+
+	/**
+	 * Rewrite [gallery ids|include] when replacing one media URL with another attachment URL.
+	 *
+	 * @param string $content Raw post_content.
+	 * @param string $old_url Stored image URL.
+	 * @param string $new_url Replacement image URL.
+	 * @param int    $post_id Post ID.
+	 * @return string|null Updated content or null when unchanged / not applicable.
+	 */
+	private function replace_url_in_classic_gallery_shortcodes( $content, $old_url, $new_url, $post_id = 0 ) {
+		$content = (string) $content;
+		$old_id  = TSOLIIN_Support::resolve_attachment_id_from_url( (string) $old_url );
+		$new_id  = TSOLIIN_Support::resolve_attachment_id_from_url( (string) $new_url );
+		if ( $old_id <= 0 || $new_id <= 0 || $old_id === $new_id ) {
+			return null;
+		}
+		if ( ! $this->attachment_id_in_classic_gallery_shortcodes( $content, $old_id, absint( $post_id ) ) ) {
+			return null;
+		}
+		return $this->rewrite_attachment_id_in_classic_gallery_shortcodes( $content, $old_id, $new_id, absint( $post_id ) );
+	}
+
+	/**
+	 * Remove an attachment from Classic Editor [gallery] shortcodes (unlink).
+	 *
+	 * @param string $content       Raw post_content.
+	 * @param string $url           Image URL.
+	 * @param int    $post_id       Post ID.
+	 * @return string|null Updated content or null when unchanged / not applicable.
+	 */
+	private function unlink_url_from_classic_gallery_shortcodes( $content, $url, $post_id = 0 ) {
+		$content       = (string) $content;
+		$attachment_id = TSOLIIN_Support::resolve_attachment_id_from_url( (string) $url );
+		if ( $attachment_id <= 0 ) {
+			return null;
+		}
+		if ( ! $this->attachment_id_in_classic_gallery_shortcodes( $content, $attachment_id, absint( $post_id ) ) ) {
+			return null;
+		}
+		return $this->rewrite_attachment_id_in_classic_gallery_shortcodes( $content, $attachment_id, 0, absint( $post_id ) );
+	}
+
+	/**
+	 * Replace or remove an attachment ID inside [gallery ids="…"] / include="…" shortcodes.
+	 *
+	 * @param string $content       Raw post_content.
+	 * @param int    $old_id        Attachment ID to find.
+	 * @param int    $new_id        Replacement ID, or 0 to remove.
+	 * @param int    $post_id       Post ID (unused for ids/include rewrite; reserved).
+	 * @return string|null
+	 */
+	private function rewrite_attachment_id_in_classic_gallery_shortcodes( $content, $old_id, $new_id, $post_id = 0 ) {
+		$content = (string) $content;
+		$old_id  = absint( $old_id );
+		$new_id  = absint( $new_id );
+		if ( '' === $content || $old_id <= 0 || false === stripos( $content, '[gallery' ) ) {
+			return null;
+		}
+		if ( ! preg_match_all( '/\[gallery\b([^\]]*)\]/i', $content, $matches, PREG_OFFSET_CAPTURE ) ) {
+			return null;
+		}
+
+		$changed = false;
+		// Process from the end so offsets stay valid while rewriting.
+		for ( $i = count( $matches[0] ) - 1; $i >= 0; $i-- ) {
+			$full_match  = (string) $matches[0][ $i ][0];
+			$full_offset = (int) $matches[0][ $i ][1];
+			$attr_string = (string) $matches[1][ $i ][0];
+			$atts        = shortcode_parse_atts( 'gallery ' . trim( $attr_string ) );
+			if ( ! is_array( $atts ) ) {
+				$atts = array();
+			}
+
+			$attr_key = '';
+			if ( ! empty( $atts['ids'] ) ) {
+				$attr_key = 'ids';
+			} elseif ( ! empty( $atts['include'] ) ) {
+				$attr_key = 'include';
+			}
+			if ( '' === $attr_key ) {
+				continue;
+			}
+
+			$raw_ids = preg_split( '/\s*,\s*/', (string) $atts[ $attr_key ] );
+			if ( ! is_array( $raw_ids ) ) {
+				continue;
+			}
+			$next_ids = array();
+			$hit      = false;
+			foreach ( $raw_ids as $raw_id ) {
+				$id = absint( $raw_id );
+				if ( $id <= 0 ) {
+					continue;
+				}
+				if ( $id === $old_id ) {
+					$hit = true;
+					if ( $new_id > 0 ) {
+						$next_ids[] = $new_id;
+					}
+					continue;
+				}
+				$next_ids[] = $id;
+			}
+			if ( ! $hit ) {
+				continue;
+			}
+
+			if ( empty( $next_ids ) ) {
+				$replacement = '';
+			} else {
+				$new_list    = implode( ',', $next_ids );
+				$replacement = preg_replace(
+					'/\b' . preg_quote( $attr_key, '/' ) . '\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s\]]+)/i',
+					$attr_key . '="' . $new_list . '"',
+					$full_match,
+					1
+				);
+				if ( ! is_string( $replacement ) || $replacement === $full_match ) {
+					// Fallback: rebuild a minimal shortcode preserving other attributes.
+					$parts = array( 'gallery' );
+					foreach ( $atts as $k => $v ) {
+						if ( ! is_string( $k ) || ! is_scalar( $v ) ) {
+							continue;
+						}
+						if ( $k === $attr_key ) {
+							$parts[] = $attr_key . '="' . $new_list . '"';
+							continue;
+						}
+						$parts[] = $k . '="' . esc_attr( (string) $v ) . '"';
+					}
+					$replacement = '[' . implode( ' ', $parts ) . ']';
+				}
+			}
+
+			$content = substr_replace( $content, $replacement, $full_offset, strlen( $full_match ) );
+			$changed = true;
+		}
+
+		return $changed ? $content : null;
 	}
 
 	// -------------------------------------------------------------------------
@@ -3616,6 +3753,9 @@ class TSOLIIN_Scanner {
 		if ( null === $new_content ) {
 			$new_content = $this->replace_url_in_parsed_blocks( $content, (string) $old_url, (string) $new_url, $post_id );
 		}
+		if ( null === $new_content ) {
+			$new_content = $this->replace_url_in_classic_gallery_shortcodes( $content, (string) $old_url, (string) $new_url, $post_id );
+		}
 		if ( null !== $new_content ) {
 			$this->maybe_create_post_revision( $post_id );
 			$r = $this->update_post_content( $post_id, $new_content );
@@ -4142,7 +4282,13 @@ class TSOLIIN_Scanner {
 		if ( $attachment_id <= 0 ) {
 			return false;
 		}
-		return (bool) update_post_meta( $attachment_id, '_wp_attachment_image_alt', sanitize_text_field( (string) $new_alt ) );
+		$new_alt = sanitize_text_field( (string) $new_alt );
+		$current = get_post_meta( $attachment_id, '_wp_attachment_image_alt', true );
+		// update_post_meta() returns false when the value is unchanged — treat as success.
+		if ( (string) $current === (string) $new_alt ) {
+			return true;
+		}
+		return false !== update_post_meta( $attachment_id, '_wp_attachment_image_alt', $new_alt );
 	}
 
 	/**
@@ -4449,7 +4595,8 @@ class TSOLIIN_Scanner {
 		$post_id    = absint( $post_id );
 		$post       = get_post( $post_id );
 		$new_anchor = sanitize_text_field( (string) $new_anchor );
-		if ( ! $post || '' === $new_anchor ) {
+		// Empty link text is allowed (clears visible text; quality filters can flag it).
+		if ( ! $post ) {
 			return false;
 		}
 
@@ -5062,6 +5209,11 @@ class TSOLIIN_Scanner {
 			$snippet = (string) $matches[0][0];
 			$pos     = (int) $matches[0][1];
 			return substr_replace( $content, '', $pos, strlen( $snippet ) );
+		}
+
+		$gallery_content = $this->unlink_url_from_classic_gallery_shortcodes( $content, (string) $url, $post_id );
+		if ( null !== $gallery_content && $gallery_content !== $content ) {
+			return $gallery_content;
 		}
 
 		return null;
