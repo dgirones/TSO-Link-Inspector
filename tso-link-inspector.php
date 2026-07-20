@@ -138,8 +138,6 @@ final class TSOLIIN_Link_Inspector {
 		add_action( 'enqueue_block_editor_assets', array( $this, 'enqueue_editor_link_focus_assets' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_post_editor_focus' ) );
 		add_filter( 'block_editor_settings_all', array( $this, 'filter_block_editor_focus_settings' ), 10, 2 );
-		register_activation_hook( TSOLIIN_PLUGIN_FILE,   array( $this, 'on_activate' ) );
-		register_deactivation_hook( TSOLIIN_PLUGIN_FILE, array( $this, 'on_deactivate' ) );
 	}
 
 	/**
@@ -751,5 +749,26 @@ final class TSOLIIN_Link_Inspector {
 function tsoliin_link_inspector() {
 	return TSOLIIN_Link_Inspector::get_instance();
 }
+
+/**
+ * Activation callback (must be registered at file scope, not on plugins_loaded).
+ *
+ * @return void
+ */
+function tsoliin_activate() {
+	tsoliin_link_inspector()->on_activate();
+}
+
+/**
+ * Deactivation callback (must be registered at file scope, not on plugins_loaded).
+ *
+ * @return void
+ */
+function tsoliin_deactivate() {
+	tsoliin_link_inspector()->on_deactivate();
+}
+
+register_activation_hook( TSOLIIN_PLUGIN_FILE, 'tsoliin_activate' );
+register_deactivation_hook( TSOLIIN_PLUGIN_FILE, 'tsoliin_deactivate' );
 
 add_action( 'plugins_loaded', 'tsoliin_link_inspector' );

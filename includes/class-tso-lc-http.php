@@ -687,7 +687,8 @@ class TSOLIIN_HTTP {
 		if ( preg_match( '#^(?:/|\./|\.\./)#', $url ) ) {
 			return preg_replace( '#[\x00-\x1F\x7F]#', '', $url );
 		}
-		if ( preg_match( '#^[a-z0-9][a-z0-9._\-/]*(?:\?[^\s<>"\']*)?(?:#[^\s<>"\']*)?$#i', $url ) ) {
+		// Use ~ delimiters: a literal # in the fragment group would close a #…# pattern early.
+		if ( preg_match( '~^[a-z0-9][a-z0-9._\-/]*(?:\?[^\s<>"\']*)?(?:#[^\s<>"\']*)?$~i', $url ) ) {
 			return preg_replace( '#[\x00-\x1F\x7F]#', '', $url );
 		}
 		return false;
@@ -940,7 +941,8 @@ class TSOLIIN_HTTP {
 		if ( '' === $location ) {
 			return '';
 		}
-		if ( 0 === strpos( $location, 'http' ) ) {
+		// Require a real scheme — "http-docs/foo" must resolve as a relative path.
+		if ( preg_match( '#^https?://#i', $location ) ) {
 			return $location;
 		}
 		if ( 0 === strpos( $location, '//' ) ) {

@@ -55,10 +55,7 @@ class TSOLIIN_Cron {
 
 	public function unschedule() {
 		foreach ( array( self::HOOK_SCAN, self::HOOK_CHECK, self::HOOK_BG_STEP ) as $hook ) {
-			$ts = wp_next_scheduled( $hook );
-			if ( $ts ) {
-				wp_unschedule_event( $ts, $hook );
-			}
+			wp_clear_scheduled_hook( $hook );
 		}
 	}
 
@@ -177,10 +174,7 @@ class TSOLIIN_Cron {
 	public function stop_bg_check() {
 		update_option( 'tsoliin_bg_check_running', 0, false );
 		update_option( 'tsoliin_bg_check_post_id', 0, false );
-		$ts = wp_next_scheduled( self::HOOK_BG_STEP );
-		if ( $ts ) {
-			wp_unschedule_event( $ts, self::HOOK_BG_STEP );
-		}
+		wp_clear_scheduled_hook( self::HOOK_BG_STEP );
 	}
 
 	/** Execute one BG check step (called by cron). */
