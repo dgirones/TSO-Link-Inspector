@@ -259,7 +259,7 @@ class TSOLIIN_Admin {
 				'smartChecking' => __( 'Looking for alternatives...', 'tso-link-inspector' ),
 				'smartSuggest'  => __( 'Suggested URL', 'tso-link-inspector' ),
 				'noSuggestions'    => __( 'No working alternative was found for this link.', 'tso-link-inspector' ),
-				'menuSuggestNote'  => __( 'Menu links cannot be updated from suggestions. Change the URL in Appearance > Menus using Go to edit.', 'tso-link-inspector' ),
+				'menuSuggestNote'  => __( 'This menu item URL comes from the linked page/post. Change that content, or use Go to edit for the classic menu screen (nav-menus.php), which still works when Appearance → Menus is hidden.', 'tso-link-inspector' ),
 				'wooSuggestNote'   => __( 'WooCommerce product field URLs cannot be updated from suggestions. Change them in the product editor using Go to edit.', 'tso-link-inspector' ),
 				'detectedRedirect' => __( 'Redirect destination already detected', 'tso-link-inspector' ),
 				'applyUrl'      => __( 'Apply', 'tso-link-inspector' ),
@@ -1490,7 +1490,7 @@ class TSOLIIN_Admin {
 			case 'plain':
 				return __( 'This URL is plain text in the content, not an HTML link. Edit the post manually, or use Delete to remove this record from the list.', 'tso-link-inspector' );
 			case 'menu':
-				return __( 'This menu link could not be located. Edit it under Appearance > Menus or the Site Editor.', 'tso-link-inspector' );
+				return __( 'This menu link could not be located. Use Go to edit for the classic menu screen (Appearance → Menus / nav-menus.php), which still works when that admin item is hidden.', 'tso-link-inspector' );
 			case 'widget':
 				return __( 'This widget link could not be located. Edit it under Appearance > Widgets or the Site Editor.', 'tso-link-inspector' );
 			case 'term':
@@ -1909,26 +1909,30 @@ class TSOLIIN_Admin {
 			);
 		}
 		if ( 'menu' === $link_type ) {
-			wp_send_json_error(
-				array(
-					'message' => __( 'Edit menu links in Appearance > Menus using Go to edit.', 'tso-link-inspector' ),
-				)
-			);
-		}
-		$sk_early = isset( $link->source_key ) ? (string) $link->source_key : '';
-		if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk_early ) ) {
-			wp_send_json_error(
-				array(
-					'message' => __( 'Edit WooCommerce product URLs in the product editor using Go to edit.', 'tso-link-inspector' ),
-				)
-			);
-		}
-		if ( 'term' === $link_type ) {
-			wp_send_json_error(
-				array(
-					'message' => __( 'Edit term description links in the taxonomy editor using Go to edit.', 'tso-link-inspector' ),
-				)
-			);
+			if ( ! TSOLIIN_Support::is_custom_menu_url_row( $link ) ) {
+				wp_send_json_error(
+					array(
+						'message' => __( 'This menu item URL comes from the linked page/post. Edit that content, or open the classic menu editor via Go to edit.', 'tso-link-inspector' ),
+					)
+				);
+			}
+			// Custom menu URLs (_menu_item_url) are updated below via replace_link_url_in_source().
+		} else {
+			$sk_early = isset( $link->source_key ) ? (string) $link->source_key : '';
+			if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk_early ) ) {
+				wp_send_json_error(
+					array(
+						'message' => __( 'Edit WooCommerce product URLs in the product editor using Go to edit.', 'tso-link-inspector' ),
+					)
+				);
+			}
+			if ( 'term' === $link_type ) {
+				wp_send_json_error(
+					array(
+						'message' => __( 'Edit term description links in the taxonomy editor using Go to edit.', 'tso-link-inspector' ),
+					)
+				);
+			}
 		}
 
 		$new_url = TSOLIIN_HTTP::sanitize_editable_link_url( $new_url_raw, (int) $link->post_id );
@@ -2657,15 +2661,15 @@ class TSOLIIN_Admin {
 		}
 
 		$link_type = isset( $link->link_type ) ? (string) $link->link_type : 'link';
-		if ( 'menu' === $link_type ) {
-			// Navigation menus cannot be updated from suggestions — skip HTTP alternative search.
+		if ( 'menu' === $link_type && ! TSOLIIN_Support::is_custom_menu_url_row( $link ) ) {
+			// Post-type / taxonomy menu items: URL comes from the linked object.
 			wp_send_json_success(
 				array(
 					'link_id'     => $link_id,
 					'original'    => $link->link_url,
 					'suggestions' => array(),
 					'count'       => 0,
-					'note'        => __( 'Menu links cannot be updated from suggestions. Change the URL in Appearance > Menus using Go to edit.', 'tso-link-inspector' ),
+					'note'        => __( 'This menu item URL comes from the linked page/post. Change that content, or open Go to edit for the classic menu screen.', 'tso-link-inspector' ),
 					'menu_only'   => true,
 				)
 			);

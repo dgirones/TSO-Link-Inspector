@@ -400,8 +400,12 @@ class TSOLIIN_List_Table extends WP_List_Table {
 		$actions['recheck']    = sprintf( '<a href="#" class="tsoliin-recheck" data-id="%d" data-nonce="%s">%s</a>', absint( $item->id ), esc_attr( $nonce ), esc_html__( 'Recheck', 'tso-link-inspector' ) );
 		$actions['not_broken'] = sprintf( '<a href="#" class="tsoliin-not-broken" data-id="%d" data-nonce="%s" title="%s" style="color:#0a7d33;font-weight:600;">%s</a>', absint( $item->id ), esc_attr( $nonce ), esc_attr( $not_broken_title ), esc_html__( 'Not broken', 'tso-link-inspector' ) );
 		$can_inline = ( 'comment' === $type ) ? true : TSOLIIN_Support::can_inline_edit_link( $item );
-		$can_edit   = $can_inline && ! in_array( $type, array( 'comment', 'widget', 'menu', 'term' ), true );
-		$can_unlink = $can_inline;
+		// Custom menu URLs (_menu_item_url) can be edited/suggested here; post_type menu items cannot.
+		$can_edit   = $can_inline && (
+			! in_array( $type, array( 'comment', 'widget', 'menu', 'term' ), true )
+			|| ( 'menu' === $type && TSOLIIN_Support::is_custom_menu_url_row( $item ) )
+		);
+		$can_unlink = $can_inline && ( 'menu' !== $type || TSOLIIN_Support::is_custom_menu_url_row( $item ) );
 		if ( TSOLIIN_Support::shows_comment_admin_edit_action( $item ) ) {
 			$actions = array_merge(
 				array(
@@ -448,7 +452,11 @@ class TSOLIIN_List_Table extends WP_List_Table {
 			$source_edit = TSOLIIN_Support::get_link_source_edit_url( $item );
 			if ( '' !== $source_edit ) {
 				$source_edit_title = 'menu' === $type
-					? __( 'Open the navigation menu editor for this link', 'tso-link-inspector' )
+					? (
+						TSOLIIN_Support::is_custom_menu_url_row( $item )
+							? __( 'Open the classic menu editor (Appearance → Menus). On block themes this screen may be hidden from the admin menu but still works for legacy menus.', 'tso-link-inspector' )
+							: __( 'Open the navigation menu editor for this link', 'tso-link-inspector' )
+					)
 					: __( 'Open the taxonomy editor for this link', 'tso-link-inspector' );
 				$actions = array_merge(
 					array(
@@ -483,12 +491,17 @@ class TSOLIIN_List_Table extends WP_List_Table {
 			if ( in_array( $type, array( 'image', 'iframe' ), true ) && ! empty( $item->post_id ) ) {
 				$editor_deep = TSOLIIN_Support::get_post_admin_edit_url_for_link( $item );
 				if ( '' !== $editor_deep ) {
+					$focus = TSOLIIN_Support::should_focus_link_in_post_content( $item );
 					$actions = array_merge(
 						array(
 							'source_edit' => sprintf(
 								'<a href="%s" target="_blank" rel="noopener noreferrer" title="%s">%s</a>',
 								esc_url( $editor_deep ),
-								esc_attr__( 'Open the editor and scroll to this link', 'tso-link-inspector' ),
+								esc_attr(
+									$focus
+										? __( 'Open the editor and scroll to this link', 'tso-link-inspector' )
+										: __( 'Open the post editor. This URL may be in a custom field or no longer in the content — use Edit link, or Delete + Scan if it is a stale row.', 'tso-link-inspector' )
+								),
 								esc_html__( 'Go to edit', 'tso-link-inspector' )
 							),
 						),
@@ -573,6 +586,10 @@ class TSOLIIN_List_Table extends WP_List_Table {
 
 		if ( $show_suggest ) {
 			$suggest_type = $is_woo_source ? 'woocommerce' : $type;
+			if ( 'menu' === $type && TSOLIIN_Support::is_custom_menu_url_row( $item ) ) {
+				// Custom menu URLs can apply HTTPS suggestions; post_type menu items cannot.
+				$suggest_type = 'menu_custom';
+			}
 			$actions['suggest'] = sprintf(
 				'<a href="#" class="tsoliin-suggest" data-id="%d" data-link-type="%s" data-nonce="%s" style="color:#b45309;font-weight:600;">%s</a>',
 				absint( $item->id ),
