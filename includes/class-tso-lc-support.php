@@ -683,12 +683,38 @@ class TSOLIIN_Support {
 	}
 
 	/**
+	 * Whether wp-admin/nav-menus.php is usable (block themes call wp_die on that screen).
+	 *
+	 * @return bool
+	 */
+	public static function classic_nav_menus_admin_available() {
+		if ( function_exists( 'wp_is_block_theme' ) && wp_is_block_theme() ) {
+			return false;
+		}
+		return (bool) current_theme_supports( 'menus' );
+	}
+
+	/**
+	 * Site Editor URL for block-theme navigation (wp_navigation).
+	 *
+	 * @return string
+	 */
+	public static function get_site_editor_navigation_admin_url() {
+		// WP 6.5+ path routing (`p`); core redirects legacy `path=/navigation`.
+		return add_query_arg( 'p', '/navigation', admin_url( 'site-editor.php' ) );
+	}
+
+	/**
 	 * Admin screen URL for navigation menu editing.
 	 *
 	 * @param string $source_key Optional mi-{menu_item_id} source key.
 	 * @return string
 	 */
 	public static function get_menus_admin_edit_url( $source_key = '' ) {
+		if ( ! self::classic_nav_menus_admin_available() ) {
+			return self::get_site_editor_navigation_admin_url();
+		}
+
 		$menu_id = 0;
 		$item_id = 0;
 		if ( preg_match( '/^mi-(\d+)/', (string) $source_key, $m ) ) {
@@ -701,28 +727,40 @@ class TSOLIIN_Support {
 			}
 		}
 
-		// Classic nav menus still live at nav-menus.php even on block themes / when the
-		// Appearance → Menus admin item is hidden (common with WooCommerce + block themes).
-		// Only fall back to the Site Editor when this item is not assigned to a classic menu.
+		$url = admin_url( 'nav-menus.php' );
 		if ( $menu_id > 0 ) {
 			$url = add_query_arg(
 				array(
 					'action' => 'edit',
 					'menu'   => $menu_id,
 				),
-				admin_url( 'nav-menus.php' )
+				$url
 			);
 			if ( $item_id > 0 ) {
 				$url .= '#menu-item-' . $item_id;
 			}
-			return $url;
 		}
+		return $url;
+	}
 
-		if ( wp_is_block_theme() || ! current_theme_supports( 'menus' ) ) {
-			return admin_url( 'site-editor.php' );
+	/**
+	 * Whether the list table should show Go to edit for a menu row.
+	 *
+	 * Custom menu URLs on block themes are updated via Edit link (_menu_item_url);
+	 * nav-menus.php is blocked and Site Editor does not edit legacy nav_menu_item rows.
+	 *
+	 * @param object|null $link DB link row.
+	 * @return bool
+	 */
+	public static function shows_menu_admin_go_to_edit_action( $link ) {
+		if ( ! $link || 'menu' !== (string) $link->link_type ) {
+			return false;
 		}
-
-		return admin_url( 'nav-menus.php' );
+		if ( self::is_custom_menu_url_row( $link ) && ! self::classic_nav_menus_admin_available() ) {
+			return false;
+		}
+		$sk = isset( $link->source_key ) ? (string) $link->source_key : '';
+		return '' !== self::get_menus_admin_edit_url( $sk );
 	}
 
 	/**

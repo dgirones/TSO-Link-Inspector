@@ -259,7 +259,7 @@ class TSOLIIN_Admin {
 				'smartChecking' => __( 'Looking for alternatives...', 'tso-link-inspector' ),
 				'smartSuggest'  => __( 'Suggested URL', 'tso-link-inspector' ),
 				'noSuggestions'    => __( 'No working alternative was found for this link.', 'tso-link-inspector' ),
-				'menuSuggestNote'  => __( 'This menu item URL comes from the linked page/post. Change that content, or use Go to edit for the classic menu screen (nav-menus.php), which still works when Appearance → Menus is hidden.', 'tso-link-inspector' ),
+				'menuSuggestNote'  => __( 'This menu item URL comes from the linked page/post. On block themes use Site Editor → Navigation, or edit that page directly.', 'tso-link-inspector' ),
 				'wooSuggestNote'   => __( 'WooCommerce product field URLs cannot be updated from suggestions. Change them in the product editor using Go to edit.', 'tso-link-inspector' ),
 				'detectedRedirect' => __( 'Redirect destination already detected', 'tso-link-inspector' ),
 				'applyUrl'      => __( 'Apply', 'tso-link-inspector' ),
@@ -1490,7 +1490,7 @@ class TSOLIIN_Admin {
 			case 'plain':
 				return __( 'This URL is plain text in the content, not an HTML link. Edit the post manually, or use Delete to remove this record from the list.', 'tso-link-inspector' );
 			case 'menu':
-				return __( 'This menu link could not be located. Use Go to edit for the classic menu screen (Appearance → Menus / nav-menus.php), which still works when that admin item is hidden.', 'tso-link-inspector' );
+				return __( 'This menu link could not be located. On block themes use Edit link for custom URLs, or Site Editor → Navigation for block menus.', 'tso-link-inspector' );
 			case 'widget':
 				return __( 'This widget link could not be located. Edit it under Appearance > Widgets or the Site Editor.', 'tso-link-inspector' );
 			case 'term':

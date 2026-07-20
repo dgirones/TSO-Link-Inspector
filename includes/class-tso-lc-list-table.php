@@ -448,14 +448,14 @@ class TSOLIIN_List_Table extends WP_List_Table {
 				);
 			}
 		}
-		if ( 'menu' === $type || 'term' === $type ) {
+		if ( ( 'menu' === $type || 'term' === $type ) && ( 'menu' !== $type || TSOLIIN_Support::shows_menu_admin_go_to_edit_action( $item ) ) ) {
 			$source_edit = TSOLIIN_Support::get_link_source_edit_url( $item );
 			if ( '' !== $source_edit ) {
 				$source_edit_title = 'menu' === $type
 					? (
-						TSOLIIN_Support::is_custom_menu_url_row( $item )
-							? __( 'Open the classic menu editor (Appearance → Menus). On block themes this screen may be hidden from the admin menu but still works for legacy menus.', 'tso-link-inspector' )
-							: __( 'Open the navigation menu editor for this link', 'tso-link-inspector' )
+						TSOLIIN_Support::classic_nav_menus_admin_available()
+							? __( 'Open the classic menu editor (Appearance → Menus)', 'tso-link-inspector' )
+							: __( 'Open Site Editor → Navigation (block theme). For custom menu URLs, use Edit link to change the URL here.', 'tso-link-inspector' )
 					)
 					: __( 'Open the taxonomy editor for this link', 'tso-link-inspector' );
 				$actions = array_merge(
@@ -609,8 +609,11 @@ class TSOLIIN_List_Table extends WP_List_Table {
 		if ( 'menu' === $type && ! empty( $item->anchor_text ) ) {
 			$title = (string) $item->anchor_text;
 			$sk    = isset( $item->source_key ) ? (string) $item->source_key : '';
-			$edit  = TSOLIIN_Support::get_menus_admin_edit_url( $sk );
-			return '<a href="' . esc_url( $edit ) . '">' . esc_html( $title ) . '</a>';
+			if ( TSOLIIN_Support::shows_menu_admin_go_to_edit_action( $item ) ) {
+				$edit = TSOLIIN_Support::get_menus_admin_edit_url( $sk );
+				return '<a href="' . esc_url( $edit ) . '">' . esc_html( $title ) . '</a>';
+			}
+			return esc_html( $title );
 		}
 
 		if ( 'widget' === $type ) {
