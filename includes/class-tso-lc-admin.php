@@ -259,6 +259,8 @@ class TSOLIIN_Admin {
 				'smartChecking' => __( 'Looking for alternatives...', 'tso-link-inspector' ),
 				'smartSuggest'  => __( 'Suggested URL', 'tso-link-inspector' ),
 				'noSuggestions'    => __( 'No working alternative was found for this link.', 'tso-link-inspector' ),
+				'menuSuggestNote'  => __( 'Menu links cannot be updated from suggestions. Change the URL in Appearance > Menus using Go to edit.', 'tso-link-inspector' ),
+				'wooSuggestNote'   => __( 'WooCommerce product field URLs cannot be updated from suggestions. Change them in the product editor using Go to edit.', 'tso-link-inspector' ),
 				'detectedRedirect' => __( 'Redirect destination already detected', 'tso-link-inspector' ),
 				'applyUrl'      => __( 'Apply', 'tso-link-inspector' ),
 				'itemsChecked'  => __( 'links rechecked.', 'tso-link-inspector' ),
@@ -325,10 +327,12 @@ class TSOLIIN_Admin {
 		$view_post    = $view_post_id ? get_post( $view_post_id ) : null;
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$list_view = isset( $_GET['view'] ) ? sanitize_key( wp_unslash( $_GET['view'] ) ) : 'links';
-		$posts_view = ( 'posts' === $list_view && ! $view_post_id );
+		$posts_view     = ( 'posts' === $list_view && ! $view_post_id );
+		$products_view  = ( 'products' === $list_view && ! $view_post_id && class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_scan_enabled() );
+		$summary_view   = $posts_view || $products_view;
 
 		$table = null;
-		if ( ! $posts_view ) {
+		if ( ! $summary_view ) {
 			$table = new TSOLIIN_List_Table( $this->db, $this->http );
 			$table->prepare_items();
 		}
@@ -354,6 +358,10 @@ class TSOLIIN_Admin {
 			$this->render_plugin_title_with_version( true );
 			echo ' <span style="color:#646970;">&#8250;</span> ';
 			echo esc_html( $view_post->post_title );
+		} elseif ( $products_view ) {
+			$this->render_plugin_title_with_version( true );
+			echo ' <span style="color:#646970;">&#8250;</span> ';
+			echo esc_html__( 'Products with issues', 'tso-link-inspector' );
 		} elseif ( $posts_view ) {
 			$this->render_plugin_title_with_version( true );
 			echo ' <span style="color:#646970;">&#8250;</span> ';
@@ -575,10 +583,13 @@ class TSOLIIN_Admin {
 		echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector-settings' ) ) . '" class="button button-secondary">' . esc_html__( 'Settings', 'tso-link-inspector' ) . '</a> ';
 		echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector-settings&tab=help' ) ) . '" class="button button-secondary">' . esc_html__( 'Help', 'tso-link-inspector' ) . '</a> ';
 		if ( ! $view_post ) {
-			if ( $posts_view ) {
+			if ( $summary_view ) {
 				echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector' ) ) . '" class="button button-secondary">&#8592; ' . esc_html__( 'All links', 'tso-link-inspector' ) . '</a> ';
 			} else {
 				echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector&view=posts' ) ) . '" class="button button-secondary">' . esc_html__( 'Posts with issues', 'tso-link-inspector' ) . '</a> ';
+				if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_scan_enabled() ) {
+					echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector&view=products' ) ) . '" class="button button-secondary">' . esc_html__( 'Products with issues', 'tso-link-inspector' ) . '</a> ';
+				}
 			}
 		}
 		if ( $view_post ) {
@@ -588,7 +599,7 @@ class TSOLIIN_Admin {
 		}
 		echo '</div>';
 		echo '<div class="tsoliin-action-bar__right">';
-		if ( ! $posts_view ) {
+		if ( ! $summary_view ) {
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$search_val = isset( $_REQUEST['s'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['s'] ) ) : '';
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
@@ -620,7 +631,9 @@ class TSOLIIN_Admin {
 		echo '</div>';
 
 		if ( $posts_view ) {
-			$this->render_posts_summary_view();
+			$this->render_content_summary_view( 'posts' );
+		} elseif ( $products_view ) {
+			$this->render_content_summary_view( 'products' );
 		} else {
 			$scope_val = $this->get_scope_from_request();
 			// Table (form without search_box since search is in action bar above).
@@ -632,7 +645,7 @@ class TSOLIIN_Admin {
 		}
 
 		// Edit modal (links list only).
-		if ( ! $posts_view ) {
+		if ( ! $summary_view ) {
 		echo '<div id="tsoliin-modal" class="tsoliin-modal" style="display:none;" role="dialog" aria-modal="true">';
 		echo '<div class="tsoliin-modal__overlay"></div>';
 		echo '<div class="tsoliin-modal__content">';
@@ -665,22 +678,45 @@ class TSOLIIN_Admin {
 	/**
 	 * Render grouped post summary (broken / redirect counts per article).
 	 */
-	private function render_posts_summary_view() {
+	/**
+	 * Summary table of posts or WooCommerce products with link issues.
+	 *
+	 * @param string $mode posts|products.
+	 * @return void
+	 */
+	private function render_content_summary_view( $mode = 'posts' ) {
+		$mode = ( 'products' === $mode ) ? 'products' : 'posts';
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$paged    = isset( $_GET['paged'] ) ? max( 1, absint( $_GET['paged'] ) ) : 1;
 		$per_page = 20;
-		$result   = $this->db->get_posts_link_summary(
-			array(
-				'per_page' => $per_page,
-				'paged'    => $paged,
-			)
+		$query    = array(
+			'per_page' => $per_page,
+			'paged'    => $paged,
 		);
+		if ( 'products' === $mode ) {
+			$query['post_type'] = 'product';
+		} elseif ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_scan_enabled() ) {
+			// Keep products out of the Posts summary when the dedicated Products view is active.
+			$query['exclude_post_type'] = 'product';
+		}
+		$result      = $this->db->get_posts_link_summary( $query );
 		$total_pages = max( 1, (int) ceil( $result['total'] / $per_page ) );
 
-		echo '<p class="description">' . esc_html__( 'Articles sorted by broken links, then redirects. Click a title to review and fix links in that post.', 'tso-link-inspector' ) . '</p>';
+		if ( 'products' === $mode ) {
+			echo '<p class="description">' . esc_html__( 'WooCommerce products sorted by broken links, then redirects. Click a title to review and fix links in that product.', 'tso-link-inspector' ) . '</p>';
+			$col_label   = __( 'Product', 'tso-link-inspector' );
+			$empty_label = __( 'No products with broken or redirected links.', 'tso-link-inspector' );
+			$view_slug   = 'products';
+		} else {
+			echo '<p class="description">' . esc_html__( 'Articles sorted by broken links, then redirects. Click a title to review and fix links in that post.', 'tso-link-inspector' ) . '</p>';
+			$col_label   = __( 'Post', 'tso-link-inspector' );
+			$empty_label = __( 'No posts with broken or redirected links.', 'tso-link-inspector' );
+			$view_slug   = 'posts';
+		}
+
 		echo '<table class="widefat striped tsoliin-posts-summary">';
 		echo '<thead><tr>';
-		echo '<th>' . esc_html__( 'Post', 'tso-link-inspector' ) . '</th>';
+		echo '<th>' . esc_html( $col_label ) . '</th>';
 		echo '<th class="column-num">' . esc_html__( 'Broken', 'tso-link-inspector' ) . '</th>';
 		echo '<th class="column-num">' . esc_html__( 'Redirect', 'tso-link-inspector' ) . '</th>';
 		echo '<th class="column-num">' . esc_html__( 'Unchecked', 'tso-link-inspector' ) . '</th>';
@@ -688,7 +724,7 @@ class TSOLIIN_Admin {
 		echo '</tr></thead><tbody>';
 
 		if ( empty( $result['items'] ) ) {
-			echo '<tr><td colspan="5"><em>' . esc_html__( 'No posts with broken or redirected links.', 'tso-link-inspector' ) . '</em></td></tr>';
+			echo '<tr><td colspan="5"><em>' . esc_html( $empty_label ) . '</em></td></tr>';
 		} else {
 			foreach ( $result['items'] as $row ) {
 				$post_id = absint( $row->post_id );
@@ -710,7 +746,7 @@ class TSOLIIN_Admin {
 					'base'      => add_query_arg(
 						array(
 							'page'  => 'tso-link-inspector',
-							'view'  => 'posts',
+							'view'  => $view_slug,
 							'paged' => '%#%',
 						),
 						admin_url( 'tools.php' )
@@ -838,6 +874,13 @@ class TSOLIIN_Admin {
 		echo esc_html__( 'Open Posts with issues from the main screen to see articles that contain broken, redirected, or unchecked links. Click a post to filter the list to that post only.', 'tso-link-inspector' );
 		echo ' <a href="' . esc_url( add_query_arg( 'view', 'posts', $list_url ) ) . '">' . esc_html__( 'Open posts view', 'tso-link-inspector' ) . '</a>';
 		echo '</dd>';
+		if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_plugin_active() ) {
+			echo '<dt>' . esc_html__( 'WooCommerce products', 'tso-link-inspector' ) . '</dt>';
+			echo '<dd>';
+			echo esc_html__( 'Enable WooCommerce scanning in Settings to check external product URLs, downloadable files, and gallery images. Then use Products with issues on the main screen.', 'tso-link-inspector' );
+			echo ' <a href="' . esc_url( $settings_url ) . '">' . esc_html__( 'Open settings', 'tso-link-inspector' ) . '</a>';
+			echo '</dd>';
+		}
 
 		echo '</dl>';
 
@@ -1089,6 +1132,16 @@ class TSOLIIN_Admin {
 		echo '<p class="description">' . esc_html__( 'Third-party plugins can register extra sources with the tsoliin_register_link_source() API.', 'tso-link-inspector' ) . '</p>';
 		echo '</td></tr>';
 
+		// WooCommerce (opt-in).
+		if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_plugin_active() ) {
+			$scan_woocommerce = ! empty( $s['scan_woocommerce'] );
+			echo '<tr><th scope="row">' . esc_html__( 'WooCommerce', 'tso-link-inspector' ) . '</th><td>';
+			echo '<label><input type="checkbox" name="tsoliin_scan_woocommerce" value="1" ' . checked( $scan_woocommerce, true, false ) . ' /> ';
+			echo esc_html__( 'Scan WooCommerce products (external URL, downloadable files, featured image, gallery)', 'tso-link-inspector' ) . '</label>';
+			echo '<p class="description">' . esc_html__( 'Off by default. When enabled, products are included in Scan now and a Products with issues view appears on the main screen. Edit those fields in the product editor (Go to edit).', 'tso-link-inspector' ) . '</p>';
+			echo '</td></tr>';
+		}
+
 		// Scan meta.
 		echo '<tr><th scope="row">' . esc_html__( 'ACF / Meta custom fields', 'tso-link-inspector' ) . '</th><td>';
 		echo '<label><input type="checkbox" id="tsoliin_scan_meta" name="tsoliin_scan_meta" value="1" ' . checked( $scan_meta, true, false ) . ' /> ';
@@ -1265,6 +1318,13 @@ class TSOLIIN_Admin {
 		$scan_terms        = ! empty( $_POST['tsoliin_scan_terms'] );
 		$scan_fse          = ! empty( $_POST['tsoliin_scan_fse'] );
 		$scan_meta_plain   = ! empty( $_POST['tsoliin_scan_meta_plain'] );
+		$scan_woocommerce  = ! empty( $_POST['tsoliin_scan_woocommerce'] );
+		if ( ! class_exists( 'TSOLIIN_WooCommerce', false ) || ! TSOLIIN_WooCommerce::is_plugin_active() ) {
+			$scan_woocommerce = ! empty( $current_settings['scan_woocommerce'] );
+		}
+		if ( $scan_woocommerce && class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_plugin_active() && ! in_array( 'product', $post_types, true ) ) {
+			$post_types[] = 'product';
+		}
 		$allowed_email_modes = array( 'none', 'immediate', 'confirmed', 'digest_7', 'digest_15', 'digest_30' );
 		$broken_email_mode   = 'none';
 		if ( isset( $_POST['tsoliin_broken_email_mode'] ) ) {
@@ -1336,6 +1396,7 @@ class TSOLIIN_Admin {
 			'scan_terms'        => $scan_terms,
 			'scan_fse'          => $scan_fse,
 			'scan_meta_plain'   => $scan_meta_plain,
+			'scan_woocommerce'  => $scan_woocommerce,
 			'broken_email_mode' => $broken_email_mode,
 			'broken_email_to'   => $broken_email_to,
 			'meta_exclude_keys' => $meta_keys,
@@ -1423,7 +1484,7 @@ class TSOLIIN_Admin {
 		}
 		$type = ( $link && isset( $link->link_type ) ) ? (string) $link->link_type : 'link';
 		if ( ! empty( $link->post_id ) && in_array( $type, array( 'link', 'image', 'iframe', 'template', 'wp_block' ), true ) ) {
-			return __( 'This URL is not stored in editable post content. Open the post in the editor to change it, then run Scan again.', 'tso-link-inspector' );
+			return __( 'This URL is not stored in editable post content (it may already have been changed in the editor). Use Recheck or Scan to refresh the list, Delete to remove only this inspector record, or open the post and edit the link there.', 'tso-link-inspector' );
 		}
 		switch ( $type ) {
 			case 'plain':
@@ -1854,6 +1915,14 @@ class TSOLIIN_Admin {
 				)
 			);
 		}
+		$sk_early = isset( $link->source_key ) ? (string) $link->source_key : '';
+		if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk_early ) ) {
+			wp_send_json_error(
+				array(
+					'message' => __( 'Edit WooCommerce product URLs in the product editor using Go to edit.', 'tso-link-inspector' ),
+				)
+			);
+		}
 		if ( 'term' === $link_type ) {
 			wp_send_json_error(
 				array(
@@ -1890,7 +1959,14 @@ class TSOLIIN_Admin {
 
 		$blocked = $this->get_non_editable_source_message( $link );
 		if ( '' !== $blocked ) {
-			wp_send_json_error( array( 'message' => $blocked ) );
+			// Stale inspector row: content already has the target URL (manual edit or prior apply).
+			$already_has_new = $url_changed
+				&& ! empty( $link->post_id )
+				&& in_array( $link_type, array( 'link', 'image', 'iframe', 'template', 'wp_block' ), true )
+				&& $this->scanner->is_url_editable_in_post( (int) $link->post_id, $new_url, $link_type );
+			if ( ! $already_has_new ) {
+				wp_send_json_error( array( 'message' => $blocked ) );
+			}
 		}
 
 		$url_done    = true;
@@ -2082,7 +2158,22 @@ class TSOLIIN_Admin {
 		if ( 'term' === $link_type ) {
 			return $this->scanner->replace_url_in_term( (string) $link->source_key, $old_url, $new_url );
 		}
-		return $this->scanner->replace_url_in_post( (int) $link->post_id, $old_url, $new_url );
+
+		$done = $this->scanner->replace_url_in_post( (int) $link->post_id, $old_url, $new_url );
+		if ( $done ) {
+			return true;
+		}
+		// Content may already use the redirect destination instead of the stored URL.
+		if ( ! empty( $link->redirect_url ) ) {
+			$redir = trim( (string) $link->redirect_url );
+			if ( '' !== $redir && $redir !== $old_url && $redir !== $new_url ) {
+				// Only rewrite when that destination appears once (avoid changing other intentional links).
+				if ( 1 === $this->scanner->count_href_matches_in_post( (int) $link->post_id, $redir ) ) {
+					return $this->scanner->replace_url_in_post( (int) $link->post_id, $redir, $new_url );
+				}
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -2156,7 +2247,7 @@ class TSOLIIN_Admin {
 		} elseif ( 'term' === $type ) {
 			$done = $this->scanner->unlink_in_term( (string) $link->source_key, (string) $link->link_url );
 		} else {
-			$done = $this->scanner->unlink_in_post( (int) $link->post_id, $link->link_url, $type );
+			$done = $this->scanner->unlink_link_row_in_post( $link );
 		}
 
 		if ( ! $done ) {
@@ -2400,7 +2491,7 @@ class TSOLIIN_Admin {
 				} elseif ( 'term' === $type ) {
 					$ok = $this->scanner->unlink_in_term( (string) $link->source_key, (string) $link->link_url );
 				} else {
-					$ok = $this->scanner->unlink_in_post( (int) $link->post_id, $link->link_url, $type );
+					$ok = $this->scanner->unlink_link_row_in_post( $link );
 				}
 				if ( $ok ) {
 					$this->db->delete_link( $link_id );
@@ -2563,6 +2654,34 @@ class TSOLIIN_Admin {
 		$link    = $link_id ? $this->db->get_link( $link_id ) : null;
 		if ( ! $link ) {
 			wp_send_json_error( array( 'message' => __( 'Link not found.', 'tso-link-inspector' ) ) );
+		}
+
+		$link_type = isset( $link->link_type ) ? (string) $link->link_type : 'link';
+		if ( 'menu' === $link_type ) {
+			// Navigation menus cannot be updated from suggestions — skip HTTP alternative search.
+			wp_send_json_success(
+				array(
+					'link_id'     => $link_id,
+					'original'    => $link->link_url,
+					'suggestions' => array(),
+					'count'       => 0,
+					'note'        => __( 'Menu links cannot be updated from suggestions. Change the URL in Appearance > Menus using Go to edit.', 'tso-link-inspector' ),
+					'menu_only'   => true,
+				)
+			);
+		}
+		$sk_suggest = isset( $link->source_key ) ? (string) $link->source_key : '';
+		if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk_suggest ) ) {
+			wp_send_json_success(
+				array(
+					'link_id'     => $link_id,
+					'original'    => $link->link_url,
+					'suggestions' => array(),
+					'count'       => 0,
+					'note'        => __( 'WooCommerce product field URLs cannot be updated from suggestions. Change them in the product editor using Go to edit.', 'tso-link-inspector' ),
+					'woo_only'    => true,
+				)
+			);
 		}
 
 		$suggestions  = array();

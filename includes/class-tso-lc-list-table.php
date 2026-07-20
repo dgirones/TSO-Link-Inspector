@@ -383,6 +383,8 @@ class TSOLIIN_List_Table extends WP_List_Table {
 			);
 
 		$type    = isset( $item->link_type ) ? (string) $item->link_type : 'link';
+		$sk_item = isset( $item->source_key ) ? (string) $item->source_key : '';
+		$is_woo_source = class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk_item );
 		$not_broken_title = __( 'Mark as OK: moves this link to Manual locks. Background checks still run; it returns to Broken/Redirect only if the URL or redirect changes, or a check finds it broken.', 'tso-link-inspector' );
 		$actions = array();
 
@@ -425,6 +427,22 @@ class TSOLIIN_List_Table extends WP_List_Table {
 				),
 				$actions
 			);
+		}
+		if ( TSOLIIN_Support::shows_woocommerce_admin_edit_action( $item ) ) {
+			$product_edit = TSOLIIN_Support::get_post_admin_edit_url_for_link( $item );
+			if ( '' !== $product_edit ) {
+				$actions = array_merge(
+					array(
+						'source_edit' => sprintf(
+							'<a href="%s" target="_blank" rel="noopener noreferrer" title="%s">%s</a>',
+							esc_url( $product_edit ),
+							esc_attr__( 'Open the WooCommerce product editor', 'tso-link-inspector' ),
+							esc_html__( 'Go to edit', 'tso-link-inspector' )
+						),
+					),
+					$actions
+				);
+			}
 		}
 		if ( 'menu' === $type || 'term' === $type ) {
 			$source_edit = TSOLIIN_Support::get_link_source_edit_url( $item );
@@ -554,7 +572,14 @@ class TSOLIIN_List_Table extends WP_List_Table {
 		}
 
 		if ( $show_suggest ) {
-			$actions['suggest'] = sprintf( '<a href="#" class="tsoliin-suggest" data-id="%d" data-nonce="%s" style="color:#b45309;font-weight:600;">%s</a>', absint( $item->id ), esc_attr( $nonce ), esc_html__( 'Suggestion', 'tso-link-inspector' ) );
+			$suggest_type = $is_woo_source ? 'woocommerce' : $type;
+			$actions['suggest'] = sprintf(
+				'<a href="#" class="tsoliin-suggest" data-id="%d" data-link-type="%s" data-nonce="%s" style="color:#b45309;font-weight:600;">%s</a>',
+				absint( $item->id ),
+				esc_attr( $suggest_type ),
+				esc_attr( $nonce ),
+				esc_html__( 'Suggestion', 'tso-link-inspector' )
+			);
 		}
 
 		return $out . $this->row_actions( $actions );

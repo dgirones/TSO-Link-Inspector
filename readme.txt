@@ -5,7 +5,7 @@ Tags: broken links, link checker, seo, maintenance, links
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 2.2.6
+Stable tag: 2.3.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -47,6 +47,7 @@ Find and fix broken links across your entire WordPress site without opening each
 * Compatible with LiteSpeed Cache, WP Rocket, W3 Total Cache, WP Super Cache, SG Optimizer, Breeze, and Cloudflare.
 * **Extended scanning**: plain-text URLs in posts, Gutenberg block JSON, navigation menus, responsive media (srcset/picture), page-builder `data-*` attributes, widget sidebars, taxonomy descriptions, Site Editor templates/reusable blocks, and plain URLs in custom fields.
 * **Third-party sources**: register extra link collectors with `tsoliin_register_link_source()`.
+* **Optional WooCommerce scanning**: external product URLs, downloadable files, featured/gallery images, plus a Products with issues view.
 * Includes Catalan and Spanish translations.
 
 = How it works =
@@ -99,6 +100,11 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 2. Filter tabs: All, Broken, Redirect, OK, HTTP insecure, Manual locks, Not checked.
 
 == Changelog ==
+
+= 2.3.0 =
+* New: Optional **WooCommerce** scanning (Settings) for external product URLs, downloadable files, featured image, and gallery — off by default.
+* New: **Products with issues** view (when WooCommerce scanning is enabled), same layout as Posts with issues.
+* Improvement: Product field links open the product editor via **Go to edit** (not the inline modal).
 
 = 2.2.6 =
 * Fix: Link list table no longer outputs a nested `<thead>` on WordPress 6.6+ (duplicate header broke table layout and could hide rows).
@@ -371,6 +377,9 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 * Initial release.
 
 == Upgrade Notice ==
+
+= 2.3.0 =
+Optional WooCommerce product link scanning and Products with issues view. Enable under Settings if you run a store.
 
 = 2.2.6 =
 Recommended update. Fixes duplicate/broken link list table headers on WordPress 6.6+.

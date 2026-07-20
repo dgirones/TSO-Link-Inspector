@@ -37,7 +37,13 @@ class TSOLIIN_Scanner {
 		$s = get_option( 'tsoliin_settings', array() );
 		$t = isset( $s['post_types'] ) && is_array( $s['post_types'] ) ? $s['post_types'] : array( 'post', 'page' );
 		$t = array_map( 'sanitize_key', $t );
-		return empty( $t ) ? array( 'post', 'page' ) : $t;
+		if ( empty( $t ) ) {
+			$t = array( 'post', 'page' );
+		}
+		if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_scan_enabled() && post_type_exists( 'product' ) && ! in_array( 'product', $t, true ) ) {
+			$t[] = 'product';
+		}
+		return $t;
 	}
 
 	/** @return bool */
@@ -939,7 +945,7 @@ class TSOLIIN_Scanner {
 		$out  = array();
 		$seen = array();
 		foreach ( $items as $item ) {
-			$key = $this->scan_url_key( $item['url'], $post_id );
+			$key = $this->scan_item_dedupe_key( $item, $post_id );
 			if ( isset( $seen[ $key ] ) ) {
 				$idx        = (int) $seen[ $key ];
 				$new_anchor = isset( $item['anchor'] ) ? trim( (string) $item['anchor'] ) : '';
@@ -949,6 +955,9 @@ class TSOLIIN_Scanner {
 				}
 				if ( strlen( (string) $item['url'] ) > strlen( (string) $out[ $idx ]['url'] ) ) {
 					$out[ $idx ]['url'] = $item['url'];
+				}
+				if ( ! empty( $item['source_key'] ) && empty( $out[ $idx ]['source_key'] ) ) {
+					$out[ $idx ]['source_key'] = $item['source_key'];
 				}
 				$existing_type       = isset( $out[ $idx ]['type'] ) ? (string) $out[ $idx ]['type'] : 'link';
 				$incoming_type       = isset( $item['type'] ) ? (string) $item['type'] : 'link';
@@ -1267,6 +1276,23 @@ class TSOLIIN_Scanner {
 	}
 
 	/**
+	 * Deduplicate scan batch items. Non-empty source_key (e.g. WooCommerce) stays separate from content.
+	 *
+	 * @param array $item    Scan item.
+	 * @param int   $post_id Post ID.
+	 * @return string
+	 */
+	private function scan_item_dedupe_key( array $item, $post_id = 0 ) {
+		$url = isset( $item['url'] ) ? (string) $item['url'] : '';
+		$key = $this->scan_url_key( $url, $post_id );
+		$sk  = isset( $item['source_key'] ) ? (string) $item['source_key'] : '';
+		if ( '' !== $sk ) {
+			return $key . "\0sk:" . $sk;
+		}
+		return $key;
+	}
+
+	/**
 	 * Add a scanned item when its URL is not already in the batch.
 	 *
 	 * @param array[]  $items   Items list (by ref).
@@ -1279,7 +1305,7 @@ class TSOLIIN_Scanner {
 		if ( '' === $url || $this->skip_url( $url ) ) {
 			return;
 		}
-		$key = $this->scan_url_key( $url, $post_id );
+		$key = $this->scan_item_dedupe_key( $item, $post_id );
 		if ( isset( $seen[ $key ] ) ) {
 			$idx        = (int) $seen[ $key ];
 			$new_anchor = isset( $item['anchor'] ) ? trim( (string) $item['anchor'] ) : '';
@@ -1289,6 +1315,9 @@ class TSOLIIN_Scanner {
 				$items[ $idx ]['type'] = $this->prefer_scan_item_type( $existing_type, $incoming_type );
 				if ( '' !== $new_anchor && '' === trim( (string) $items[ $idx ]['anchor'] ) ) {
 					$items[ $idx ]['anchor'] = sanitize_text_field( $item['anchor'] );
+				}
+				if ( ! empty( $item['source_key'] ) && empty( $items[ $idx ]['source_key'] ) ) {
+					$items[ $idx ]['source_key'] = (string) $item['source_key'];
 				}
 			}
 			return;
@@ -1880,6 +1909,13 @@ class TSOLIIN_Scanner {
 			}
 		}
 
+		// WooCommerce product fields (opt-in).
+		if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_scan_enabled() && TSOLIIN_WooCommerce::is_product( $post_id ) ) {
+			foreach ( TSOLIIN_WooCommerce::collect_product_items( $post_id ) as $item ) {
+				$this->push_scan_item( $items, $seen, $item, $post_id );
+			}
+		}
+
 		$items = $this->enrich_scan_item_anchors( $items, $post->post_content, $post_id, $html );
 		$items = $this->finalize_scan_items( $items, $post_id );
 		$items = $this->reclassify_hyperlink_items( $items, $post->post_content, $post_id, $html );
@@ -1893,6 +1929,11 @@ class TSOLIIN_Scanner {
 				continue;
 			}
 			$type = isset( $item['type'] ) ? (string) $item['type'] : 'link';
+			$sk   = isset( $item['source_key'] ) ? (string) $item['source_key'] : '';
+			if ( '' !== $sk && class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk ) ) {
+				$this->db->upsert_link( $post_id, $item['url'], $item['anchor'], $type, $sk );
+				continue;
+			}
 			if ( in_array( $type, array( 'link', 'image', 'iframe' ), true )
 				&& ! $this->is_url_editable_in_post( $post_id, $item['url'], $type ) ) {
 				continue;
@@ -1955,7 +1996,8 @@ class TSOLIIN_Scanner {
 		$post_id = absint( $post_id );
 		$table   = $this->db->get_table();
 
-		$active = array();
+		$active      = array();
+		$active_keys = array();
 		foreach ( $items as $item ) {
 			$url = isset( $item['url'] ) ? (string) $item['url'] : '';
 			if ( '' === $url || $this->is_ignored( $url ) ) {
@@ -1966,12 +2008,15 @@ class TSOLIIN_Scanner {
 				continue;
 			}
 			$active[ $this->scan_url_key( $url, $post_id ) ] = true;
+			if ( ! empty( $item['source_key'] ) ) {
+				$active_keys[ (string) $item['source_key'] ] = true;
+			}
 		}
 
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix + fixed suffix.
 		$existing = $wpdb->get_results(
 			$wpdb->prepare(
-				"SELECT id, link_url, link_type FROM {$table} WHERE post_id = %d AND link_type NOT IN ('comment', 'menu', 'widget', 'term', 'template', 'wp_block')",
+				"SELECT id, link_url, link_type, source_key FROM {$table} WHERE post_id = %d AND link_type NOT IN ('comment', 'menu', 'widget', 'term', 'template', 'wp_block')",
 				$post_id
 			)
 		);
@@ -1982,6 +2027,14 @@ class TSOLIIN_Scanner {
 		foreach ( $existing as $row ) {
 			$type = isset( $row->link_type ) ? (string) $row->link_type : 'link';
 			if ( ! in_array( $type, array( 'link', 'image', 'iframe', 'plain' ), true ) ) {
+				continue;
+			}
+			$sk = isset( $row->source_key ) ? (string) $row->source_key : '';
+			if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk ) ) {
+				if ( isset( $active_keys[ $sk ] ) ) {
+					continue;
+				}
+				$this->db->delete_link( (int) $row->id );
 				continue;
 			}
 			$key = $this->scan_url_key( (string) $row->link_url, $post_id );
@@ -2155,7 +2208,11 @@ class TSOLIIN_Scanner {
 
 	/** @return string[] */
 	private function default_excluded_meta() {
-		return array( '_edit_lock', '_edit_last', '_wp_trash_meta_status', '_wp_trash_meta_time', '_wp_old_slug', '_wp_old_date', '_wp_attachment_metadata', '_wp_attached_file', '_thumbnail_id', '_wp_page_template', '_yoast_wpseo_content_score', '_yoast_wpseo_focuskw', '_yoast_wpseo_metadesc', '_yoast_wpseo_title', '_yoast_wpseo_linkdex', '_rank_math_seo_score', '_rank_math_focus_keyword', '_rank_math_internal_links', '_rank_math_internal_linking_processed', '_wpseo_internal_linking' );
+		$keys = array( '_edit_lock', '_edit_last', '_wp_trash_meta_status', '_wp_trash_meta_time', '_wp_old_slug', '_wp_old_date', '_wp_attachment_metadata', '_wp_attached_file', '_thumbnail_id', '_wp_page_template', '_yoast_wpseo_content_score', '_yoast_wpseo_focuskw', '_yoast_wpseo_metadesc', '_yoast_wpseo_title', '_yoast_wpseo_linkdex', '_rank_math_seo_score', '_rank_math_focus_keyword', '_rank_math_internal_links', '_rank_math_internal_linking_processed', '_wpseo_internal_linking' );
+		if ( class_exists( 'TSOLIIN_WooCommerce', false ) ) {
+			$keys = array_merge( $keys, TSOLIIN_WooCommerce::dedicated_meta_keys() );
+		}
+		return $keys;
 	}
 
 	// -------------------------------------------------------------------------
@@ -2533,6 +2590,17 @@ class TSOLIIN_Scanner {
 			}
 		}
 
+		if ( '' !== $sk && class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk ) ) {
+			$row = $this->db->get_link_by_source_key( $sk, $type, $post_id );
+			if ( $row ) {
+				return $row;
+			}
+			// Legacy download keys hashed the URL; resolve by product prefix + URL after key format change.
+			if ( $post_id > 0 ) {
+				return $this->resolve_row_after_prefix_rescan( $type, 'wc-' . $post_id . '-', $post_id, $old_url, $original );
+			}
+		}
+
 		if ( preg_match( '/^(c-\d+-)/', $sk, $matches ) ) {
 			return $this->resolve_row_after_prefix_rescan( 'comment', $matches[1], $post_id, $old_url, $original );
 		}
@@ -2878,6 +2946,19 @@ class TSOLIIN_Scanner {
 		) {
 			return true;
 		}
+		// Same resource ignoring #fragments (e.g. /page/#section vs /page/).
+		if ( '' !== $stored_abs && '' !== $attr_abs ) {
+			$stored_nof = $this->url_without_fragment( $stored_abs );
+			$attr_nof   = $this->url_without_fragment( $attr_abs );
+			if (
+				'' !== $stored_nof
+				&& '' !== $attr_nof
+				&& class_exists( 'TSOLIIN_HTTP' )
+				&& TSOLIIN_HTTP::is_http_same_resource_bar_www( $stored_nof, $attr_nof )
+			) {
+				return true;
+			}
+		}
 		foreach ( $this->build_url_replace_candidates( $stored, $post_id ) as $variant ) {
 			if ( 0 === strcasecmp( (string) $variant, $attr_value ) ) {
 				return true;
@@ -2888,6 +2969,11 @@ class TSOLIIN_Scanner {
 		if ( $norm_stored === $norm_attr ) {
 			return true;
 		}
+		$norm_stored_nof = $this->normalize_url_for_matching( $this->url_without_fragment( $stored ) );
+		$norm_attr_nof   = $this->normalize_url_for_matching( $this->url_without_fragment( $attr_value ) );
+		if ( '' !== $norm_stored_nof && $norm_stored_nof === $norm_attr_nof ) {
+			return true;
+		}
 		$min = 32;
 		if ( strlen( $norm_stored ) >= $min && 0 === strpos( $norm_attr, $norm_stored ) ) {
 			return true;
@@ -2896,6 +2982,24 @@ class TSOLIIN_Scanner {
 			return true;
 		}
 		return false;
+	}
+
+	/**
+	 * Strip #fragment from a URL for matching.
+	 *
+	 * @param string $url URL.
+	 * @return string
+	 */
+	private function url_without_fragment( $url ) {
+		$url = (string) $url;
+		if ( '' === $url ) {
+			return '';
+		}
+		$hash = strpos( $url, '#' );
+		if ( false === $hash ) {
+			return $url;
+		}
+		return substr( $url, 0, $hash );
 	}
 
 	/**
@@ -3146,8 +3250,20 @@ class TSOLIIN_Scanner {
 			$this->editable_source_cache[ $cache_key ] = $result;
 			return $result;
 		}
+		if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk ) && ! empty( $link->post_id ) ) {
+			$result = TSOLIIN_WooCommerce::product_has_url( (int) $link->post_id, $url );
+			$this->editable_source_cache[ $cache_key ] = $result;
+			return $result;
+		}
 		if ( ! empty( $link->post_id ) ) {
 			$result = $this->is_url_editable_in_post( (int) $link->post_id, $url, $type );
+			// Content may already show the redirect destination (e.g. after a manual edit or Apply).
+			if ( ! $result && ! empty( $link->redirect_url ) ) {
+				$redir = trim( (string) $link->redirect_url );
+				if ( '' !== $redir && $redir !== $url ) {
+					$result = $this->is_url_editable_in_post( (int) $link->post_id, $redir, $type );
+				}
+			}
 			$this->editable_source_cache[ $cache_key ] = $result;
 			return $result;
 		}
@@ -3511,6 +3627,10 @@ class TSOLIIN_Scanner {
 		}
 		if ( $this->replace_url_in_post_meta( $post_id, (string) $old_url, (string) $new_url ) ) {
 			$this->purge_cache( $post_id );
+			return true;
+		}
+		// Target already present (content was updated manually or via a previous apply).
+		if ( $this->is_url_editable_in_post( $post_id, (string) $new_url, 'link' ) ) {
 			return true;
 		}
 		return false;
@@ -4766,6 +4886,66 @@ class TSOLIIN_Scanner {
 		}
 
 		return false;
+	}
+
+	/**
+	 * Unlink a DB row from its post, using redirect_url when the stored URL is already gone.
+	 *
+	 * @param object $link DB link row.
+	 * @return bool
+	 */
+	public function unlink_link_row_in_post( $link ) {
+		if ( ! $link || empty( $link->post_id ) || empty( $link->link_url ) ) {
+			return false;
+		}
+		$type = isset( $link->link_type ) ? (string) $link->link_type : 'link';
+		$url  = (string) $link->link_url;
+		if ( $this->unlink_in_post( (int) $link->post_id, $url, $type ) ) {
+			return true;
+		}
+		if ( ! empty( $link->redirect_url ) ) {
+			$redir = trim( (string) $link->redirect_url );
+			if ( '' !== $redir && $redir !== $url ) {
+				// Only when that destination appears once in the post.
+				if ( 1 === $this->count_href_matches_in_post( (int) $link->post_id, $redir ) ) {
+					return $this->unlink_in_post( (int) $link->post_id, $redir, $type );
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Count &lt;a href&gt; (and similar) attributes in a post that match a URL.
+	 *
+	 * @param int    $post_id Post ID.
+	 * @param string $url     URL to match.
+	 * @return int
+	 */
+	public function count_href_matches_in_post( $post_id, $url ) {
+		$post_id = absint( $post_id );
+		$url     = (string) $url;
+		if ( $post_id <= 0 || '' === $url ) {
+			return 0;
+		}
+		$post = get_post( $post_id );
+		if ( ! $post || ! is_string( $post->post_content ) || '' === $post->post_content ) {
+			return 0;
+		}
+		$content = (string) $post->post_content;
+		$count   = 0;
+		if ( preg_match_all(
+			'#<(?:a|img|iframe|source|video|audio)\b[^>]*\b(?:href|src|data-url|data-href|data-src|data-link)\s*=\s*(["\'])([^"\']*)\1#is',
+			$content,
+			$matches
+		) ) {
+			foreach ( $matches[2] as $attr_val ) {
+				if ( $this->url_attribute_matches_stored( $url, (string) $attr_val, $post_id ) ) {
+					++$count;
+				}
+			}
+		}
+		return $count;
 	}
 
 	/**

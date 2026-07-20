@@ -1941,6 +1941,15 @@ msgstr "Abre el editor de taxonomías de este enlace"
 msgid "Edit menu links in Appearance > Menus using Go to edit."
 msgstr "Edita los enlaces del menú en Apariencia > Menús con Ir a editar."
 
+msgid "Menu links cannot be updated from suggestions. Change the URL in Appearance > Menus using Go to edit."
+msgstr "Los enlaces de menú no se pueden actualizar desde las sugerencias. Cambia la URL en Apariencia > Menús con Ir a editar."
+
+msgid "WooCommerce product field URLs cannot be updated from suggestions. Change them in the product editor using Go to edit."
+msgstr "Las URL de los campos de producto de WooCommerce no se pueden actualizar desde las sugerencias. Cámbialas en el editor de producto con Ir a editar."
+
+msgid "Edit WooCommerce product URLs in the product editor using Go to edit."
+msgstr "Edita las URL del producto de WooCommerce en el editor de producto con Ir a editar."
+
 msgid "Edit term description links in the taxonomy editor using Go to edit."
 msgstr "Edita los enlaces de la descripción del término en el editor de taxonomías con Ir a editar."
 
@@ -2055,8 +2064,8 @@ msgstr "Se muestran %1$d de %2$d enlaces. Exporta CSV para la lista completa o a
 msgid "Large report: printing may take a while in the browser."
 msgstr "Informe grande: imprimir puede tardar un poco en el navegador."
 
-msgid "This URL is not stored in editable post content. Open the post in the editor to change it, then run Scan again."
-msgstr "Esta URL no está en el contenido editable de la entrada. Abre la entrada en el editor para cambiarla y vuelve a escanear."
+msgid "This URL is not stored in editable post content (it may already have been changed in the editor). Use Recheck or Scan to refresh the list, Delete to remove only this inspector record, or open the post and edit the link there."
+msgstr "Esta URL no está en el contenido editable de la entrada (puede que ya se haya cambiado en el editor). Usa Recomprobar o Escanear para actualizar la lista, Eliminar para quitar solo este registro del inspector, o abre la entrada y edita el enlace allí."
 
 msgid "Unverifiable (site blocks bots)"
 msgstr "No verificable (el sitio bloquea bots)"
@@ -2140,3 +2149,48 @@ msgstr "Las claves internas de WordPress (p. ej. Yoast, Rank Math) se excluyen s
 
 msgid "Removed from list — link no longer found in content."
 msgstr "Eliminado de la lista: el enlace ya no está en el contenido."
+
+msgid "Products with issues"
+msgstr "Productos con problemas"
+
+msgid "WooCommerce"
+msgstr "WooCommerce"
+
+msgid "Scan WooCommerce products (external URL, downloadable files, featured image, gallery)"
+msgstr "Escanear productos WooCommerce (URL externa, archivos descargables, imagen destacada, galería)"
+
+msgid "Off by default. When enabled, products are included in Scan now and a Products with issues view appears on the main screen. Edit those fields in the product editor (Go to edit)."
+msgstr "Desactivado por defecto. Si se activa, los productos se incluyen en Escanear ahora y aparece la vista Productos con problemas. Edita esos campos en el editor del producto (Ir a editar)."
+
+msgid "WooCommerce products"
+msgstr "Productos WooCommerce"
+
+msgid "Enable WooCommerce scanning in Settings to check external product URLs, downloadable files, and gallery images. Then use Products with issues on the main screen."
+msgstr "Activa el escaneo WooCommerce en Ajustes para comprobar URLs externas de producto, archivos descargables e imágenes de galería. Luego usa Productos con problemas en la pantalla principal."
+
+msgid "WooCommerce products sorted by broken links, then redirects. Click a title to review and fix links in that product."
+msgstr "Productos WooCommerce ordenados por enlaces rotos y luego redirecciones. Haz clic en el título para revisar y corregir los enlaces de ese producto."
+
+msgid "Product"
+msgstr "Producto"
+
+msgid "No products with broken or redirected links."
+msgstr "No hay productos con enlaces rotos o con redirección."
+
+msgid "WooCommerce: External product URL"
+msgstr "WooCommerce: URL externa del producto"
+
+msgid "WooCommerce: Downloadable file"
+msgstr "WooCommerce: Archivo descargable"
+
+msgid "WooCommerce download: %s"
+msgstr "Descarga WooCommerce: %s"
+
+msgid "WooCommerce: Featured image"
+msgstr "WooCommerce: Imagen destacada"
+
+msgid "WooCommerce: Gallery image"
+msgstr "WooCommerce: Imagen de galería"
+
+msgid "Open the WooCommerce product editor"
+msgstr "Abrir el editor del producto WooCommerce"

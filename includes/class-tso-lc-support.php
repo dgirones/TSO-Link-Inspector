@@ -118,6 +118,10 @@ class TSOLIIN_Support {
 		if ( ! $link || empty( $link->link_type ) ) {
 			return false;
 		}
+		$sk = isset( $link->source_key ) ? (string) $link->source_key : '';
+		if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk ) ) {
+			return false;
+		}
 		$cache_key = self::link_row_cache_key( $link );
 		if ( '' !== $cache_key && array_key_exists( $cache_key, self::$inline_edit_link_cache ) ) {
 			return self::$inline_edit_link_cache[ $cache_key ];
@@ -128,6 +132,23 @@ class TSOLIIN_Support {
 			self::$inline_edit_link_cache[ $cache_key ] = $result;
 		}
 		return $result;
+	}
+
+	/**
+	 * Whether the list table should offer Go to edit for a WooCommerce product field.
+	 *
+	 * @param object|null $link DB link row.
+	 * @return bool
+	 */
+	public static function shows_woocommerce_admin_edit_action( $link ) {
+		if ( ! $link || empty( $link->post_id ) ) {
+			return false;
+		}
+		$sk = isset( $link->source_key ) ? (string) $link->source_key : '';
+		if ( ! class_exists( 'TSOLIIN_WooCommerce', false ) || ! TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk ) ) {
+			return false;
+		}
+		return TSOLIIN_WooCommerce::is_product( (int) $link->post_id );
 	}
 
 	/**
@@ -319,6 +340,10 @@ class TSOLIIN_Support {
 	 */
 	public static function should_focus_link_in_post_content( $link ) {
 		if ( ! $link ) {
+			return false;
+		}
+		$sk = isset( $link->source_key ) ? (string) $link->source_key : '';
+		if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk ) ) {
 			return false;
 		}
 		$type = isset( $link->link_type ) ? (string) $link->link_type : 'link';

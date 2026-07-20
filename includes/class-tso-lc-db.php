@@ -241,6 +241,66 @@ class TSOLIIN_DB {
 			return false;
 		}
 
+		// Stable source_key (menus, WooCommerce fields): match by key and update URL in place.
+		if ( '' !== $source_key ) {
+			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$by_key = $wpdb->get_row(
+				$wpdb->prepare(
+					// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+					"SELECT id, anchor_text, link_url FROM {$this->table} WHERE post_id = %d AND source_key = %s LIMIT 1",
+					$post_id,
+					$source_key
+				)
+			);
+			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			if ( $by_key ) {
+				$anchor_to_store = $anchor;
+				if ( '' === $anchor && '' !== trim( (string) $by_key->anchor_text ) ) {
+					$anchor_to_store = (string) $by_key->anchor_text;
+				}
+				$url_changed = (string) $by_key->link_url !== $link_url;
+				if ( $url_changed ) {
+					// Same reset as update_link_url(): new URL needs a fresh HTTP check.
+					// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+					$wpdb->update(
+						$this->table,
+						array(
+							'link_url'                 => $link_url,
+							'anchor_text'              => $anchor_to_store,
+							'link_type'                => $link_type,
+							'status_code'              => 0,
+							'redirect_url'             => '',
+							'is_broken'                => 0,
+							'last_checked'             => null,
+							'consecutive_failures'     => 0,
+							'user_verified'            => 0,
+							'verify_baseline_link'     => '',
+							'verify_baseline_redirect' => '',
+						),
+						array( 'id' => absint( $by_key->id ) ),
+						array( '%s', '%s', '%s', '%d', '%s', '%d', '%s', '%d', '%d', '%s', '%s' ),
+						array( '%d' )
+					);
+					// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+					self::clear_stats_cache();
+					return absint( $by_key->id );
+				}
+				// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+				$wpdb->update(
+					$this->table,
+					array(
+						'anchor_text' => $anchor_to_store,
+						'link_type'   => $link_type,
+					),
+					array( 'id' => absint( $by_key->id ) ),
+					array( '%s', '%s' ),
+					array( '%d' )
+				);
+				// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+				return absint( $by_key->id );
+			}
+		}
+
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$existing = $wpdb->get_var(
 			$wpdb->prepare(
@@ -1386,15 +1446,28 @@ class TSOLIIN_DB {
 		$this->maybe_cleanup_transparent_redirects();
 
 		$defaults = array(
-			'per_page' => 20,
-			'paged'    => 1,
+			'per_page'          => 20,
+			'paged'             => 1,
+			'post_type'         => '',
+			'exclude_post_type' => '',
 		);
 		$args     = wp_parse_args( $args, $defaults );
 		$per_page = max( 1, absint( $args['per_page'] ) );
 		$offset   = ( max( 1, absint( $args['paged'] ) ) - 1 ) * $per_page;
+		$post_type = sanitize_key( (string) $args['post_type'] );
+		$exclude_post_type = sanitize_key( (string) $args['exclude_post_type'] );
 
 		$having    = 'HAVING broken > 0 OR redirect_count > 0 OR unchecked_count > 0';
-		$base_from = "FROM {$this->table} l INNER JOIN {$wpdb->posts} p ON p.ID = l.post_id WHERE l.post_id > 0 AND p.post_status != 'trash' GROUP BY l.post_id, p.post_title";
+		$type_sql  = '';
+		$type_args = array();
+		if ( '' !== $post_type && post_type_exists( $post_type ) ) {
+			$type_sql    = ' AND p.post_type = %s';
+			$type_args[] = $post_type;
+		} elseif ( '' !== $exclude_post_type && post_type_exists( $exclude_post_type ) ) {
+			$type_sql    = ' AND p.post_type != %s';
+			$type_args[] = $exclude_post_type;
+		}
+		$base_from = "FROM {$this->table} l INNER JOIN {$wpdb->posts} p ON p.ID = l.post_id WHERE l.post_id > 0 AND p.post_status != 'trash'{$type_sql} GROUP BY l.post_id, p.post_title";
 		$select_agg = "SELECT l.post_id, p.post_title,
 			COUNT(*) AS total_links,
 			SUM(CASE WHEN l.is_broken = 1 AND l.user_verified = 0 THEN 1 ELSE 0 END) AS broken,
@@ -1407,16 +1480,22 @@ class TSOLIIN_DB {
 			{$base_from}
 			{$having}
 		) AS tsoliin_post_summary";
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Static aggregate subquery; table from prefix.
-		$total = (int) $wpdb->get_var( $count_inner );
+		if ( ! empty( $type_args ) ) {
+			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Aggregate; post_type via prepare().
+			$total = (int) $wpdb->get_var( $wpdb->prepare( $count_inner, ...$type_args ) );
+		} else {
+			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Static aggregate subquery; table from prefix.
+			$total = (int) $wpdb->get_var( $count_inner );
+		}
 
 		$items_sql = "{$select_agg}
 			{$base_from}
 			{$having}
 			ORDER BY broken DESC, redirect_count DESC, total_links DESC
 			LIMIT %d OFFSET %d";
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Static aggregate; LIMIT/OFFSET via prepare().
-		$items = $wpdb->get_results( $wpdb->prepare( $items_sql, $per_page, $offset ) );
+		$prepare_args = array_merge( $type_args, array( $per_page, $offset ) );
+		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Static aggregate; LIMIT/OFFSET/post_type via prepare().
+		$items = $wpdb->get_results( $wpdb->prepare( $items_sql, ...$prepare_args ) );
 		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 
 		return array(

@@ -29,6 +29,10 @@
 		searchTimer   : null,
 		searchXhr     : null,
 		lastSearchVal : '',
+		suggestXhr      : null,
+		suggestTrigger  : null,
+		suggestRequestId: 0,
+		listReloadTimer : null,
 
 		/**
 		 * Escape text for safe HTML insertion.
@@ -698,9 +702,22 @@
 		 * @param {number} delay Ms before reload (lets the user read a short message).
 		 */
 		scheduleListReload: function ( delay ) {
-			setTimeout( function () {
+			var self = this;
+			self.cancelListReload();
+			self.listReloadTimer = window.setTimeout( function () {
+				self.listReloadTimer = null;
 				window.location.reload();
 			}, delay || 1200 );
+		},
+
+		/**
+		 * Cancel a pending full-page list reload (e.g. user starts another action).
+		 */
+		cancelListReload: function () {
+			if ( this.listReloadTimer ) {
+				window.clearTimeout( this.listReloadTimer );
+				this.listReloadTimer = null;
+			}
 		},
 
 		countListRows: function () {
@@ -738,11 +755,9 @@
 				if ( skipReload ) {
 					return;
 				}
-				if ( 'all' !== ( tsoliinData.listFilter || 'all' ) || tsoliinData.listQualityFilter ) {
-					self.scheduleListReload( 800 );
-				} else {
-					self.maybeReloadEmptyList();
-				}
+				// Do not full-reload the page here: it aborts in-flight Suggest/Apply on the next row.
+				// Stats tabs refresh via refreshStats(); reload only when the list is empty.
+				self.maybeReloadEmptyList();
 			} );
 			return true;
 		},
@@ -1562,12 +1577,47 @@
 		smartSuggest: function ( linkId, $trigger ) {
 			var self    = this;
 			var $row    = $trigger.closest( 'tr' );
+			var linkType = String( $trigger.data( 'link-type' ) || '' );
+			self.cancelListReload();
 			self.removeSuggestPanelsForRow( $row );
+
+			// Navigation menu items: explain where to edit; do not search alternatives.
+			if ( 'menu' === linkType ) {
+				var colsMenu = $row.find( 'td' ).length;
+				var noteMenu = ( tsoliinData.i18n.menuSuggestNote )
+					? tsoliinData.i18n.menuSuggestNote
+					: tsoliinData.i18n.noSuggestions;
+				var htmlMenu = '<tr class="tsoliin-suggest-row" data-link-id="' + linkId + '"><td colspan="' + colsMenu + '" class="tsoliin-suggest-panel">';
+				htmlMenu += '<div class="notice notice-info inline" style="margin:0;"><p style="margin:0.5em 0;">' + self.escapeHtml( noteMenu ) + '</p></div>';
+				htmlMenu += '<button type="button" class="tsoliin-suggest-close button-link" aria-label="' + self.escapeHtml( tsoliinData.i18n.closePanel ) + '">✕</button>';
+				htmlMenu += '</td></tr>';
+				$row.after( htmlMenu );
+				return;
+			}
+
+			// WooCommerce product fields: same — edit in the product screen only.
+			if ( 'woocommerce' === linkType ) {
+				var colsWoo = $row.find( 'td' ).length;
+				var noteWoo = ( tsoliinData.i18n.wooSuggestNote )
+					? tsoliinData.i18n.wooSuggestNote
+					: tsoliinData.i18n.noSuggestions;
+				var htmlWoo = '<tr class="tsoliin-suggest-row" data-link-id="' + linkId + '"><td colspan="' + colsWoo + '" class="tsoliin-suggest-panel">';
+				htmlWoo += '<div class="notice notice-info inline" style="margin:0;"><p style="margin:0.5em 0;">' + self.escapeHtml( noteWoo ) + '</p></div>';
+				htmlWoo += '<button type="button" class="tsoliin-suggest-close button-link" aria-label="' + self.escapeHtml( tsoliinData.i18n.closePanel ) + '">✕</button>';
+				htmlWoo += '</td></tr>';
+				$row.after( htmlWoo );
+				return;
+			}
 
 			if ( self.suggestXhr && self.suggestXhr.readyState !== 4 ) {
 				self.suggestXhr.abort();
+				if ( self.suggestTrigger && self.suggestTrigger.length && self.suggestTrigger[0] !== $trigger[0] ) {
+					self.suggestTrigger.html( '💡 ' + tsoliinData.i18n.smartSuggest );
+				}
 			}
 
+			self.suggestTrigger   = $trigger;
+			self.suggestRequestId = linkId;
 			$trigger.text( tsoliinData.i18n.smartChecking );
 
 			self.suggestXhr = $.ajax( {
@@ -1576,6 +1626,9 @@
 				timeout: 60000,
 				data   : { action: 'tsoliin_smart_suggest', nonce: tsoliinData.nonce, link_id: linkId },
 				success: function ( r ) {
+					if ( self.suggestRequestId !== linkId ) {
+						return;
+					}
 					$trigger.html( '💡 ' + tsoliinData.i18n.smartSuggest );
 
 					var cols = $row.find( 'td' ).length;
@@ -1585,7 +1638,8 @@
 						html += '<span style="color:#b32d2e;">' + self.escapeHtml( ( r.data && r.data.message ) ? r.data.message : tsoliinData.i18n.error ) + '</span>';
 					} else if ( ! r.data.suggestions || ! r.data.suggestions.length ) {
 						if ( r.data.note ) {
-							html += '<div class="notice notice-warning inline" style="margin:0;"><p style="margin:0.5em 0;">' + self.escapeHtml( r.data.note ) + '</p></div>';
+							var noteCls = ( r.data.menu_only || r.data.woo_only ) ? 'notice-info' : 'notice-warning';
+							html += '<div class="notice ' + noteCls + ' inline" style="margin:0;"><p style="margin:0.5em 0;">' + self.escapeHtml( r.data.note ) + '</p></div>';
 						} else {
 							html += '<span style="color:#646970;font-style:italic;">💡 ' + tsoliinData.i18n.noSuggestions + '</span>';
 						}
@@ -1629,20 +1683,31 @@
 
 					html += '<button type="button" class="tsoliin-suggest-close button-link" aria-label="' + self.escapeHtml( tsoliinData.i18n.closePanel ) + '">✕</button>';
 					html += '</td></tr>';
-					$row.after( html );
+					if ( $row.closest( 'body' ).length ) {
+						$row.after( html );
+					}
 				},
 				error: function ( xhr, status ) {
 					if ( 'abort' === status ) {
 						return;
 					}
+					if ( self.suggestRequestId !== linkId ) {
+						return;
+					}
 					$trigger.html( '💡 ' + tsoliinData.i18n.smartSuggest );
 					alert( tsoliinData.i18n.error );
+				},
+				complete: function () {
+					if ( self.suggestRequestId === linkId ) {
+						self.suggestXhr = null;
+					}
 				}
 			} );
 		},
 
 		applySmartUrl: function ( linkId, newUrl, $btn, $row ) {
 			var self = this;
+			self.cancelListReload();
 			$btn.prop( 'disabled', true ).text( tsoliinData.i18n.saving );
 
 			$.ajax( {

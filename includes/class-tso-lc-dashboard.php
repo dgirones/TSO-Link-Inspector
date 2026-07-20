@@ -71,6 +71,9 @@ class TSOLIIN_Dashboard {
 		echo '<p class="tsoliin-dashboard-widget__actions">';
 		echo '<a class="button button-primary" href="' . esc_url( $base ) . '">' . esc_html__( 'Open Link Inspector', 'tso-link-inspector' ) . '</a> ';
 		echo '<a class="button button-secondary" href="' . esc_url( add_query_arg( 'view', 'posts', $base ) ) . '">' . esc_html__( 'Posts with issues', 'tso-link-inspector' ) . '</a>';
+		if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_scan_enabled() ) {
+			echo ' <a class="button button-secondary" href="' . esc_url( add_query_arg( 'view', 'products', $base ) ) . '">' . esc_html__( 'Products with issues', 'tso-link-inspector' ) . '</a>';
+		}
 		echo '</p>';
 		echo '</div>';
 	}

@@ -1797,6 +1797,15 @@ msgstr "Obre l'editor de taxonomies d'aquest enllaç"
 msgid "Edit menu links in Appearance > Menus using Go to edit."
 msgstr "Edita els enllaços del menú a Aparença > Menús amb Anar a editar."
 
+msgid "Menu links cannot be updated from suggestions. Change the URL in Appearance > Menus using Go to edit."
+msgstr "Els enllaços de menú no es poden actualitzar des dels suggeriments. Canvia l'URL a Aparença > Menús amb Anar a editar."
+
+msgid "WooCommerce product field URLs cannot be updated from suggestions. Change them in the product editor using Go to edit."
+msgstr "Les URL dels camps de producte de WooCommerce no es poden actualitzar des dels suggeriments. Canvia-les a l'editor de producte amb Anar a editar."
+
+msgid "Edit WooCommerce product URLs in the product editor using Go to edit."
+msgstr "Edita les URL del producte de WooCommerce a l'editor de producte amb Anar a editar."
+
 msgid "Edit term description links in the taxonomy editor using Go to edit."
 msgstr "Edita els enllaços de la descripció del terme a l'editor de taxonomies amb Anar a editar."
 
@@ -1896,8 +1905,8 @@ msgstr "Es mostren %1$d de %2$d enllaços. Exporta CSV per a la llista completa 
 msgid "Large report: printing may take a while in the browser."
 msgstr "Informe gran: imprimir pot trigar una estona al navegador."
 
-msgid "This URL is not stored in editable post content. Open the post in the editor to change it, then run Scan again."
-msgstr "Aquesta URL no és al contingut editable de l'entrada. Obre l'entrada a l'editor per canviar-la i torna a escanejar."
+msgid "This URL is not stored in editable post content (it may already have been changed in the editor). Use Recheck or Scan to refresh the list, Delete to remove only this inspector record, or open the post and edit the link there."
+msgstr "Aquesta URL no és al contingut editable de l'entrada (potser ja s'ha canviat a l'editor). Usa Recomprovar o Escanejar per actualitzar la llista, Eliminar per treure només aquest registre de l'inspector, o obre l'entrada i edita l'enllaç allà."
 
 msgid "Unverifiable (site blocks bots)"
 msgstr "No verificable (el lloc bloqueja bots)"
@@ -1981,3 +1990,48 @@ msgstr "Les claus internes de WordPress (p. ex. Yoast, Rank Math) s'exclouen sem
 
 msgid "Removed from list — link no longer found in content."
 msgstr "Eliminat de la llista: l'enllaç ja no es troba al contingut."
+
+msgid "Products with issues"
+msgstr "Productes amb problemes"
+
+msgid "WooCommerce"
+msgstr "WooCommerce"
+
+msgid "Scan WooCommerce products (external URL, downloadable files, featured image, gallery)"
+msgstr "Escanejar productes WooCommerce (URL externa, fitxers descarregables, imatge destacada, galeria)"
+
+msgid "Off by default. When enabled, products are included in Scan now and a Products with issues view appears on the main screen. Edit those fields in the product editor (Go to edit)."
+msgstr "Desactivat per defecte. Si s'activa, els productes s'inclouen a Escanejar ara i apareix la vista Productes amb problemes. Edita aquests camps a l'editor del producte (Anar a editar)."
+
+msgid "WooCommerce products"
+msgstr "Productes WooCommerce"
+
+msgid "Enable WooCommerce scanning in Settings to check external product URLs, downloadable files, and gallery images. Then use Products with issues on the main screen."
+msgstr "Activa l'escaneig WooCommerce a Configuració per comprovar URLs externes de producte, fitxers descarregables i imatges de galeria. Després usa Productes amb problemes a la pantalla principal."
+
+msgid "WooCommerce products sorted by broken links, then redirects. Click a title to review and fix links in that product."
+msgstr "Productes WooCommerce ordenats per enllaços trencats i després redireccions. Fes clic al títol per revisar i corregir els enllaços d'aquest producte."
+
+msgid "Product"
+msgstr "Producte"
+
+msgid "No products with broken or redirected links."
+msgstr "No hi ha productes amb enllaços trencats o amb redirecció."
+
+msgid "WooCommerce: External product URL"
+msgstr "WooCommerce: URL externa del producte"
+
+msgid "WooCommerce: Downloadable file"
+msgstr "WooCommerce: Fitxer descarregable"
+
+msgid "WooCommerce download: %s"
+msgstr "Descàrrega WooCommerce: %s"
+
+msgid "WooCommerce: Featured image"
+msgstr "WooCommerce: Imatge destacada"
+
+msgid "WooCommerce: Gallery image"
+msgstr "WooCommerce: Imatge de galeria"
+
+msgid "Open the WooCommerce product editor"
+msgstr "Obrir l'editor del producte WooCommerce"
