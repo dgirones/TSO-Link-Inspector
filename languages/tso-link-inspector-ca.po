@@ -1806,6 +1806,45 @@ msgstr "Les URL dels camps de producte de WooCommerce no es poden actualitzar de
 msgid "Edit WooCommerce product URLs in the product editor using Go to edit."
 msgstr "Edita les URL del producte de WooCommerce a l'editor de producte amb Anar a editar."
 
+msgid "Open this comment in WordPress to edit the URL or text."
+msgstr "Obre aquest comentari a WordPress per editar l'URL o el text."
+
+msgid "Open the widget editor for this sidebar widget."
+msgstr "Obre l'editor de ginys d'aquest giny de la barra lateral."
+
+msgid "Open the WooCommerce product editor. Change external URL, downloads, or images there."
+msgstr "Obre l'editor de producte de WooCommerce. Canvia-hi l'URL externa, les baixades o les imatges."
+
+msgid "Open Appearance → Menus at this item. You can also use Edit link here for custom URLs."
+msgstr "Obre Aparença → Menús a aquest element. També pots usar Editar enllaç aquí per a URL personalitzades."
+
+msgid "Open Appearance → Menus at this item. The URL comes from the linked page/post — edit that content to change it."
+msgstr "Obre Aparença → Menús a aquest element. L'URL ve de la pàgina/entrada enllaçada: edita aquell contingut per canviar-la."
+
+msgid "Open Site Editor → Navigation. To change a custom menu URL, use Edit link here."
+msgstr "Obre l'editor del lloc → Navegació. Per canviar una URL de menú personalitzada, usa Editar enllaç aquí."
+
+msgid "Open Site Editor → Navigation. This item's URL comes from the linked page/post."
+msgstr "Obre l'editor del lloc → Navegació. L'URL d'aquest element ve de la pàgina/entrada enllaçada."
+
+msgid "Open the taxonomy term editor for this description link."
+msgstr "Obre l'editor del terme de taxonomia d'aquest enllaç de descripció."
+
+msgid "Open the editor and scroll to this image or embed."
+msgstr "Obre l'editor i desplaça't fins a aquesta imatge o incrustació."
+
+msgid "Open the editor and scroll to this link."
+msgstr "Obre l'editor i desplaça't fins a aquest enllaç."
+
+msgid "Open the post editor. This URL may be in a custom field or no longer in the content — use Edit link if available, or Delete + Scan if the row is stale."
+msgstr "Obre l'editor de l'entrada. Aquesta URL pot ser a un camp personalitzat o ja no ser al contingut: usa Editar enllaç si està disponible, o Eliminar + Escanejar si la fila està obsoleta."
+
+msgid "Change the URL in the stored source without leaving this screen."
+msgstr "Canvia l'URL a la font emmagatzemada sense sortir d'aquesta pantalla."
+
+msgid "Remove the link (or image) from the source; visible text is kept when it is a text link."
+msgstr "Treu l'enllaç (o la imatge) de la font; el text visible es manté quan és un enllaç de text."
+
 msgid "Edit term description links in the taxonomy editor using Go to edit."
 msgstr "Edita els enllaços de la descripció del terme a l'editor de taxonomies amb Anar a editar."
 
@@ -1913,6 +1952,9 @@ msgstr "No verificable (el lloc bloqueja bots)"
 
 msgid "Canonical HTTPS URL (server cannot verify — check in browser)"
 msgstr "URL HTTPS canònica (el servidor no pot verificar — comprova al navegador)"
+
+msgid "HTTPS available (access restricted to bots/login — confirm in browser)"
+msgstr "HTTPS disponible (accés restringit a bots/login — confirma-ho al navegador)"
 
 msgid "Secure HTTPS canonical URL"
 msgstr "URL HTTPS canònica segura"
@@ -2035,3 +2077,12 @@ msgstr "WooCommerce: Imatge de galeria"
 
 msgid "Open the WooCommerce product editor"
 msgstr "Obrir l'editor del producte WooCommerce"
+
+msgid "Meta field “%s”: "
+msgstr "Camp meta “%s”: "
+
+msgid "This URL is not in the post content (stale list entry). Removed from the list only."
+msgstr "Aquesta URL no és al contingut de l’entrada (registre obsolet). S’ha tret només de la llista."
+
+msgid "Could not remove this URL from the source. Open Go to edit and remove it manually, or use Delete to remove only this list row."
+msgstr "No s’ha pogut treure aquesta URL de la font. Obre Anar a editar i elimina-la a mà, o usa Eliminar per treure només aquesta fila de la llista."

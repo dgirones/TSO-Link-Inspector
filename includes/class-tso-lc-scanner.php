@@ -1693,10 +1693,11 @@ class TSOLIIN_Scanner {
 
 	/**
 	 * Images referenced by Classic Editor [gallery] shortcodes (ids are stored, not <img> URLs).
-	 * Build marker: tsoliin-gallery-shortcode-scan-v2 (line ~1657 must be $size = 'thumbnail';).
+	 * Only explicit ids=/include= are scanned (see get_gallery_shortcode_attachment_ids).
+	 * Build marker: tsoliin-gallery-shortcode-scan-v3.
 	 *
 	 * @param string $content Raw post_content.
-	 * @param int    $post_id Post ID (for [gallery] without ids).
+	 * @param int    $post_id Post ID (API compatibility; bare galleries no longer expand children).
 	 * @return array[]
 	 */
 	private function extract_gallery_shortcode_images( $content, $post_id = 0 ) {
@@ -1739,33 +1740,21 @@ class TSOLIIN_Scanner {
 	/**
 	 * Attachment IDs listed in a [gallery] shortcode attribute set.
 	 *
+	 * Bare [gallery] (no ids/include) intentionally returns no IDs. WordPress would show all
+	 * child attachments, but that pulls every image uploaded while editing the post — even
+	 * when the shortcode was removed or the files never appear in the editor HTML.
+	 *
 	 * @param array $atts    Parsed shortcode attributes.
-	 * @param int   $post_id Parent post when ids are omitted.
+	 * @param int   $post_id Unused (kept for callers); bare galleries do not expand by parent.
 	 * @return int[]
 	 */
 	private function get_gallery_shortcode_attachment_ids( array $atts, $post_id = 0 ) {
+		unset( $post_id );
 		$ids = array();
 		if ( ! empty( $atts['ids'] ) ) {
 			$ids = array_map( 'absint', preg_split( '/\s*,\s*/', (string) $atts['ids'] ) );
 		} elseif ( ! empty( $atts['include'] ) ) {
 			$ids = array_map( 'absint', preg_split( '/\s*,\s*/', (string) $atts['include'] ) );
-		} elseif ( $post_id > 0 ) {
-			$ids = get_posts(
-				array(
-					'post_parent'    => $post_id,
-					'post_type'      => 'attachment',
-					'post_mime_type' => 'image',
-					'posts_per_page' => -1,
-					'post_status'    => 'inherit',
-					'orderby'        => 'menu_order',
-					'order'          => 'ASC',
-					'fields'         => 'ids',
-				)
-			);
-			if ( ! empty( $atts['exclude'] ) ) {
-				$exclude = array_map( 'absint', preg_split( '/\s*,\s*/', (string) $atts['exclude'] ) );
-				$ids     = array_values( array_diff( array_map( 'absint', (array) $ids ), $exclude ) );
-			}
 		}
 		return array_values( array_filter( array_map( 'absint', $ids ) ) );
 	}
@@ -1841,6 +1830,37 @@ class TSOLIIN_Scanner {
 			return false;
 		}
 		return $this->attachment_id_in_classic_gallery_shortcodes( $content, $attachment_id, $post_id );
+	}
+
+	/**
+	 * Opening [gallery …] shortcode that references this media URL (for edit preview).
+	 *
+	 * @param string $content Raw post_content.
+	 * @param string $url     Image URL.
+	 * @param int    $post_id Post ID.
+	 * @return string
+	 */
+	private function extract_gallery_shortcode_snippet_for_url( $content, $url, $post_id = 0 ) {
+		$content       = (string) $content;
+		$attachment_id = TSOLIIN_Support::resolve_attachment_id_from_url( (string) $url );
+		$post_id       = absint( $post_id );
+		if ( '' === $content || $attachment_id <= 0 || false === stripos( $content, '[gallery' ) ) {
+			return '';
+		}
+		if ( ! preg_match_all( '/\[gallery\b([^\]]*)\]/i', $content, $matches ) ) {
+			return '';
+		}
+		foreach ( $matches[0] as $i => $full ) {
+			$atts = shortcode_parse_atts( 'gallery ' . trim( (string) $matches[1][ $i ] ) );
+			if ( ! is_array( $atts ) ) {
+				$atts = array();
+			}
+			$ids = $this->get_gallery_shortcode_attachment_ids( $atts, $post_id );
+			if ( in_array( $attachment_id, $ids, true ) ) {
+				return (string) $full;
+			}
+		}
+		return '';
 	}
 
 	/**
@@ -3440,13 +3460,62 @@ class TSOLIIN_Scanner {
 		if ( '' === $content || '' === $url ) {
 			return false;
 		}
+		// Images must be real markup (img/gallery/block), not a bare URL substring elsewhere in the post
+		// (that caused ghost rows + Unlink failures when no <img> existed).
+		if ( 'image' === (string) $link_type ) {
+			if ( '' !== $this->extract_matching_tag_snippet( $content, $url, $post_id, 'src' ) ) {
+				return true;
+			}
+			if ( $this->url_in_classic_gallery_shortcode( $content, $url, $post_id ) ) {
+				return true;
+			}
+			return $this->url_in_gutenberg_media_block( $content, $url, $post_id );
+		}
 		if ( $this->url_located_in_string( $content, $url, $post_id ) ) {
 			return true;
 		}
-		if ( 'image' === (string) $link_type && $this->url_in_classic_gallery_shortcode( $content, $url, $post_id ) ) {
-			return true;
-		}
 		return $this->url_in_gutenberg_media_block( $content, $url, $post_id );
+	}
+
+	/**
+	 * Whether the post contains markup Unlink can remove (img / a / iframe / gallery ids).
+	 *
+	 * @param int    $post_id   Post ID.
+	 * @param string $url       Stored URL.
+	 * @param string $link_type link|image|iframe.
+	 * @return bool
+	 */
+	public function post_has_unlinkable_markup( $post_id, $url, $link_type = 'link' ) {
+		$post_id   = absint( $post_id );
+		$url       = (string) $url;
+		$link_type = sanitize_key( (string) $link_type );
+		if ( $post_id <= 0 || '' === $url ) {
+			return false;
+		}
+		$post = get_post( $post_id );
+		if ( ! $post || ! is_string( $post->post_content ) ) {
+			return false;
+		}
+		$content = (string) $post->post_content;
+		if ( 'image' === $link_type ) {
+			if ( '' !== $this->extract_matching_tag_snippet( $content, $url, $post_id, 'src' ) ) {
+				return true;
+			}
+			$attachment_id = TSOLIIN_Support::resolve_attachment_id_from_url( $url );
+			if ( $attachment_id > 0 && preg_match(
+				'#<img\b[^>]*\bclass=(["\'])[^"\']*\bwp-image-' . preg_quote( (string) $attachment_id, '#' ) . '\b[^"\']*\1#i',
+				$content
+			) ) {
+				return true;
+			}
+			return $this->url_in_classic_gallery_shortcode( $content, $url, $post_id )
+				|| $this->url_in_gutenberg_media_block( $content, $url, $post_id );
+		}
+		if ( 'iframe' === $link_type ) {
+			return '' !== $this->extract_matching_tag_snippet( $content, $url, $post_id, 'src' );
+		}
+		return '' !== $this->extract_matching_tag_snippet( $content, $url, $post_id, 'href' )
+			|| '' !== $this->extract_matching_tag_snippet( $content, $url, $post_id, 'src' );
 	}
 
 	/**
@@ -3760,7 +3829,8 @@ class TSOLIIN_Scanner {
 	private function replace_plain_url_in_text( $content, $old_url, $new_url, $post_id = 0 ) {
 		$content = (string) $content;
 		$new_url = $this->clean_url( (string) $new_url );
-		if ( '' === $content || '' === $new_url ) {
+		// Allow empty $new_url when clearing a meta-only / plain URL (unlink).
+		if ( '' === $content ) {
 			return null;
 		}
 
@@ -4038,8 +4108,18 @@ class TSOLIIN_Scanner {
 		if ( '' === $before ) {
 			$meta = $this->locate_url_in_post_meta( $post_id, (string) $old_url );
 			if ( ! empty( $meta['found'] ) ) {
-				$before = (string) $meta['snippet'];
+				$snippet = (string) $meta['snippet'];
+				$field   = isset( $meta['field_key'] ) ? (string) $meta['field_key'] : '';
+				if ( '' !== $field ) {
+					/* translators: %s: post meta field key */
+					$before = sprintf( __( 'Meta field “%s”: ', 'tso-link-inspector' ), $field ) . $snippet;
+				} else {
+					$before = $snippet;
+				}
 			}
+		}
+		if ( '' === $before && 'image' === (string) $link_type ) {
+			$before = $this->extract_gallery_shortcode_snippet_for_url( $content, (string) $old_url, $post_id );
 		}
 		if ( '' === $before ) {
 			return array(
@@ -5176,11 +5256,47 @@ class TSOLIIN_Scanner {
 			if ( '' !== $redir && $redir !== $url ) {
 				// Only when that destination appears once in the post.
 				if ( 1 === $this->count_href_matches_in_post( (int) $link->post_id, $redir ) ) {
-					return $this->unlink_in_post( (int) $link->post_id, $redir, $type );
+					if ( $this->unlink_in_post( (int) $link->post_id, $redir, $type ) ) {
+						return true;
+					}
 				}
 			}
 		}
+		// URL only in post meta (e.g. social/SEO image) — clear it from meta.
+		if ( $this->replace_url_in_post_meta( (int) $link->post_id, $url, '' ) ) {
+			$this->purge_cache( (int) $link->post_id );
+			return true;
+		}
 		return false;
+	}
+
+	/**
+	 * Whether an inspector row is a ghost: not removable markup and not in scannable meta.
+	 * Safe to drop from the list without changing the post.
+	 *
+	 * @param object $link DB link row.
+	 * @return bool
+	 */
+	public function is_orphan_post_link_row( $link ) {
+		if ( ! $link || empty( $link->post_id ) || empty( $link->link_url ) ) {
+			return false;
+		}
+		$type = isset( $link->link_type ) ? (string) $link->link_type : 'link';
+		if ( ! in_array( $type, array( 'link', 'image', 'iframe', 'plain' ), true ) ) {
+			return false;
+		}
+		$url     = (string) $link->link_url;
+		$post_id = (int) $link->post_id;
+		if ( $this->post_has_unlinkable_markup( $post_id, $url, $type ) ) {
+			return false;
+		}
+		if ( $this->is_url_in_post_body( $post_id, $url, $type ) ) {
+			return false;
+		}
+		if ( ! empty( $this->locate_url_in_post_meta( $post_id, $url )['found'] ) ) {
+			return false;
+		}
+		return true;
 	}
 
 	/**

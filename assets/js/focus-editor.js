@@ -58,6 +58,20 @@
 		return el.value;
 	}
 
+	function looksLikeUrlNeedle( value ) {
+		var v = String( value || '' ).trim();
+		if ( ! v || v.length < 8 ) {
+			return false;
+		}
+		// Path basename alone (e.g. "shortcodes") must not match body text.
+		if ( /^[a-z0-9._-]+$/i.test( v ) && v.indexOf( '.' ) === -1 ) {
+			return false;
+		}
+		return /^(?:https?:|\/\/|\/|\.\/|\.\.\/|#)/i.test( v )
+			|| /\.(?:jpe?g|png|gif|webp|avif|svg|bmp|ico)(?:\?|$)/i.test( v )
+			|| v.indexOf( '/' ) !== -1;
+	}
+
 	function buildSearchVariants( data ) {
 		var out  = [];
 		var seen = {};
@@ -73,7 +87,9 @@
 				}
 			} );
 		}
-		if ( data.fileName ) {
+		// File basename is only useful for media (src/srcset), never as a text/href needle
+		// for normal links — e.g. URL …/shortcodes/ must not highlight the word "shortcodes".
+		if ( data.fileName && ( data.linkType === 'image' || data.linkType === 'iframe' ) ) {
 			var fileNames = [ data.fileName ];
 			try {
 				fileNames.push( decodeURIComponent( data.fileName ) );
@@ -88,6 +104,10 @@
 			} );
 		}
 		return out;
+	}
+
+	function buildPlainTextVariants( searchVariants ) {
+		return ( searchVariants || [] ).filter( looksLikeUrlNeedle );
 	}
 
 	function findIndexInsensitive( haystack, needles ) {
@@ -240,11 +260,20 @@
 		if ( ! ed || ! img ) {
 			return false;
 		}
-		ed.focus();
+		try {
+			ed.focus( { preventScroll: true } );
+		} catch ( err ) {
+			try {
+				ed.focus();
+			} catch ( err2 ) {}
+		}
 		if ( ed.selection && ed.selection.select ) {
 			try {
 				ed.selection.select( img );
-			} catch ( err ) {}
+				if ( ed.selection.scrollIntoView ) {
+					ed.selection.scrollIntoView( img );
+				}
+			} catch ( err3 ) {}
 		}
 		return highlightElement( img );
 	}
@@ -271,37 +300,250 @@
 		return docs;
 	}
 
+	/**
+	 * Scroll so `el` is visible in the admin window.
+	 * TinyMCE Visual mode puts content in an iframe: element.scrollIntoView only
+	 * moves the iframe document (often with no scrollbar) and leaves the WP page at the top.
+	 *
+	 * @param {Element} el Target node (may live inside TinyMCE iframe).
+	 */
+	function scrollElementIntoAdminView( el ) {
+		if ( ! el || ! el.getBoundingClientRect ) {
+			return;
+		}
+
+		try {
+			el.scrollIntoView( { behavior: 'auto', block: 'center', inline: 'nearest' } );
+		} catch ( err ) {
+			try {
+				el.scrollIntoView( true );
+			} catch ( err2 ) {}
+		}
+
+		var rect = el.getBoundingClientRect();
+		var topInParent = rect.top;
+		var doc = el.ownerDocument;
+		var win = doc && ( doc.defaultView || doc.parentWindow );
+
+		if ( win && win !== window ) {
+			var frameEl = null;
+			try {
+				frameEl = win.frameElement;
+			} catch ( err3 ) {
+				frameEl = null;
+			}
+			if ( ! frameEl ) {
+				frameEl = document.getElementById( 'content_ifr' );
+			}
+			if ( frameEl && frameEl.getBoundingClientRect ) {
+				var frameRect = frameEl.getBoundingClientRect();
+				topInParent = frameRect.top + rect.top;
+			}
+		}
+
+		var absoluteTop = topInParent + window.pageYOffset;
+		var pad = Math.max( 96, Math.floor( window.innerHeight / 4 ) );
+		var target = Math.max( 0, absoluteTop - pad );
+
+		window.scrollTo( 0, target );
+		if ( document.documentElement ) {
+			document.documentElement.scrollTop = target;
+		}
+		if ( document.body ) {
+			document.body.scrollTop = target;
+		}
+
+		// Keep the editor chrome on screen too.
+		try {
+			var box = document.getElementById( 'postdivrich' ) || document.getElementById( 'wp-content-editor-container' );
+			if ( box ) {
+				var boxRect = box.getBoundingClientRect();
+				if ( boxRect.top > window.innerHeight - 80 || boxRect.bottom < 80 ) {
+					// Element scroll already set; nothing else.
+				}
+			}
+		} catch ( err4 ) {}
+	}
+
 	function highlightElement( el ) {
 		if ( ! el ) {
 			return false;
 		}
 		el.classList.add( 'tsoliin-link-focus' );
-		el.scrollIntoView( { behavior: 'smooth', block: 'center' } );
+		scrollElementIntoAdminView( el );
+		// TinyMCE / admin layout settle — re-scroll a few times.
+		[ 50, 200, 500, 1000 ].forEach( function ( delay ) {
+			window.setTimeout( function () {
+				scrollElementIntoAdminView( el );
+			}, delay );
+		} );
 		focused = true;
 		blockFocusPending = false;
 		return true;
+	}
+
+	/**
+	 * Pixel height of textarea content from start through character `index`.
+	 *
+	 * @param {HTMLTextAreaElement} textarea Source (styles/width).
+	 * @param {number}              index    Character offset.
+	 * @return {number}
+	 */
+	function measureTextareaPrefixHeight( textarea, index ) {
+		var value = textarea.value || '';
+		index = Math.max( 0, Math.min( index, value.length ) );
+		if ( textarea.clientWidth < 40 ) {
+			return 0;
+		}
+
+		var clone = document.createElement( 'textarea' );
+		var style = window.getComputedStyle( textarea );
+		var props = [
+			'boxSizing', 'fontFamily', 'fontSize', 'fontWeight', 'fontStyle',
+			'letterSpacing', 'lineHeight', 'textTransform', 'wordSpacing', 'textIndent',
+			'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+			'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
+			'borderTopStyle', 'borderRightStyle', 'borderBottomStyle', 'borderLeftStyle',
+			'whiteSpace', 'wordWrap', 'overflowWrap', 'tabSize', 'MozTabSize',
+		];
+		var i;
+		for ( i = 0; i < props.length; i++ ) {
+			try {
+				clone.style[ props[ i ] ] = style[ props[ i ] ];
+			} catch ( err ) {}
+		}
+		clone.setAttribute( 'rows', '1' );
+		clone.style.position = 'absolute';
+		clone.style.left = '-99999px';
+		clone.style.top = '0';
+		clone.style.height = '1px';
+		clone.style.minHeight = '0';
+		clone.style.maxHeight = 'none';
+		clone.style.overflow = 'hidden';
+		clone.style.visibility = 'hidden';
+		clone.style.whiteSpace = style.whiteSpace || 'pre-wrap';
+		clone.style.width = textarea.clientWidth + 'px';
+		clone.value = value.substring( 0, index );
+		document.body.appendChild( clone );
+		var h = clone.scrollHeight;
+		document.body.removeChild( clone );
+		return h;
+	}
+
+	/**
+	 * Reveal character `index` in a textarea: scroll the textarea when it has an
+	 * internal scrollbar, otherwise scroll the admin page (Classic Text mode often
+	 * expands #content so scrollTop does nothing).
+	 *
+	 * @param {HTMLTextAreaElement} textarea Target textarea.
+	 * @param {number}              index    Character offset to reveal.
+	 * @return {boolean}
+	 */
+	function scrollTextareaToIndex( textarea, index ) {
+		if ( ! textarea ) {
+			return false;
+		}
+		var value = textarea.value || '';
+		index = Math.max( 0, Math.min( index, value.length ) );
+
+		if ( textarea.clientWidth < 40 || textarea.clientHeight < 20 ) {
+			return false;
+		}
+
+		var contentHeight = measureTextareaPrefixHeight( textarea, index );
+		if ( contentHeight <= 0 && index > 0 ) {
+			return false;
+		}
+
+		var pad = Math.max( 48, Math.floor( Math.min( textarea.clientHeight, window.innerHeight ) / 4 ) );
+		var canScrollInner = textarea.scrollHeight > textarea.clientHeight + 4;
+
+		if ( canScrollInner ) {
+			textarea.scrollTop = Math.max( 0, contentHeight - pad );
+		}
+
+		// Caret Y in document coordinates.
+		var rect = textarea.getBoundingClientRect();
+		var caretFromTextareaTop = canScrollInner
+			? ( contentHeight - textarea.scrollTop )
+			: contentHeight;
+		// Clamp to visible box when inner-scrolled (caret should sit near pad).
+		if ( canScrollInner ) {
+			caretFromTextareaTop = Math.min( Math.max( caretFromTextareaTop, 0 ), textarea.clientHeight );
+		}
+		var caretPageY = rect.top + window.pageYOffset + caretFromTextareaTop;
+		var target = Math.max( 0, caretPageY - pad );
+
+		window.scrollTo( 0, target );
+		if ( document.documentElement ) {
+			document.documentElement.scrollTop = target;
+		}
+		if ( document.body ) {
+			document.body.scrollTop = target;
+		}
+
+		return true;
+	}
+
+	/**
+	 * Select URL in textarea and keep retrying scroll until layout is ready (Text tab switch).
+	 *
+	 * @param {HTMLTextAreaElement} textarea Target.
+	 * @param {number}              start    Selection start.
+	 * @param {number}              end      Selection end.
+	 */
+	function selectAndScrollTextarea( textarea, start, end ) {
+		if ( ! textarea ) {
+			return;
+		}
+		var apply = function () {
+			if ( typeof textarea.focus === 'function' ) {
+				try {
+					textarea.focus( { preventScroll: true } );
+				} catch ( err ) {
+					textarea.focus();
+				}
+			}
+			if ( typeof textarea.setSelectionRange === 'function' ) {
+				textarea.setSelectionRange( start, end );
+			}
+			scrollTextareaToIndex( textarea, start );
+			if ( typeof textarea.setSelectionRange === 'function' ) {
+				textarea.setSelectionRange( start, end );
+			}
+		};
+		apply();
+		[ 50, 150, 350, 700, 1200, 2000, 3000 ].forEach( function ( delay ) {
+			window.setTimeout( apply, delay );
+		} );
 	}
 
 	function selectInTextarea( textarea, searchVariants ) {
 		if ( ! textarea ) {
 			return false;
 		}
-		var hit = findIndexInsensitive( textarea.value || '', searchVariants );
+		var needles = buildPlainTextVariants( searchVariants );
+		if ( ! needles.length ) {
+			needles = searchVariants;
+		}
+		var hit = findIndexInsensitive( textarea.value || '', needles );
 		if ( ! hit ) {
 			return false;
 		}
-		textarea.focus();
-		if ( typeof textarea.setSelectionRange === 'function' ) {
-			textarea.setSelectionRange( hit.index, hit.index + hit.match.length );
-		}
-		var content = textarea.value || '';
-		textarea.scrollTop = Math.max(
-			0,
-			( hit.index / Math.max( content.length, 1 ) ) * textarea.scrollHeight - textarea.clientHeight / 2
-		);
+		selectAndScrollTextarea( textarea, hit.index, hit.index + hit.match.length );
 		textarea.classList.add( 'tsoliin-link-focus' );
 		focused = true;
 		return true;
+	}
+
+	/**
+	 * Select in Classic #content only when the Text tab is active (otherwise the user stays on Visual at the top).
+	 */
+	function focusInClassicHtmlTextarea( searchVariants ) {
+		if ( ! isClassicHtmlMode() ) {
+			return false;
+		}
+		return selectInTextarea( getClassicContentTextarea(), searchVariants );
 	}
 
 	function findCodeTextarea() {
@@ -538,11 +780,83 @@
 		return null;
 	}
 
+	function normalizeUrlForMatch( url ) {
+		var value = String( url || '' ).trim();
+		if ( ! value ) {
+			return '';
+		}
+		try {
+			var parsed = new URL( value, window.location.href );
+			return parsed.href.replace( /\/$/, '' );
+		} catch ( e ) {
+			return value.replace( /\/$/, '' );
+		}
+	}
+
+	function urlValuesEqual( attrValue, variant ) {
+		if ( ! attrValue || ! variant ) {
+			return false;
+		}
+		if ( attrValue === variant ) {
+			return true;
+		}
+		if ( normalizeUrlForMatch( attrValue ) === normalizeUrlForMatch( variant ) ) {
+			return true;
+		}
+		try {
+			return decodeURIComponent( attrValue ) === decodeURIComponent( variant );
+		} catch ( e ) {
+			return false;
+		}
+	}
+
+	/**
+	 * Match an attribute value to URL variants (exact / normalized), not raw substring.
+	 * Avoids treating path basenames like "shortcodes" as a hit inside any href.
+	 */
 	function urlMatchesVariants( value, searchVariants ) {
 		if ( ! value ) {
 			return false;
 		}
-		return haystackContainsVariant( String( value ), searchVariants );
+		var val = String( value );
+		var i;
+		for ( i = 0; i < searchVariants.length; i++ ) {
+			var variant = searchVariants[ i ];
+			if ( ! variant || ! looksLikeUrlNeedle( variant ) ) {
+				continue;
+			}
+			if ( urlValuesEqual( val, variant ) ) {
+				return true;
+			}
+			// Allow filename / size variants inside src or srcset only via longer needles.
+			if ( variant.length >= 12 && val.toLowerCase().indexOf( String( variant ).toLowerCase() ) !== -1 ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	function findElementByUrlAttrs( root, data, searchVariants ) {
+		if ( ! root || ! root.querySelectorAll ) {
+			return null;
+		}
+		var attrs = ( data && Array.isArray( data.attrs ) && data.attrs.length )
+			? data.attrs
+			: [ 'href', 'src' ];
+		var a;
+		var j;
+		for ( a = 0; a < attrs.length; a++ ) {
+			var attr  = attrs[ a ];
+			var nodes = root.querySelectorAll( '[' + attr + ']' );
+			for ( j = 0; j < nodes.length; j++ ) {
+				var node = nodes[ j ];
+				var val  = node.getAttribute( attr );
+				if ( urlMatchesVariants( val, searchVariants ) ) {
+					return node;
+				}
+			}
+		}
+		return null;
 	}
 
 	function findImageInBlockElement( blockEl, data, searchVariants ) {
@@ -583,6 +897,10 @@
 	}
 
 	function highlightPlainTextInRoot( root, searchVariants ) {
+		var textVariants = buildPlainTextVariants( searchVariants );
+		if ( ! textVariants.length ) {
+			return null;
+		}
 		var doc      = getDocumentFromRoot( root );
 		var treeRoot = root && root.nodeType === 9 ? root.body : root;
 		if ( ! doc || ! doc.createTreeWalker || ! treeRoot ) {
@@ -597,13 +915,17 @@
 					if ( ! parent || parent.closest( 'script,style,noscript,.tsoliin-link-focus' ) ) {
 						return NodeFilter.FILTER_REJECT;
 					}
+					// Prefer attribute matching for real links; do not mark text inside <a href>.
+					if ( parent.closest( 'a[href]' ) ) {
+						return NodeFilter.FILTER_REJECT;
+					}
 					return NodeFilter.FILTER_ACCEPT;
 				},
 			}
 		);
 		var node;
 		while ( ( node = walker.nextNode() ) ) {
-			var hit = findIndexInsensitive( node.textContent || '', searchVariants );
+			var hit = findIndexInsensitive( node.textContent || '', textVariants );
 			if ( ! hit ) {
 				continue;
 			}
@@ -629,6 +951,10 @@
 				var tile = mediaEl.closest( '.tiled-gallery__item, .blocks-gallery-item, .wp-block-image, figure' );
 				return highlightElement( tile || mediaEl );
 			}
+		}
+		var byAttr = findElementByUrlAttrs( blockEl, data, searchVariants );
+		if ( byAttr ) {
+			return highlightElement( byAttr );
 		}
 		var editable = blockEl.querySelector( '[contenteditable="true"], .block-editor-rich-text__editable' );
 		var mark     = highlightPlainTextInRoot( editable || blockEl, searchVariants );
@@ -720,6 +1046,25 @@
 		}
 		var linkType       = data && data.linkType ? data.linkType : '';
 		var preferGallery  = isClassicGalleryFocus( data );
+		var focusTiny      = function ( node ) {
+			if ( node && node.tagName && node.tagName.toLowerCase() === 'img' ) {
+				return selectImageInTinyMce( ed, node );
+			}
+			try {
+				ed.focus( { preventScroll: true } );
+			} catch ( errF ) {
+				try {
+					ed.focus();
+				} catch ( errF2 ) {}
+			}
+			try {
+				ed.selection.select( node );
+				if ( ed.selection.scrollIntoView ) {
+					ed.selection.scrollIntoView( node );
+				}
+			} catch ( errSel ) {}
+			return highlightElement( node );
+		};
 		if ( linkType === 'image' || linkType === 'iframe' ) {
 			var attachmentId = parseInt( data.attachmentId, 10 ) || 0;
 			var images       = doc.body.querySelectorAll( 'img' );
@@ -731,38 +1076,189 @@
 				target = pickImageByUrl( images, searchVariants, preferGallery );
 			}
 			if ( target ) {
-				return selectImageInTinyMce( ed, target );
+				return focusTiny( target );
 			}
 			if ( preferGallery ) {
 				var galleryRoot = doc.body.querySelector( '.gallery' );
 				if ( galleryRoot ) {
-					return highlightElement( galleryRoot );
+					return focusTiny( galleryRoot );
 				}
 			}
 		}
-		var el = highlightPlainTextInRoot( doc.body, searchVariants );
-		if ( ! el ) {
+
+		// Prefer the real <a href> / src node — never the first body word matching a path segment.
+		var byAttr = findElementByUrlAttrs( doc.body, data, searchVariants );
+		if ( byAttr ) {
+			try {
+				ed.focus( { preventScroll: true } );
+			} catch ( errFocus ) {
+				try {
+					ed.focus();
+				} catch ( errFocus2 ) {}
+			}
+			try {
+				ed.selection.select( byAttr );
+				if ( ed.selection.scrollIntoView ) {
+					ed.selection.scrollIntoView( byAttr );
+				}
+			} catch ( err ) {}
+			return highlightElement( byAttr );
+		}
+
+		if ( linkType === 'plain' || ( data && data.attrs && ! data.attrs.length ) ) {
+			var el = highlightPlainTextInRoot( doc.body, searchVariants );
+			if ( el ) {
+				try {
+					ed.focus( { preventScroll: true } );
+				} catch ( errFocus3 ) {
+					try {
+						ed.focus();
+					} catch ( errFocus4 ) {}
+				}
+				return highlightElement( el );
+			}
+		}
+		return false;
+	}
+
+	function getClassicContentTextarea() {
+		return document.getElementById( 'content' );
+	}
+
+	function isClassicHtmlMode() {
+		var wrap = document.getElementById( 'wp-content-wrap' );
+		return !!( wrap && wrap.classList.contains( 'html-active' ) );
+	}
+
+	/**
+	 * Switch Classic Editor to the Text tab so shortcode/plain URLs are visible and selectable.
+	 *
+	 * @param {Function} callback Runs after the tab switch (or immediately if already on Text).
+	 */
+	function switchClassicToHtmlMode( callback ) {
+		if ( typeof callback !== 'function' ) {
+			return;
+		}
+		if ( isClassicHtmlMode() ) {
+			callback();
+			return;
+		}
+		// Prefer WP's switchEditors so TinyMCE syncs content into #content first.
+		if ( typeof window.switchEditors !== 'undefined' && typeof window.switchEditors.go === 'function' ) {
+			try {
+				window.switchEditors.go( 'content', 'html' );
+			} catch ( err ) {
+				var tab = document.getElementById( 'content-html' );
+				if ( tab ) {
+					tab.click();
+				}
+			}
+		} else {
+			var htmlTab = document.getElementById( 'content-html' );
+			if ( htmlTab ) {
+				htmlTab.click();
+			}
+		}
+		window.setTimeout( callback, 500 );
+	}
+
+	/**
+	 * Whether #content or TinyMCE currently holds any search needle (URL may only exist as shortcode text).
+	 */
+	function classicContentHasNeedle( searchVariants ) {
+		var ta = getClassicContentTextarea();
+		if ( ta && haystackContainsVariant( ta.value || '', searchVariants ) ) {
+			return true;
+		}
+		if ( typeof window.tinymce !== 'undefined' ) {
+			var ed = window.tinymce.get( 'content' );
+			if ( ed && ed.getContent ) {
+				try {
+					if ( haystackContainsVariant( ed.getContent( { format: 'raw' } ) || '', searchVariants ) ) {
+						return true;
+					}
+					if ( haystackContainsVariant( ed.getContent() || '', searchVariants ) ) {
+						return true;
+					}
+				} catch ( err ) {}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Classic Editor: switch to Text tab and select the URL (shortcodes / plain text).
+	 * Returns true when focused, or when a tab switch was scheduled (retries finish the job).
+	 */
+	function focusClassicViaHtmlTab( searchVariants ) {
+		if ( isClassicHtmlMode() ) {
+			return focusInClassicHtmlTextarea( searchVariants );
+		}
+		if ( ! classicContentHasNeedle( searchVariants ) && codeModeTried ) {
 			return false;
 		}
-		ed.focus();
-		return highlightElement( el );
+		if ( codeModeTried ) {
+			// Switch already requested — keep trying select once Text is active.
+			return focusInClassicHtmlTextarea( searchVariants );
+		}
+		codeModeTried = true;
+		var attemptSelect = function () {
+			if ( focused ) {
+				return;
+			}
+			if ( ! isClassicHtmlMode() ) {
+				switchClassicToHtmlMode( attemptSelect );
+				return;
+			}
+			if ( focusInClassicHtmlTextarea( searchVariants ) ) {
+				return;
+			}
+			// Content may sync a moment after the tab switch.
+			window.setTimeout( function () {
+				focusInClassicHtmlTextarea( searchVariants );
+			}, 400 );
+			window.setTimeout( function () {
+				focusInClassicHtmlTextarea( searchVariants );
+			}, 900 );
+		};
+		switchClassicToHtmlMode( attemptSelect );
+		return true;
 	}
 
 	function tryClassicEditorFocus( data, searchVariants ) {
 		if ( focusMetaField( data, searchVariants ) ) {
 			return true;
 		}
-		var isMedia = data.linkType === 'image' || data.linkType === 'iframe';
+
+		var preferText = data && ( data.linkType === 'plain' || data.preferTextMode === 1 || data.preferTextMode === true );
+		var isMedia    = data.linkType === 'image' || data.linkType === 'iframe';
+
+		// Plain / shortcode-attribute URLs: always Text tab (Visual cannot select shortcode source).
+		if ( preferText ) {
+			if ( focusClassicViaHtmlTab( searchVariants ) ) {
+				return true;
+			}
+			return false;
+		}
+
 		if ( isMedia ) {
 			ensureClassicVisualEditorMode();
 		}
+
 		if ( focusInTinyMce( searchVariants, data ) ) {
 			return true;
 		}
-		if ( isMedia || ! shouldAllowCodeMode( data ) ) {
+
+		if ( isMedia ) {
 			return false;
 		}
-		return selectInTextarea( findCodeTextarea() || document.getElementById( 'content' ), searchVariants );
+
+		// Hyperlink not found visually (e.g. only inside a shortcode url="…") — Text tab.
+		if ( focusClassicViaHtmlTab( searchVariants ) ) {
+			return true;
+		}
+
+		return false;
 	}
 
 	function tryFocus() {
@@ -867,11 +1363,12 @@
 		if ( blockEditor ) {
 			ensureVisualEditorMode( data );
 		}
+		var preferText = data.linkType === 'plain' || data.preferTextMode === 1 || data.preferTextMode === true;
 		var runFocus = function () {
 			if ( tryFocus() ) {
 				return;
 			}
-			var delays = [ 400, 900, 1500, 2500, 4000, 6000 ];
+			var delays = preferText ? [ 200, 500, 900, 1500, 2500, 4000, 6000 ] : [ 400, 900, 1500, 2500, 4000, 6000 ];
 			var i;
 			for ( i = 0; i < delays.length; i++ ) {
 				window.setTimeout( tryFocus, delays[ i ] );
@@ -883,6 +1380,8 @@
 		if ( ! blockEditor ) {
 			if ( data.linkType === 'image' || data.linkType === 'iframe' ) {
 				ensureClassicVisualEditorMode();
+			} else if ( preferText ) {
+				runFocus();
 			}
 			whenTinyMceReady( runFocus );
 		} else {

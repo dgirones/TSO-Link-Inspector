@@ -1950,6 +1950,45 @@ msgstr "Las URL de los campos de producto de WooCommerce no se pueden actualizar
 msgid "Edit WooCommerce product URLs in the product editor using Go to edit."
 msgstr "Edita las URL del producto de WooCommerce en el editor de producto con Ir a editar."
 
+msgid "Open this comment in WordPress to edit the URL or text."
+msgstr "Abre este comentario en WordPress para editar la URL o el texto."
+
+msgid "Open the widget editor for this sidebar widget."
+msgstr "Abre el editor de widgets de este widget de la barra lateral."
+
+msgid "Open the WooCommerce product editor. Change external URL, downloads, or images there."
+msgstr "Abre el editor de producto de WooCommerce. Cambia allí la URL externa, las descargas o las imágenes."
+
+msgid "Open Appearance → Menus at this item. You can also use Edit link here for custom URLs."
+msgstr "Abre Apariencia → Menús en este elemento. También puedes usar Editar enlace aquí para URL personalizadas."
+
+msgid "Open Appearance → Menus at this item. The URL comes from the linked page/post — edit that content to change it."
+msgstr "Abre Apariencia → Menús en este elemento. La URL viene de la página/entrada enlazada: edita ese contenido para cambiarla."
+
+msgid "Open Site Editor → Navigation. To change a custom menu URL, use Edit link here."
+msgstr "Abre el editor del sitio → Navegación. Para cambiar una URL de menú personalizada, usa Editar enlace aquí."
+
+msgid "Open Site Editor → Navigation. This item's URL comes from the linked page/post."
+msgstr "Abre el editor del sitio → Navegación. La URL de este elemento viene de la página/entrada enlazada."
+
+msgid "Open the taxonomy term editor for this description link."
+msgstr "Abre el editor del término de taxonomía de este enlace de descripción."
+
+msgid "Open the editor and scroll to this image or embed."
+msgstr "Abre el editor y desplázate hasta esta imagen o incrustación."
+
+msgid "Open the editor and scroll to this link."
+msgstr "Abre el editor y desplázate hasta este enlace."
+
+msgid "Open the post editor. This URL may be in a custom field or no longer in the content — use Edit link if available, or Delete + Scan if the row is stale."
+msgstr "Abre el editor de la entrada. Esta URL puede estar en un campo personalizado o ya no estar en el contenido: usa Editar enlace si está disponible, o Eliminar + Escanear si la fila está obsoleta."
+
+msgid "Change the URL in the stored source without leaving this screen."
+msgstr "Cambia la URL en la fuente almacenada sin salir de esta pantalla."
+
+msgid "Remove the link (or image) from the source; visible text is kept when it is a text link."
+msgstr "Quita el enlace (o la imagen) de la fuente; el texto visible se mantiene cuando es un enlace de texto."
+
 msgid "Edit term description links in the taxonomy editor using Go to edit."
 msgstr "Edita los enlaces de la descripción del término en el editor de taxonomías con Ir a editar."
 
@@ -2073,6 +2112,9 @@ msgstr "No verificable (el sitio bloquea bots)"
 msgid "Canonical HTTPS URL (server cannot verify — check in browser)"
 msgstr "URL HTTPS canónica (el servidor no puede verificar — comprueba en el navegador)"
 
+msgid "HTTPS available (access restricted to bots/login — confirm in browser)"
+msgstr "HTTPS disponible (acceso restringido a bots/login — confirma en el navegador)"
+
 msgid "Secure HTTPS canonical URL"
 msgstr "URL HTTPS canónica segura"
 
@@ -2194,3 +2236,12 @@ msgstr "WooCommerce: Imagen de galería"
 
 msgid "Open the WooCommerce product editor"
 msgstr "Abrir el editor del producto WooCommerce"
+
+msgid "Meta field “%s”: "
+msgstr "Campo meta “%s”: "
+
+msgid "This URL is not in the post content (stale list entry). Removed from the list only."
+msgstr "Esta URL no está en el contenido de la entrada (registro obsoleto). Se ha quitado solo de la lista."
+
+msgid "Could not remove this URL from the source. Open Go to edit and remove it manually, or use Delete to remove only this list row."
+msgstr "No se ha podido quitar esta URL de la fuente. Abre Ir a editar y elimínala a mano, o usa Eliminar para quitar solo esta fila de la lista."
