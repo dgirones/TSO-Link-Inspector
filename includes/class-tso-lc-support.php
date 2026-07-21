@@ -477,6 +477,21 @@ class TSOLIIN_Support {
 
 		$attachment_id = self::resolve_attachment_id_from_url( $url );
 
+		$classic_gallery = false;
+		if ( $post instanceof WP_Post && 'image' === $link_type && $attachment_id > 0 ) {
+			$scanner = function_exists( 'tsoliin_link_inspector' ) ? tsoliin_link_inspector()->scanner : null;
+			if ( $scanner && method_exists( $scanner, 'get_classic_gallery_focus_needle' ) ) {
+				$gallery_needle = $scanner->get_classic_gallery_focus_needle( $post->post_content, $attachment_id, $post_id );
+				if ( '' !== $gallery_needle ) {
+					$classic_gallery = true;
+					$in_post_content = true;
+					if ( '' === $content_needle ) {
+						$content_needle = $gallery_needle;
+					}
+				}
+			}
+		}
+
 		$is_block_editor = self::post_uses_block_editor( $post );
 
 		return array(
@@ -489,6 +504,7 @@ class TSOLIIN_Support {
 			'attachmentId'    => $attachment_id,
 			'fileName'        => self::file_name_from_url( $url ),
 			'isBlockEditor'   => $is_block_editor ? 1 : 0,
+			'classicGallery'  => $classic_gallery ? 1 : 0,
 		);
 	}
 

@@ -151,6 +151,104 @@
 		visualModeEnsured = true;
 	}
 
+	function ensureClassicVisualEditorMode() {
+		if ( visualModeEnsured ) {
+			return;
+		}
+		if ( typeof window.switchEditors !== 'undefined' && window.switchEditors.go ) {
+			try {
+				window.switchEditors.go( 'tmce' );
+			} catch ( err ) {}
+			visualModeEnsured = true;
+			return;
+		}
+		var visualTab = document.getElementById( 'content-tmce' );
+		if ( visualTab ) {
+			visualTab.click();
+			visualModeEnsured = true;
+		}
+	}
+
+	function isClassicGalleryFocus( data ) {
+		return !! ( data && ( data.classicGallery === 1 || data.classicGallery === true ) );
+	}
+
+	function imageMatchesAttachmentId( img, attachmentId ) {
+		if ( ! img || attachmentId <= 0 ) {
+			return false;
+		}
+		if ( parseInt( img.getAttribute( 'data-id' ), 10 ) === attachmentId ) {
+			return true;
+		}
+		if ( parseInt( img.getAttribute( 'data-attachment-id' ), 10 ) === attachmentId ) {
+			return true;
+		}
+		if ( parseInt( img.getAttribute( 'data-wp-image' ), 10 ) === attachmentId ) {
+			return true;
+		}
+		var className = img.getAttribute( 'class' ) || '';
+		var pattern   = new RegExp( '(?:^|\\s)wp-image-' + attachmentId + '(?:\\s|$)' );
+		return pattern.test( className );
+	}
+
+	function pickImageByAttachment( images, attachmentId, preferGallery ) {
+		var galleryMatch = null;
+		var anyMatch     = null;
+		var i;
+		for ( i = 0; i < images.length; i++ ) {
+			if ( ! imageMatchesAttachmentId( images[ i ], attachmentId ) ) {
+				continue;
+			}
+			if ( images[ i ].closest( '.gallery, .wp-block-gallery' ) ) {
+				galleryMatch = images[ i ];
+				if ( preferGallery ) {
+					return galleryMatch;
+				}
+			}
+			if ( ! anyMatch ) {
+				anyMatch = images[ i ];
+			}
+		}
+		return ( preferGallery && galleryMatch ) ? galleryMatch : anyMatch;
+	}
+
+	function pickImageByUrl( images, searchVariants, preferGallery ) {
+		var galleryMatch = null;
+		var anyMatch     = null;
+		var i;
+		for ( i = 0; i < images.length; i++ ) {
+			var candidate = images[ i ];
+			var src       = candidate.getAttribute( 'src' ) || '';
+			var srcset    = candidate.getAttribute( 'srcset' ) || '';
+			if ( ! urlMatchesVariants( src, searchVariants ) && ! urlMatchesVariants( srcset, searchVariants ) ) {
+				continue;
+			}
+			if ( candidate.closest( '.gallery, .wp-block-gallery' ) ) {
+				galleryMatch = candidate;
+				if ( preferGallery ) {
+					return galleryMatch;
+				}
+			}
+			if ( ! anyMatch ) {
+				anyMatch = candidate;
+			}
+		}
+		return ( preferGallery && galleryMatch ) ? galleryMatch : anyMatch;
+	}
+
+	function selectImageInTinyMce( ed, img ) {
+		if ( ! ed || ! img ) {
+			return false;
+		}
+		ed.focus();
+		if ( ed.selection && ed.selection.select ) {
+			try {
+				ed.selection.select( img );
+			} catch ( err ) {}
+		}
+		return highlightElement( img );
+	}
+
 	function getDocumentFromRoot( root ) {
 		if ( ! root ) {
 			return null;
@@ -458,8 +556,7 @@
 		if ( attachmentId > 0 ) {
 			for ( i = 0; i < images.length; i++ ) {
 				var img = images[ i ];
-				if ( parseInt( img.getAttribute( 'data-id' ), 10 ) === attachmentId
-					|| parseInt( img.getAttribute( 'data-attachment-id' ), 10 ) === attachmentId ) {
+				if ( imageMatchesAttachmentId( img, attachmentId ) ) {
 					return img;
 				}
 			}
@@ -621,29 +718,25 @@
 		if ( ! doc || ! doc.body ) {
 			return false;
 		}
-		var linkType = data && data.linkType ? data.linkType : '';
+		var linkType       = data && data.linkType ? data.linkType : '';
+		var preferGallery  = isClassicGalleryFocus( data );
 		if ( linkType === 'image' || linkType === 'iframe' ) {
 			var attachmentId = parseInt( data.attachmentId, 10 ) || 0;
 			var images       = doc.body.querySelectorAll( 'img' );
-			var i;
+			var target       = null;
 			if ( attachmentId > 0 ) {
-				for ( i = 0; i < images.length; i++ ) {
-					var img = images[ i ];
-					if ( parseInt( img.getAttribute( 'data-id' ), 10 ) === attachmentId
-						|| parseInt( img.getAttribute( 'data-attachment-id' ), 10 ) === attachmentId
-						|| parseInt( img.getAttribute( 'data-wp-image' ), 10 ) === attachmentId ) {
-						ed.focus();
-						return highlightElement( img );
-					}
-				}
+				target = pickImageByAttachment( images, attachmentId, preferGallery );
 			}
-			for ( i = 0; i < images.length; i++ ) {
-				var candidate = images[ i ];
-				var src       = candidate.getAttribute( 'src' ) || '';
-				var srcset    = candidate.getAttribute( 'srcset' ) || '';
-				if ( urlMatchesVariants( src, searchVariants ) || urlMatchesVariants( srcset, searchVariants ) ) {
-					ed.focus();
-					return highlightElement( candidate );
+			if ( ! target ) {
+				target = pickImageByUrl( images, searchVariants, preferGallery );
+			}
+			if ( target ) {
+				return selectImageInTinyMce( ed, target );
+			}
+			if ( preferGallery ) {
+				var galleryRoot = doc.body.querySelector( '.gallery' );
+				if ( galleryRoot ) {
+					return highlightElement( galleryRoot );
 				}
 			}
 		}
@@ -659,8 +752,15 @@
 		if ( focusMetaField( data, searchVariants ) ) {
 			return true;
 		}
+		var isMedia = data.linkType === 'image' || data.linkType === 'iframe';
+		if ( isMedia ) {
+			ensureClassicVisualEditorMode();
+		}
 		if ( focusInTinyMce( searchVariants, data ) ) {
 			return true;
+		}
+		if ( isMedia || ! shouldAllowCodeMode( data ) ) {
+			return false;
 		}
 		return selectInTextarea( findCodeTextarea() || document.getElementById( 'content' ), searchVariants );
 	}
@@ -781,6 +881,9 @@
 			}
 		};
 		if ( ! blockEditor ) {
+			if ( data.linkType === 'image' || data.linkType === 'iframe' ) {
+				ensureClassicVisualEditorMode();
+			}
 			whenTinyMceReady( runFocus );
 		} else {
 			runFocus();
