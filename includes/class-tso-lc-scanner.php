@@ -3412,6 +3412,42 @@ class TSOLIIN_Scanner {
 	}
 
 	/**
+	 * Exact [gallery] shortcode substring in post_content for editor focus (Classic Editor).
+	 *
+	 * @param string $content       Raw post_content.
+	 * @param int    $attachment_id Attachment post ID.
+	 * @param int    $post_id       Parent post ID.
+	 * @return string Full shortcode when the attachment is listed in ids/include.
+	 */
+	public function get_classic_gallery_focus_needle( $content, $attachment_id, $post_id = 0 ) {
+		$content       = (string) $content;
+		$attachment_id = absint( $attachment_id );
+		$post_id       = absint( $post_id );
+		if ( '' === $content || $attachment_id <= 0 || false === stripos( $content, '[gallery' ) ) {
+			return '';
+		}
+		if ( ! preg_match_all( '/\[gallery\b[^\]]*\]/i', $content, $matches, PREG_OFFSET_CAPTURE ) ) {
+			return '';
+		}
+		foreach ( $matches[0] as $match ) {
+			$shortcode = (string) $match[0];
+			$attr_string = '';
+			if ( preg_match( '/\[gallery\b([^\]]*)\]/i', $shortcode, $parts ) ) {
+				$attr_string = (string) $parts[1];
+			}
+			$atts = shortcode_parse_atts( 'gallery ' . trim( $attr_string ) );
+			if ( ! is_array( $atts ) ) {
+				$atts = array();
+			}
+			$ids = $this->get_gallery_shortcode_attachment_ids( $atts, $post_id );
+			if ( in_array( $attachment_id, $ids, true ) ) {
+				return $shortcode;
+			}
+		}
+		return '';
+	}
+
+	/**
 	 * @param string $content   Raw post_content.
 	 * @param string $url       Stored URL.
 	 * @param string $link_type link|image|iframe.
