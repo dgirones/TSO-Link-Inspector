@@ -386,129 +386,47 @@ class TSOLIIN_List_Table extends WP_List_Table {
 		$sk_item = isset( $item->source_key ) ? (string) $item->source_key : '';
 		$is_woo_source = class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk_item );
 		$not_broken_title = __( 'Mark as OK: moves this link to Manual locks. Background checks still run; it returns to Broken/Redirect only if the URL or redirect changes, or a check finds it broken.', 'tso-link-inspector' );
-		$actions = array();
 
-		$open_href = TSOLIIN_HTTP::resolve_link_open_url( $url );
-		if ( '' !== $open_href ) {
-			$actions['open'] = sprintf(
-				'<a href="%s" target="_blank" rel="noopener noreferrer">%s</a>',
-				esc_url( $open_href ),
-				esc_html__( 'Open URL', 'tso-link-inspector' )
-			);
-		}
-
-		$actions['recheck']    = sprintf( '<a href="#" class="tsoliin-recheck" data-id="%d" data-nonce="%s">%s</a>', absint( $item->id ), esc_attr( $nonce ), esc_html__( 'Recheck', 'tso-link-inspector' ) );
-		$actions['not_broken'] = sprintf( '<a href="#" class="tsoliin-not-broken" data-id="%d" data-nonce="%s" title="%s" style="color:#0a7d33;font-weight:600;">%s</a>', absint( $item->id ), esc_attr( $nonce ), esc_attr( $not_broken_title ), esc_html__( 'Not broken', 'tso-link-inspector' ) );
 		$can_inline = ( 'comment' === $type ) ? true : TSOLIIN_Support::can_inline_edit_link( $item );
 		// Custom menu URLs (_menu_item_url) can be edited/suggested here; post_type menu items cannot.
 		$can_edit   = $can_inline && (
 			! in_array( $type, array( 'comment', 'widget', 'menu', 'term' ), true )
 			|| ( 'menu' === $type && TSOLIIN_Support::is_custom_menu_url_row( $item ) )
 		);
-		$can_unlink = $can_inline && ( 'menu' !== $type || TSOLIIN_Support::is_custom_menu_url_row( $item ) );
-		if ( TSOLIIN_Support::shows_comment_admin_edit_action( $item ) ) {
-			$actions = array_merge(
-				array(
-					'source_edit' => sprintf(
-						'<a href="%s" target="_blank" rel="noopener noreferrer">%s</a>',
-						esc_url( TSOLIIN_Support::get_comment_admin_edit_url( TSOLIIN_Support::get_comment_id_from_link_row( $item ) ) ),
-						esc_html__( 'Go to edit comment', 'tso-link-inspector' )
-					),
-				),
-				$actions
+		$can_unlink = TSOLIIN_Support::can_unlink_link( $item ) && (
+			'menu' !== $type || TSOLIIN_Support::is_custom_menu_url_row( $item )
+		);
+
+		/*
+		 * Unified action order (always when present):
+		 * 1 Go to edit → 2 Edit link → 3 Recheck → 4 Not broken → 5 Unlink → 6 Delete → 7 Ignore domain
+		 * Particularities (Convert to /path after Edit; Suggestion at end) only when applicable.
+		 */
+		$actions = array();
+
+		$go_edit = TSOLIIN_Support::get_go_to_edit_row_action( $item );
+		if ( is_array( $go_edit ) && ! empty( $go_edit['url'] ) ) {
+			$actions['source_edit'] = sprintf(
+				'<a href="%s" target="_blank" rel="noopener noreferrer" title="%s">%s</a>',
+				esc_url( (string) $go_edit['url'] ),
+				esc_attr( isset( $go_edit['title'] ) ? (string) $go_edit['title'] : '' ),
+				esc_html( isset( $go_edit['label'] ) ? (string) $go_edit['label'] : __( 'Go to edit', 'tso-link-inspector' ) )
 			);
 		}
-		if ( TSOLIIN_Support::shows_widget_admin_edit_action( $item ) ) {
-			$sk = isset( $item->source_key ) ? (string) $item->source_key : '';
-			$actions = array_merge(
-				array(
-					'source_edit' => sprintf(
-						'<a href="%s" target="_blank" rel="noopener noreferrer" title="%s">%s</a>',
-						esc_url( TSOLIIN_Support::get_widgets_admin_edit_url( $sk ) ),
-						esc_attr__( 'Open the widget editor for this sidebar widget', 'tso-link-inspector' ),
-						esc_html__( 'Go to edit', 'tso-link-inspector' )
-					),
-				),
-				$actions
-			);
-		}
-		if ( TSOLIIN_Support::shows_woocommerce_admin_edit_action( $item ) ) {
-			$product_edit = TSOLIIN_Support::get_post_admin_edit_url_for_link( $item );
-			if ( '' !== $product_edit ) {
-				$actions = array_merge(
-					array(
-						'source_edit' => sprintf(
-							'<a href="%s" target="_blank" rel="noopener noreferrer" title="%s">%s</a>',
-							esc_url( $product_edit ),
-							esc_attr__( 'Open the WooCommerce product editor', 'tso-link-inspector' ),
-							esc_html__( 'Go to edit', 'tso-link-inspector' )
-						),
-					),
-					$actions
-				);
-			}
-		}
-		if ( ( 'menu' === $type || 'term' === $type ) && ( 'menu' !== $type || TSOLIIN_Support::shows_menu_admin_go_to_edit_action( $item ) ) ) {
-			$source_edit = TSOLIIN_Support::get_link_source_edit_url( $item );
-			if ( '' !== $source_edit ) {
-				$source_edit_title = 'menu' === $type
-					? (
-						TSOLIIN_Support::classic_nav_menus_admin_available()
-							? __( 'Open the classic menu editor (Appearance → Menus)', 'tso-link-inspector' )
-							: __( 'Open Site Editor → Navigation (block theme). For custom menu URLs, use Edit link to change the URL here.', 'tso-link-inspector' )
-					)
-					: __( 'Open the taxonomy editor for this link', 'tso-link-inspector' );
-				$actions = array_merge(
-					array(
-						'source_edit' => sprintf(
-							'<a href="%s" target="_blank" rel="noopener noreferrer" title="%s">%s</a>',
-							esc_url( $source_edit ),
-							esc_attr( $source_edit_title ),
-							esc_html__( 'Go to edit', 'tso-link-inspector' )
-						),
-					),
-					$actions
-				);
-			}
-		}
+
 		if ( $can_edit ) {
 			$anchor_editable = TSOLIIN_Support::can_edit_link_anchor_in_modal( $item ) ? '1' : '0';
-			$actions = array_merge(
-				array(
-					'edit' => sprintf(
-						'<a href="#" class="tsoliin-edit-link" data-id="%d" data-url="%s" data-post="%d" data-anchor="%s" data-type="%s" data-anchor-editable="%s">%s</a>',
-						absint( $item->id ),
-						esc_attr( $url ),
-						absint( $item->post_id ),
-						esc_attr( (string) $item->anchor_text ),
-						esc_attr( $type ),
-						esc_attr( $anchor_editable ),
-						esc_html__( 'Edit link', 'tso-link-inspector' )
-					),
-				),
-				$actions
+			$actions['edit'] = sprintf(
+				'<a href="#" class="tsoliin-edit-link" data-id="%d" data-url="%s" data-post="%d" data-anchor="%s" data-type="%s" data-anchor-editable="%s" title="%s">%s</a>',
+				absint( $item->id ),
+				esc_attr( $url ),
+				absint( $item->post_id ),
+				esc_attr( (string) $item->anchor_text ),
+				esc_attr( $type ),
+				esc_attr( $anchor_editable ),
+				esc_attr__( 'Change the URL in the stored source without leaving this screen.', 'tso-link-inspector' ),
+				esc_html__( 'Edit link', 'tso-link-inspector' )
 			);
-			if ( in_array( $type, array( 'image', 'iframe' ), true ) && ! empty( $item->post_id ) ) {
-				$editor_deep = TSOLIIN_Support::get_post_admin_edit_url_for_link( $item );
-				if ( '' !== $editor_deep ) {
-					$focus = TSOLIIN_Support::should_focus_link_in_post_content( $item );
-					$actions = array_merge(
-						array(
-							'source_edit' => sprintf(
-								'<a href="%s" target="_blank" rel="noopener noreferrer" title="%s">%s</a>',
-								esc_url( $editor_deep ),
-								esc_attr(
-									$focus
-										? __( 'Open the editor and scroll to this link', 'tso-link-inspector' )
-										: __( 'Open the post editor. This URL may be in a custom field or no longer in the content — use Edit link, or Delete + Scan if it is a stale row.', 'tso-link-inspector' )
-								),
-								esc_html__( 'Go to edit', 'tso-link-inspector' )
-							),
-						),
-						$actions
-					);
-				}
-			}
 			if ( TSOLIIN_Support::is_relative_url_tool_enabled() && TSOLIIN_HTTP::can_convert_to_relative_url( $url ) ) {
 				$actions['make_relative'] = sprintf(
 					'<a href="#" class="tsoliin-make-relative" data-id="%d" data-nonce="%s" title="%s">%s</a>',
@@ -519,10 +437,14 @@ class TSOLIIN_List_Table extends WP_List_Table {
 				);
 			}
 		}
+
+		$actions['recheck']    = sprintf( '<a href="#" class="tsoliin-recheck" data-id="%d" data-nonce="%s">%s</a>', absint( $item->id ), esc_attr( $nonce ), esc_html__( 'Recheck', 'tso-link-inspector' ) );
+		$actions['not_broken'] = sprintf( '<a href="#" class="tsoliin-not-broken" data-id="%d" data-nonce="%s" title="%s" style="color:#0a7d33;font-weight:600;">%s</a>', absint( $item->id ), esc_attr( $nonce ), esc_attr( $not_broken_title ), esc_html__( 'Not broken', 'tso-link-inspector' ) );
+
 		if ( $can_unlink ) {
 			$unlink_title = TSOLIIN_Support::is_comment_author_url_row( $item )
 				? __( 'Clear the comment author website field (URL)', 'tso-link-inspector' )
-				: __( 'Remove the link tag from content; visible text is kept.', 'tso-link-inspector' );
+				: __( 'Remove the link (or image) from the source; visible text is kept when it is a text link.', 'tso-link-inspector' );
 			$actions['unlink'] = sprintf(
 				'<a href="#" class="tsoliin-unlink" data-id="%d" data-url="%s" data-post="%d" data-nonce="%s" title="%s">%s</a>',
 				absint( $item->id ),
@@ -533,28 +455,7 @@ class TSOLIIN_List_Table extends WP_List_Table {
 				esc_html__( 'Unlink', 'tso-link-inspector' )
 			);
 		}
-		if ( ! $can_edit && ! in_array( $type, array( 'comment', 'widget', 'menu', 'term' ), true ) ) {
-			$source_edit = TSOLIIN_Support::get_link_source_edit_url( $item );
-			if ( '' === $source_edit && ! empty( $item->post_id ) ) {
-				$source_edit = TSOLIIN_Support::get_post_admin_edit_url_for_link( $item );
-			}
-			if ( '' !== $source_edit ) {
-				$source_edit_title = TSOLIIN_Support::should_focus_link_in_post_content( $item ) && ! empty( $item->id )
-					? __( 'Open the editor and scroll to this link', 'tso-link-inspector' )
-					: '';
-				$actions = array_merge(
-					array(
-						'source_edit' => sprintf(
-							'<a href="%s" target="_blank" rel="noopener noreferrer"%s>%s</a>',
-							esc_url( $source_edit ),
-							'' !== $source_edit_title ? ' title="' . esc_attr( $source_edit_title ) . '"' : '',
-							esc_html__( 'Go to edit', 'tso-link-inspector' )
-						),
-					),
-					$actions
-				);
-			}
-		}
+
 		$delete_title = __( 'Delete this record from the list only. The source content is not modified.', 'tso-link-inspector' );
 		if ( TSOLIIN_Support::is_comment_author_url_row( $item ) ) {
 			$delete_title = __( 'Delete this record from the list only. The author URL in the comment is not cleared — use Unlink for that.', 'tso-link-inspector' );

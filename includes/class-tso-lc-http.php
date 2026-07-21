@@ -1523,19 +1523,39 @@ class TSOLIIN_HTTP {
 		if ( preg_match( '#^http://#i', $url ) && ! $has_meaningful_redirect ) {
 			$https = preg_replace( '#^http://#i', 'https://', $url );
 			if ( $https && ! in_array( $https, $tested, true ) ) {
-				$r = $this->check( $https, $post_id );
-				if ( self::suggestion_fixes_broken_link( $r_orig, $r ) ) {
-					$target  = $https;
-					$reason  = __( 'Secure HTTPS version available', 'tso-link-inspector' );
-					$status  = (int) $r['status_code'];
+				$r              = $this->check( $https, $post_id );
+				$code_https     = (int) $r['status_code'];
+				$https_verified = self::suggestion_fixes_broken_link( $r_orig, $r );
+				// 401/403/429 on HTTPS still proves TLS works (e.g. /wp-admin/ without cookies).
+				$https_bot_wall = self::is_bot_block_status( $code_https )
+					&& ! self::is_hard_broken_status( $code_https )
+					&& self::is_trusted_canonical_upgrade( $url, $https );
+
+				if ( $https_verified || $https_bot_wall ) {
+					$target     = $https;
+					$reason     = $https_bot_wall && ! $https_verified
+						? __( 'HTTPS available (access restricted to bots/login — confirm in browser)', 'tso-link-inspector' )
+						: __( 'Secure HTTPS version available', 'tso-link-inspector' );
+					$status     = $code_https;
+					$unverified = ( $https_bot_wall && ! $https_verified );
 
 					// HTTPS URL may itself redirect (e.g. legacy host); suggest the real destination, not the hop.
-					if ( ! empty( $r['redirect_url'] ) && ! $this->is_trivial_redirect( $https, $r['redirect_url'] ) ) {
+					if ( ! $unverified && ! empty( $r['redirect_url'] ) && ! $this->is_trivial_redirect( $https, $r['redirect_url'] ) ) {
 						$target = trim( (string) $r['redirect_url'] );
 						$reason = __( 'Final URL after redirects', 'tso-link-inspector' );
 						$r2     = $this->check( $target, $post_id );
 						if ( ! self::suggestion_fixes_broken_link( $r_orig, $r2 ) ) {
-							$target = '';
+							// Redirect target may be HTTPS + auth wall (same-site wp-admin).
+							$code2 = (int) $r2['status_code'];
+							if ( self::is_bot_block_status( $code2 )
+								&& ! self::is_hard_broken_status( $code2 )
+								&& self::is_trusted_canonical_upgrade( $url, $target ) ) {
+								$status     = $code2;
+								$unverified = true;
+								$reason     = __( 'HTTPS available (access restricted to bots/login — confirm in browser)', 'tso-link-inspector' );
+							} else {
+								$target = '';
+							}
 						} else {
 							$status = (int) $r2['status_code'];
 						}
@@ -1549,6 +1569,7 @@ class TSOLIIN_HTTP {
 							'reason'      => $reason,
 							'confidence'  => 'high',
 							'actionable'  => true,
+							'unverified'  => $unverified,
 						);
 						$tested[] = $target;
 					}
@@ -1615,7 +1636,7 @@ class TSOLIIN_HTTP {
 			);
 		}
 
-		// Canonical HTTPS URLs for plain HTTP links (Facebook etc. may return 401 to bots).
+		// Canonical HTTPS URLs for plain HTTP links (Facebook, wp-admin, etc. may return 401 to bots).
 		if ( self::is_plain_http_url( $url ) ) {
 			foreach ( $this->build_secure_canonical_candidates( $url ) as $candidate ) {
 				if ( in_array( $candidate, $tested, true ) ) {
@@ -1624,9 +1645,10 @@ class TSOLIIN_HTTP {
 				if ( ! self::is_trusted_canonical_upgrade( $url, $candidate ) ) {
 					continue;
 				}
-				$r          = $this->check( $candidate, $post_id );
-				$code       = (int) $r['status_code'];
-				$unverified = self::is_bot_wall_host( $candidate ) && self::is_bot_block_status( $code );
+				$r    = $this->check( $candidate, $post_id );
+				$code = (int) $r['status_code'];
+				// Same-path HTTP→HTTPS with 401/403/429 = HTTPS is up (auth/bot wall), not “HTTP only”.
+				$unverified = self::is_bot_block_status( $code ) && ! self::is_hard_broken_status( $code );
 				if ( ! $unverified && ! self::suggestion_fixes_broken_link( $r_orig, $r ) ) {
 					continue;
 				}
@@ -1635,7 +1657,7 @@ class TSOLIIN_HTTP {
 					'status_code' => $code,
 					'label'       => self::status_label( $code, $candidate ),
 					'reason'      => $unverified
-						? __( 'Canonical HTTPS URL (server cannot verify — check in browser)', 'tso-link-inspector' )
+						? __( 'HTTPS available (access restricted to bots/login — confirm in browser)', 'tso-link-inspector' )
 						: __( 'Secure HTTPS canonical URL', 'tso-link-inspector' ),
 					'confidence'  => 'high',
 					'actionable'  => true,

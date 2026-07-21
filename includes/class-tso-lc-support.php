@@ -299,7 +299,12 @@ class TSOLIIN_Support {
 		if ( 'comment' === (string) $link->link_type ) {
 			return true;
 		}
-		return self::can_inline_edit_link( $link );
+		if ( self::can_inline_edit_link( $link ) ) {
+			return true;
+		}
+		// Ghost / stale post rows: allow Unlink to drop them from the list.
+		$scanner = function_exists( 'tsoliin_link_inspector' ) ? tsoliin_link_inspector()->scanner : null;
+		return (bool) ( $scanner && $scanner->is_orphan_post_link_row( $link ) );
 	}
 
 	/**
@@ -489,6 +494,7 @@ class TSOLIIN_Support {
 			'attachmentId'    => $attachment_id,
 			'fileName'        => self::file_name_from_url( $url ),
 			'isBlockEditor'   => $is_block_editor ? 1 : 0,
+			'preferTextMode'  => ( 'plain' === $link_type ) ? 1 : 0,
 		);
 	}
 
@@ -573,8 +579,16 @@ class TSOLIIN_Support {
 		if ( ! is_string( $path ) || '' === $path ) {
 			return '';
 		}
-		$name = basename( $path );
-		return is_string( $name ) ? $name : '';
+		$name = basename( untrailingslashit( $path ) );
+		if ( ! is_string( $name ) || '' === $name ) {
+			return '';
+		}
+		// Path segments without a file extension (e.g. …/shortcodes/) are not media filenames
+		// and must not be used as editor focus needles (they match unrelated body text).
+		if ( false === strpos( $name, '.' ) ) {
+			return '';
+		}
+		return $name;
 	}
 
 	/**
@@ -746,8 +760,8 @@ class TSOLIIN_Support {
 	/**
 	 * Whether the list table should show Go to edit for a menu row.
 	 *
-	 * Custom menu URLs on block themes are updated via Edit link (_menu_item_url);
-	 * nav-menus.php is blocked and Site Editor does not edit legacy nav_menu_item rows.
+	 * Always when a menus / Site Editor URL exists. Custom URLs on block themes
+	 * still use Edit link to change _menu_item_url; Go to edit opens Navigation.
 	 *
 	 * @param object|null $link DB link row.
 	 * @return bool
@@ -756,11 +770,120 @@ class TSOLIIN_Support {
 		if ( ! $link || 'menu' !== (string) $link->link_type ) {
 			return false;
 		}
-		if ( self::is_custom_menu_url_row( $link ) && ! self::classic_nav_menus_admin_available() ) {
-			return false;
-		}
 		$sk = isset( $link->source_key ) ? (string) $link->source_key : '';
 		return '' !== self::get_menus_admin_edit_url( $sk );
+	}
+
+	/**
+	 * Unified “Go to edit” row action: open the right admin screen for this source.
+	 *
+	 * Edit link / Unlink stay separate and only appear when the plugin can write the source.
+	 *
+	 * @param object|null $link DB link row.
+	 * @return array{url:string,title:string,label:string}|null
+	 */
+	public static function get_go_to_edit_row_action( $link ) {
+		if ( ! $link || empty( $link->link_type ) ) {
+			return null;
+		}
+
+		$type  = (string) $link->link_type;
+		$label = __( 'Go to edit', 'tso-link-inspector' );
+		$sk    = isset( $link->source_key ) ? (string) $link->source_key : '';
+
+		if ( self::shows_comment_admin_edit_action( $link ) ) {
+			$url = self::get_comment_admin_edit_url( self::get_comment_id_from_link_row( $link ) );
+			if ( '' === $url ) {
+				return null;
+			}
+			return array(
+				'url'   => $url,
+				'title' => __( 'Open this comment in WordPress to edit the URL or text.', 'tso-link-inspector' ),
+				'label' => $label,
+			);
+		}
+
+		if ( self::shows_widget_admin_edit_action( $link ) ) {
+			$url = self::get_widgets_admin_edit_url( $sk );
+			if ( '' === $url ) {
+				return null;
+			}
+			return array(
+				'url'   => $url,
+				'title' => __( 'Open the widget editor for this sidebar widget.', 'tso-link-inspector' ),
+				'label' => $label,
+			);
+		}
+
+		if ( self::shows_woocommerce_admin_edit_action( $link ) ) {
+			$url = self::get_post_admin_edit_url_for_link( $link );
+			if ( '' === $url ) {
+				return null;
+			}
+			return array(
+				'url'   => $url,
+				'title' => __( 'Open the WooCommerce product editor. Change external URL, downloads, or images there.', 'tso-link-inspector' ),
+				'label' => $label,
+			);
+		}
+
+		if ( 'menu' === $type && self::shows_menu_admin_go_to_edit_action( $link ) ) {
+			$url = self::get_menus_admin_edit_url( $sk );
+			if ( '' === $url ) {
+				return null;
+			}
+			if ( self::classic_nav_menus_admin_available() ) {
+				$title = self::is_custom_menu_url_row( $link )
+					? __( 'Open Appearance → Menus at this item. You can also use Edit link here for custom URLs.', 'tso-link-inspector' )
+					: __( 'Open Appearance → Menus at this item. The URL comes from the linked page/post — edit that content to change it.', 'tso-link-inspector' );
+			} else {
+				$title = self::is_custom_menu_url_row( $link )
+					? __( 'Open Site Editor → Navigation. To change a custom menu URL, use Edit link here.', 'tso-link-inspector' )
+					: __( 'Open Site Editor → Navigation. This item\'s URL comes from the linked page/post.', 'tso-link-inspector' );
+			}
+			return array(
+				'url'   => $url,
+				'title' => $title,
+				'label' => $label,
+			);
+		}
+
+		if ( 'term' === $type ) {
+			$url = self::get_link_source_edit_url( $link );
+			if ( '' === $url ) {
+				return null;
+			}
+			return array(
+				'url'   => $url,
+				'title' => __( 'Open the taxonomy term editor for this description link.', 'tso-link-inspector' ),
+				'label' => $label,
+			);
+		}
+
+		if ( in_array( $type, array( 'link', 'image', 'iframe', 'plain', 'template', 'wp_block' ), true ) && ! empty( $link->post_id ) ) {
+			if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk ) ) {
+				return null;
+			}
+			$url = self::get_post_admin_edit_url_for_link( $link );
+			if ( '' === $url ) {
+				return null;
+			}
+			$focus = self::should_focus_link_in_post_content( $link );
+			if ( $focus ) {
+				$title = ( 'image' === $type || 'iframe' === $type )
+					? __( 'Open the editor and scroll to this image or embed.', 'tso-link-inspector' )
+					: __( 'Open the editor and scroll to this link.', 'tso-link-inspector' );
+			} else {
+				$title = __( 'Open the post editor. This URL may be in a custom field or no longer in the content — use Edit link if available, or Delete + Scan if the row is stale.', 'tso-link-inspector' );
+			}
+			return array(
+				'url'   => $url,
+				'title' => $title,
+				'label' => $label,
+			);
+		}
+
+		return null;
 	}
 
 	/**

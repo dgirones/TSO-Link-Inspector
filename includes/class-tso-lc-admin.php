@@ -286,7 +286,6 @@ class TSOLIIN_Admin {
 				'unlink'        => __( 'Unlink', 'tso-link-inspector' ),
 				'closePanel'    => __( 'Close', 'tso-link-inspector' ),
 				'actionUrlWarn' => __( 'This link ends your WordPress session. Open it anyway?', 'tso-link-inspector' ),
-				'openUrl'       => __( 'Open URL', 'tso-link-inspector' ),
 				'addIgnore'     => __( 'Ignore domain', 'tso-link-inspector' ),
 				/* translators: %s: domain or URL pattern added to the ignore list */
 				'confirmAddIgnore' => __( 'Add %s to the ignore list? This link will be skipped during scans and HTTP checks. You can edit the list in Settings.', 'tso-link-inspector' ),
@@ -902,7 +901,7 @@ class TSOLIIN_Admin {
 		echo '<dl class="tsoliin-help-dl">';
 
 		echo '<dt>' . esc_html__( 'Editing and fixing links', 'tso-link-inspector' ) . '</dt>';
-		echo '<dd>' . esc_html__( 'Edit link changes the URL in the stored source (post content, comment, menu, widget, or term). Unlink removes the <a> tag but keeps the visible text. Recheck re-reads the WordPress source (post, comment, menu, widget, term, or template) and then runs one HTTP test. Not broken locks the link as OK. Suggestion offers HTTPS upgrades when available. Edit and Unlink are not available for some source types (images, templates, etc.) — open the post or source editor instead.', 'tso-link-inspector' ) . '</dd>';
+		echo '<dd>' . esc_html__( 'Go to edit opens the right WordPress screen for this source (post, product, menu, widget, comment, or term), and scrolls to the link when it is in the post content. Edit link changes the URL in the stored source when the plugin can write it. Unlink removes the link or image from the source when possible. Recheck re-reads the source and runs one HTTP test. Not broken locks the link as OK. Suggestion offers HTTPS upgrades when available, or explains when you must edit in WordPress instead. Delete only removes the row from this list.', 'tso-link-inspector' ) . '</dd>';
 
 		echo '<dt>' . esc_html__( 'Bulk actions', 'tso-link-inspector' ) . '</dt>';
 		echo '<dd>' . esc_html__( 'Select rows and apply Recheck selected, Unlink all, Mark as OK, Convert selected to /path (when enabled in Settings), or Delete from list. Delete only removes the database row, not the link in your content.', 'tso-link-inspector' ) . '</dd>';
@@ -2235,6 +2234,16 @@ class TSOLIIN_Admin {
 		$type = isset( $link->link_type ) ? (string) $link->link_type : 'link';
 
 		if ( ! TSOLIIN_Support::can_unlink_link( $link ) ) {
+			// Ghost row: detected earlier but no longer in the post — drop from the list.
+			if ( $this->scanner->is_orphan_post_link_row( $link ) ) {
+				$this->db->delete_link( $link_id );
+				wp_send_json_success(
+					array(
+						'message' => __( 'This URL is not in the post content (stale list entry). Removed from the list only.', 'tso-link-inspector' ),
+						'stale'   => true,
+					)
+				);
+			}
 			$blocked = $this->get_non_editable_source_message( $link );
 			if ( '' === $blocked ) {
 				$blocked = __( 'Cannot unlink this item.', 'tso-link-inspector' );
@@ -2255,7 +2264,22 @@ class TSOLIIN_Admin {
 		}
 
 		if ( ! $done ) {
-			wp_send_json_error( array( 'message' => __( 'Cannot unlink this item. For comments, edit manually.', 'tso-link-inspector' ) ) );
+			// Still listed but nothing left to remove from the source — clear the ghost row.
+			if ( in_array( $type, array( 'link', 'image', 'iframe', 'plain' ), true )
+				&& $this->scanner->is_orphan_post_link_row( $link ) ) {
+				$this->db->delete_link( $link_id );
+				wp_send_json_success(
+					array(
+						'message' => __( 'This URL is not in the post content (stale list entry). Removed from the list only.', 'tso-link-inspector' ),
+						'stale'   => true,
+					)
+				);
+			}
+			wp_send_json_error(
+				array(
+					'message' => __( 'Could not remove this URL from the source. Open Go to edit and remove it manually, or use Delete to remove only this list row.', 'tso-link-inspector' ),
+				)
+			);
 		}
 		$this->db->delete_link( $link_id );
 		wp_send_json_success( array( 'message' => __( 'Link tag removed.', 'tso-link-inspector' ) ) );
@@ -2767,8 +2791,7 @@ class TSOLIIN_Admin {
 			$suggestion['reason']      = sanitize_text_field( isset( $suggestion['reason'] ) ? (string) $suggestion['reason'] : '' );
 			$unverified                = ! empty( $suggestion['unverified'] )
 				|| (
-					TSOLIIN_HTTP::is_bot_wall_host( $safe_url )
-					&& TSOLIIN_HTTP::is_bot_block_status( (int) $r_live['status_code'] )
+					TSOLIIN_HTTP::is_bot_block_status( (int) $r_live['status_code'] )
 					&& TSOLIIN_HTTP::is_trusted_canonical_upgrade( $orig_abs, $safe_url )
 				);
 			$suggestion['unverified']  = $unverified;
