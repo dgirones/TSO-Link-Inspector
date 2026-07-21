@@ -177,8 +177,12 @@
 		}
 		if ( typeof window.switchEditors !== 'undefined' && window.switchEditors.go ) {
 			try {
-				window.switchEditors.go( 'tmce' );
-			} catch ( err ) {}
+				window.switchEditors.go( 'content', 'tmce' );
+			} catch ( err ) {
+				try {
+					window.switchEditors.go( 'tmce' );
+				} catch ( err2 ) {}
+			}
 			visualModeEnsured = true;
 			return;
 		}
@@ -1230,10 +1234,11 @@
 			return true;
 		}
 
-		var preferText = data && ( data.linkType === 'plain' || data.preferTextMode === 1 || data.preferTextMode === true );
+		var preferText = data && ( data.preferTextMode === 1 || data.preferTextMode === true );
 		var isMedia    = data.linkType === 'image' || data.linkType === 'iframe';
+		var isPlain    = data.linkType === 'plain';
 
-		// Plain / shortcode-attribute URLs: always Text tab (Visual cannot select shortcode source).
+		// Shortcode-attribute / non-visible URLs: Text tab (Visual cannot select the source).
 		if ( preferText ) {
 			if ( focusClassicViaHtmlTab( searchVariants ) ) {
 				return true;
@@ -1241,7 +1246,7 @@
 			return false;
 		}
 
-		if ( isMedia ) {
+		if ( isMedia || isPlain ) {
 			ensureClassicVisualEditorMode();
 		}
 
@@ -1253,7 +1258,7 @@
 			return false;
 		}
 
-		// Hyperlink not found visually (e.g. only inside a shortcode url="…") — Text tab.
+		// Hyperlink or plain URL not found visually (e.g. only inside a shortcode url="…") — Text tab.
 		if ( focusClassicViaHtmlTab( searchVariants ) ) {
 			return true;
 		}
@@ -1363,7 +1368,7 @@
 		if ( blockEditor ) {
 			ensureVisualEditorMode( data );
 		}
-		var preferText = data.linkType === 'plain' || data.preferTextMode === 1 || data.preferTextMode === true;
+		var preferText = data.preferTextMode === 1 || data.preferTextMode === true;
 		var runFocus = function () {
 			if ( tryFocus() ) {
 				return;
@@ -1379,6 +1384,8 @@
 		};
 		if ( ! blockEditor ) {
 			if ( data.linkType === 'image' || data.linkType === 'iframe' ) {
+				ensureClassicVisualEditorMode();
+			} else if ( data.linkType === 'plain' && ! preferText ) {
 				ensureClassicVisualEditorMode();
 			} else if ( preferText ) {
 				runFocus();

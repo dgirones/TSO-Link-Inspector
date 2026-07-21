@@ -499,6 +499,15 @@ class TSOLIIN_Support {
 
 		$is_block_editor = self::post_uses_block_editor( $post );
 
+		$prefer_text_mode = false;
+		if ( 'plain' === $link_type && $post instanceof WP_Post && $in_post_content ) {
+			$scanner = function_exists( 'tsoliin_link_inspector' ) ? tsoliin_link_inspector()->scanner : null;
+			if ( $scanner && method_exists( $scanner, 'url_is_visible_plain_text_in_post_content' ) ) {
+				// Text tab only when the URL is not visible plain text (e.g. shortcode attribute only).
+				$prefer_text_mode = ! $scanner->url_is_visible_plain_text_in_post_content( $post->post_content, $url, $post_id );
+			}
+		}
+
 		return array(
 			'variants'        => array_values( array_unique( array_filter( array_merge( $variants, $extra ) ) ) ),
 			'attrs'           => self::get_focus_attributes_for_link_type( $link_type ),
@@ -510,7 +519,7 @@ class TSOLIIN_Support {
 			'fileName'        => self::file_name_from_url( $url ),
 			'isBlockEditor'   => $is_block_editor ? 1 : 0,
 			'classicGallery'  => $classic_gallery ? 1 : 0,
-			'preferTextMode'  => ( 'plain' === $link_type ) ? 1 : 0,
+			'preferTextMode'  => $prefer_text_mode ? 1 : 0,
 		);
 	}
 
