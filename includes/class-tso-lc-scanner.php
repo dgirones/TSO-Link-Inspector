@@ -3412,6 +3412,18 @@ class TSOLIIN_Scanner {
 	}
 
 	/**
+	 * Whether a URL is visible plain text in post_content (Classic Editor Visual can highlight it).
+	 *
+	 * @param string $content Raw post_content.
+	 * @param string $url     Target URL.
+	 * @param int    $post_id Post ID.
+	 * @return bool
+	 */
+	public function url_is_visible_plain_text_in_post_content( $content, $url, $post_id = 0 ) {
+		return $this->url_is_plain_text_only_in_content( (string) $content, (string) $url, absint( $post_id ) );
+	}
+
+	/**
 	 * Exact [gallery] shortcode substring in post_content for editor focus (Classic Editor).
 	 *
 	 * @param string $content       Raw post_content.
