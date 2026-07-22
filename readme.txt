@@ -105,6 +105,12 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 * New: Optional **WooCommerce** scanning (Settings) for external product URLs, downloadable files, featured image, and gallery — off by default.
 * New: **Products with issues** view (when WooCommerce scanning is enabled), same layout as Posts with issues.
 * Improvement: Product field links open the product editor via **Go to edit** (not the inline modal).
+* Improvement: Unified row action order (Go to edit, Edit link, Recheck, Not broken, Unlink, Delete, Ignore domain). Removed redundant **Open URL** (use the main URL link).
+* Fix: Classic Editor **Go to edit** scrolls to the matched link in Visual and Text modes (including shortcode/plain URLs and TinyMCE iframe content).
+* Fix: Bare `[gallery]` shortcodes no longer pull every image attached to the post (only explicit `ids=` / `include=`).
+* Fix: Image rows require real markup (img / gallery / block); stale ghost rows can be cleared with Unlink or Recheck.
+* Fix: HTTP to HTTPS suggestions for same-path URLs that return 401/403 (e.g. `/wp-admin/`) are offered as HTTPS upgrades instead of "HTTP only".
+* Improvement: Catalan and Spanish translations updated.
 
 = 2.2.6 =
 * Fix: Link list table no longer outputs a nested `<thead>` on WordPress 6.6+ (duplicate header broke table layout and could hide rows).
@@ -379,7 +385,7 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 == Upgrade Notice ==
 
 = 2.3.0 =
-Optional WooCommerce product link scanning and Products with issues view. Enable under Settings if you run a store.
+Optional WooCommerce product link scanning and Products with issues view. Also improves Classic Editor focus scroll, gallery/image detection, HTTPS suggestions for auth-walled URLs, and row actions. Enable WooCommerce scanning under Settings if you run a store.
 
 = 2.2.6 =
 Recommended update. Fixes duplicate/broken link list table headers on WordPress 6.6+.
