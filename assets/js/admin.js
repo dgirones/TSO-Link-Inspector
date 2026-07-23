@@ -1396,7 +1396,7 @@
 				}, self.listFilterParam() ),
 				success: function ( r ) {
 					if ( ! r.success ) {
-						if ( 'unlink' === act || 'make_relative' === act ) {
+						if ( 'unlink' === act || 'make_relative' === act || 'upgrade_https' === act ) {
 							self._bulkStats.failed++;
 						}
 						alert( r.data ? r.data.message : tsoliinData.i18n.error );

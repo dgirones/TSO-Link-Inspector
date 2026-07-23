@@ -164,7 +164,7 @@ class TSOLIIN_Support {
 	 */
 	public static function get_user_list_per_page() {
 		$user_id  = get_current_user_id();
-		$per_page = $user_id > 0 ? (int) get_user_meta( $user_id, 'tsoliin_per_page', true ) : 0;
+		$per_page = $user_id > 0 ? (int) get_user_option( 'tsoliin_per_page', $user_id ) : 0;
 		if ( $per_page <= 0 ) {
 			$per_page = self::get_list_per_page_default();
 		}
