@@ -1671,6 +1671,48 @@ class TSOLIIN_HTTP {
 	}
 
 	/**
+	 * Verified https:// URL for a plain http:// link (bulk upgrade; server-confirmed 2xx only).
+	 *
+	 * @param string $url     Original http:// URL.
+	 * @param int    $post_id Post context for HTTP checks.
+	 * @return string HTTPS URL or empty when not verifiable.
+	 */
+	public function get_verified_https_upgrade_url( $url, $post_id = 0 ) {
+		$url = trim( str_replace( array( "\0", "\r", "\n" ), '', (string) $url ) );
+		if ( ! self::is_plain_http_url( $url ) ) {
+			return '';
+		}
+		$orig_abs = TSOLIIN_Scanner::resolve_to_absolute_url( $url, $post_id );
+		$r_orig   = $this->check( $orig_abs, $post_id );
+		foreach ( $this->smart_suggest( $url, $post_id ) as $suggestion ) {
+			if ( empty( $suggestion['actionable'] ) || ! empty( $suggestion['unverified'] ) ) {
+				continue;
+			}
+			$target = isset( $suggestion['url'] ) ? trim( (string) $suggestion['url'] ) : '';
+			if ( '' === $target || ! preg_match( '#\Ahttps://#i', $target ) ) {
+				continue;
+			}
+			if ( ! self::is_trusted_canonical_upgrade( $orig_abs, $target ) ) {
+				continue;
+			}
+			$safe = self::sanitize_external_http_url( $target );
+			if ( false === $safe ) {
+				continue;
+			}
+			$r_live = $this->check( $safe, $post_id );
+			if ( ! self::is_actionable_suggestion_result( $r_live ) ) {
+				continue;
+			}
+			if ( ! empty( $r_orig['is_broken'] )
+				&& ! self::suggestion_fixes_broken_link( $r_orig, $r_live, (int) $r_orig['status_code'] ) ) {
+				continue;
+			}
+			return $safe;
+		}
+		return '';
+	}
+
+	/**
 	 * Whether the URL uses plain http:// (not https://).
 	 *
 	 * @param string $url Full URL.

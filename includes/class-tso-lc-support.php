@@ -109,6 +109,69 @@ class TSOLIIN_Support {
 	}
 
 	/**
+	 * Default rows per page on the main link list.
+	 *
+	 * @return int
+	 */
+	public static function get_list_per_page_default() {
+		return 20;
+	}
+
+	/**
+	 * Minimum rows per page (list table).
+	 *
+	 * @return int
+	 */
+	public static function get_list_per_page_min() {
+		return 10;
+	}
+
+	/**
+	 * Maximum rows per page (list table); filterable for hosts with more headroom.
+	 *
+	 * @return int
+	 */
+	public static function get_list_per_page_max() {
+		/**
+		 * Filter the maximum links per page on the main inspector list.
+		 *
+		 * @param int $max Default 500.
+		 */
+		return max( 50, (int) apply_filters( 'tsoliin_max_per_page', 500 ) );
+	}
+
+	/**
+	 * Clamp a per-page value to safe bounds.
+	 *
+	 * @param int $value Requested rows per page.
+	 * @return int
+	 */
+	public static function cap_list_per_page( $value ) {
+		$value = absint( $value );
+		if ( $value < self::get_list_per_page_min() ) {
+			return self::get_list_per_page_min();
+		}
+		if ( $value > self::get_list_per_page_max() ) {
+			return self::get_list_per_page_max();
+		}
+		return $value;
+	}
+
+	/**
+	 * Current user's capped links-per-page preference.
+	 *
+	 * @return int
+	 */
+	public static function get_user_list_per_page() {
+		$user_id  = get_current_user_id();
+		$per_page = $user_id > 0 ? (int) get_user_meta( $user_id, 'tsoliin_per_page', true ) : 0;
+		if ( $per_page <= 0 ) {
+			$per_page = self::get_list_per_page_default();
+		}
+		return self::cap_list_per_page( $per_page );
+	}
+
+	/**
 	 * Whether the plugin can edit this link in-place (modal), without opening another admin screen.
 	 *
 	 * @param object|null $link Link row.

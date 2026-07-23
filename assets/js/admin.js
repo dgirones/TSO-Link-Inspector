@@ -271,7 +271,7 @@
 				if ( ! action || '-1' === action ) {
 					action = self.$form.find( 'select[name="action2"]' ).val();
 				}
-				var managed = [ 'recheck', 'delete', 'unlink', 'not_broken' ];
+				var managed = [ 'recheck', 'delete', 'unlink', 'not_broken', 'upgrade_https' ];
 				if ( parseInt( tsoliinData.relativeUrlTool, 10 ) === 1 ) {
 					managed.push( 'make_relative' );
 				}
@@ -1241,8 +1241,11 @@
 				return;
 			}
 
-			if ( 'recheck' === action || 'unlink' === action || 'make_relative' === action ) {
+			if ( 'recheck' === action || 'unlink' === action || 'make_relative' === action || 'upgrade_https' === action ) {
 				if ( 'make_relative' === action && ! window.confirm( tsoliinData.i18n.confirmMakeRelativeBulk ) ) {
+					return;
+				}
+				if ( 'upgrade_https' === action && ! window.confirm( tsoliinData.i18n.confirmUpgradeHttpsBulk ) ) {
 					return;
 				}
 				self.bulkRecheckStep( linkIds, 0, action );
@@ -1302,6 +1305,8 @@
 					initMsg = tsoliinData.i18n.unlinking;
 				} else if ( 'make_relative' === act ) {
 					initMsg = tsoliinData.i18n.convertingRelative || 'Converting to /path…';
+				} else if ( 'upgrade_https' === act ) {
+					initMsg = tsoliinData.i18n.upgradingHttps || 'Upgrading to HTTPS…';
 				}
 				self.$bulkProgress = $( '<div class="notice notice-info tsoliin-notice"><p><strong id="tsoliin-bulk-msg">' + initMsg + '</strong> <progress id="tsoliin-bulk-bar" max="100" value="0" style="width:200px;vertical-align:middle;"></progress></p></div>' );
 				$( '.tsoliin-toolbar' ).after( self.$bulkProgress );
@@ -1333,12 +1338,24 @@
 						relParts.push( '❌ ' + self._bulkStats.failed + ' ' + tsoliinData.i18n.itemsFailed );
 					}
 					doneMsg = relParts.length ? relParts.join( ' ' ) : ( '✅ 0 ' + ( tsoliinData.i18n.itemsConverted || 'links converted to /path.' ) );
+				} else if ( 'upgrade_https' === act ) {
+					var httpsParts = [];
+					if ( self._bulkStats.converted > 0 ) {
+						httpsParts.push( '✅ ' + self._bulkStats.converted + ' ' + ( tsoliinData.i18n.itemsUpgradedHttps || 'links upgraded to HTTPS.' ) );
+					}
+					if ( self._bulkStats.skipped > 0 ) {
+						httpsParts.push( '⚠ ' + self._bulkStats.skipped + ' ' + tsoliinData.i18n.itemsSkipped );
+					}
+					if ( self._bulkStats.failed > 0 ) {
+						httpsParts.push( '❌ ' + self._bulkStats.failed + ' ' + tsoliinData.i18n.itemsFailed );
+					}
+					doneMsg = httpsParts.length ? httpsParts.join( ' ' ) : ( '✅ 0 ' + ( tsoliinData.i18n.itemsUpgradedHttps || 'links upgraded to HTTPS.' ) );
 				} else {
 					doneMsg = '✅ ' + total + ' ' + tsoliinData.i18n.itemsChecked;
 				}
 				$( '#tsoliin-bulk-msg' ).text( doneMsg );
 				$( '#tsoliin-bulk-bar' ).val( 100 );
-				if ( 'unlink' === act || 'make_relative' === act ) {
+				if ( 'unlink' === act || 'make_relative' === act || 'upgrade_https' === act ) {
 					self.scheduleListReload( 1500 );
 				} else if ( 'recheck' === act && 'all' !== ( tsoliinData.listFilter || 'all' ) && self._bulkFilterRemoved > 0 ) {
 					self.scheduleListReload( 1500 );
@@ -1359,6 +1376,8 @@
 				progressLabel = tsoliinData.i18n.unlinking;
 			} else if ( 'make_relative' === act ) {
 				progressLabel = tsoliinData.i18n.convertingRelative || 'Converting to /path…';
+			} else if ( 'upgrade_https' === act ) {
+				progressLabel = tsoliinData.i18n.upgradingHttps || 'Upgrading to HTTPS…';
 			}
 			var pct = Math.round( ( ( index + 1 ) / total ) * 100 );
 			$( '#tsoliin-bulk-msg' ).text( progressLabel + ' ' + ( index + 1 ) + '/' + total );
@@ -1431,7 +1450,7 @@
 							} else {
 								self._bulkStats.failed++;
 							}
-						} else if ( 'make_relative' === act && r.data.link_id ) {
+						} else if ( ( 'make_relative' === act || 'upgrade_https' === act ) && r.data.link_id ) {
 							if ( r.data.skipped ) {
 								self._bulkStats.skipped++;
 							} else if ( r.data.converted ) {
@@ -1453,7 +1472,7 @@
 					self.bulkRecheckStep( linkIds, index + 1, act );
 				},
 				error: function () {
-					if ( 'unlink' === act || 'make_relative' === act ) {
+					if ( 'unlink' === act || 'make_relative' === act || 'upgrade_https' === act ) {
 						self._bulkStats.failed++;
 					}
 					alert( tsoliinData.i18n.error );
