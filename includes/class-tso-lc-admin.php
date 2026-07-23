@@ -43,6 +43,7 @@ class TSOLIIN_Admin {
 		add_action( 'admin_enqueue_scripts',  array( $this, 'enqueue_assets' ) );
 		add_filter( 'admin_page_title',         array( $this, 'filter_settings_admin_page_title' ) );
 		add_filter( 'plugin_row_meta',          array( $this, 'filter_plugin_row_meta' ), 10, 2 );
+		add_filter( 'set_screen_option_tsoliin_per_page', array( $this, 'filter_screen_option_per_page' ), 10, 3 );
 
 		add_action( 'wp_ajax_tsoliin_scan_batch',    array( $this, 'ajax_scan_batch' ) );
 		add_action( 'wp_ajax_tsoliin_recheck',       array( $this, 'ajax_recheck' ) );
@@ -89,9 +90,42 @@ class TSOLIIN_Admin {
 		// Keep Settings accessible by URL but hidden from the Tools submenu.
 		remove_submenu_page( 'tools.php', 'tso-link-inspector-settings' );
 
+		if ( $this->page_hook ) {
+			add_action( 'load-' . $this->page_hook, array( $this, 'prepare_main_screen' ) );
+		}
+
 		if ( $this->settings_page_hook ) {
 			add_action( 'load-' . $this->settings_page_hook, array( $this, 'prepare_settings_screen' ) );
 		}
+	}
+
+	/**
+	 * Screen options for the main link list (rows per page).
+	 */
+	public function prepare_main_screen() {
+		add_screen_option(
+			'per_page',
+			array(
+				'label'   => __( 'Links per page', 'tso-link-inspector' ),
+				'default' => TSOLIIN_Support::get_list_per_page_default(),
+				'option'  => 'tsoliin_per_page',
+			)
+		);
+	}
+
+	/**
+	 * Cap per-page screen option before it is saved (prevents unusably high values).
+	 *
+	 * @param mixed  $status Screen option save status.
+	 * @param string $option Option name.
+	 * @param mixed  $value  Requested value.
+	 * @return int|false
+	 */
+	public function filter_screen_option_per_page( $status, $option, $value ) {
+		if ( 'tsoliin_per_page' !== $option ) {
+			return $status;
+		}
+		return TSOLIIN_Support::cap_list_per_page( $value );
 	}
 
 	/**
@@ -297,10 +331,14 @@ class TSOLIIN_Admin {
 				'makeRelative'      => __( 'Convert to /path', 'tso-link-inspector' ),
 				'confirmMakeRelative' => __( 'Remove the site domain from this link? It will be saved as a path starting with / (e.g. /contact/). Only for links on this site.', 'tso-link-inspector' ),
 				'confirmMakeRelativeBulk' => __( 'Remove the site domain from the selected same-site links and save them as /path URLs?', 'tso-link-inspector' ),
+				'confirmUpgradeHttpsBulk' => __( 'Upgrade the selected http:// links to https:// where the server confirms HTTPS works?', 'tso-link-inspector' )
+					. "\n\n" . __( 'Links without a verified HTTPS response are skipped.', 'tso-link-inspector' ),
 				'relativeDone'      => __( 'Link saved as /path (domain removed).', 'tso-link-inspector' ),
 				'relativeDisabled'  => __( 'Enable “Convert to /path” in Settings first.', 'tso-link-inspector' ),
 				'convertingRelative'=> __( 'Converting to /path…', 'tso-link-inspector' ),
+				'upgradingHttps'    => __( 'Upgrading to HTTPS…', 'tso-link-inspector' ),
 				'itemsConverted'    => __( 'links converted to /path.', 'tso-link-inspector' ),
+				'itemsUpgradedHttps'=> __( 'links upgraded to HTTPS.', 'tso-link-inspector' ),
 				'confirmDeleteBulk' => __( 'Delete the selected records from the list? The posts will not be changed.', 'tso-link-inspector' ),
 				'previewLoading'    => __( 'Loading preview...', 'tso-link-inspector' ),
 				'previewNotFound'   => __( 'No matching HTML tag found in the post for this URL.', 'tso-link-inspector' ),
@@ -687,7 +725,7 @@ class TSOLIIN_Admin {
 		$mode = ( 'products' === $mode ) ? 'products' : 'posts';
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$paged    = isset( $_GET['paged'] ) ? max( 1, absint( $_GET['paged'] ) ) : 1;
-		$per_page = 20;
+		$per_page = TSOLIIN_Support::get_user_list_per_page();
 		$query    = array(
 			'per_page' => $per_page,
 			'paged'    => $paged,
@@ -2125,6 +2163,25 @@ class TSOLIIN_Admin {
 	}
 
 	/**
+	 * Verified https:// target for bulk upgrade (empty when not server-confirmed).
+	 *
+	 * @param object|null $link DB link row.
+	 * @return string
+	 */
+	private function get_verified_https_upgrade_for_link( $link ) {
+		if ( ! $link || empty( $link->link_url ) ) {
+			return '';
+		}
+		if ( ! TSOLIIN_HTTP::is_plain_http_url( (string) $link->link_url ) ) {
+			return '';
+		}
+		if ( $this->is_non_editable_source( $link ) ) {
+			return '';
+		}
+		return $this->http->get_verified_https_upgrade_url( (string) $link->link_url, (int) $link->post_id );
+	}
+
+	/**
 	 * Resolve WordPress comment ID from a link inspector row.
 	 *
 	 * @param object $link DB link row.
@@ -2594,6 +2651,49 @@ class TSOLIIN_Admin {
 					'row'        => $row_data,
 					/* translators: 1: current, 2: total */
 					'message'    => sprintf( __( 'Converting %1$d of %2$d...', 'tso-link-inspector' ), $index + 1, $total ),
+				)
+			);
+		} elseif ( 'upgrade_https' === $action ) {
+			$index   = isset( $_POST['index'] ) ? absint( $_POST['index'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+			$total   = count( $link_ids );
+			$link_id = isset( $link_ids[ $index ] ) ? $link_ids[ $index ] : 0;
+			if ( ! $link_id ) {
+				wp_send_json_success( array( 'done' => true, 'processed' => $total ) );
+			}
+			$link      = $this->db->get_link( $link_id );
+			$converted = false;
+			$skipped   = false;
+			$row_data  = array( 'link_id' => $link_id );
+			if ( $link ) {
+				$https_url = $this->get_verified_https_upgrade_for_link( $link );
+				if ( '' === $https_url ) {
+					$skipped = true;
+				} elseif ( $this->replace_link_url_in_source( $link, $https_url ) ) {
+					$this->db->update_link_url( $link_id, $https_url );
+					$r = $this->http->check( $https_url, (int) $link->post_id );
+					$this->db->update_check_result( $link_id, $r['status_code'], $r['redirect_url'], $r['is_broken'], isset( $r['redirect_chain'] ) ? $r['redirect_chain'] : '' );
+					$updated   = $this->db->get_link( $link_id );
+					$row_data  = array_merge(
+						array( 'link_id' => $link_id, 'new_url' => $https_url ),
+						$this->status_payload_from_link( $updated, $https_url, true )
+					);
+					$row_data  = $this->append_filter_match( $row_data, $updated );
+					$converted = true;
+				}
+			}
+			wp_send_json_success(
+				array(
+					'done'       => ( $index + 1 ) >= $total,
+					'processed'  => $index + 1,
+					'total'      => $total,
+					'pct'        => (int) round( ( ( $index + 1 ) / $total ) * 100 ),
+					'next_index' => $index + 1,
+					'link_id'    => $link_id,
+					'converted'  => $converted,
+					'skipped'    => $skipped,
+					'row'        => $row_data,
+					/* translators: 1: current, 2: total */
+					'message'    => sprintf( __( 'Upgrading to HTTPS %1$d of %2$d...', 'tso-link-inspector' ), $index + 1, $total ),
 				)
 			);
 		} else {

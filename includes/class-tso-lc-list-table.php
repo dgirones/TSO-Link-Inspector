@@ -227,10 +227,11 @@ class TSOLIIN_List_Table extends WP_List_Table {
 
 	protected function get_bulk_actions() {
 		$actions = array(
-			'recheck'    => __( 'Recheck selected', 'tso-link-inspector' ),
-			'unlink'     => __( 'Unlink all', 'tso-link-inspector' ),
-			'not_broken' => __( 'Mark as OK', 'tso-link-inspector' ),
-			'delete'     => __( 'Delete from list', 'tso-link-inspector' ),
+			'recheck'       => __( 'Recheck selected', 'tso-link-inspector' ),
+			'upgrade_https' => __( 'Upgrade selected to HTTPS', 'tso-link-inspector' ),
+			'unlink'        => __( 'Unlink all', 'tso-link-inspector' ),
+			'not_broken'    => __( 'Mark as OK', 'tso-link-inspector' ),
+			'delete'        => __( 'Delete from list', 'tso-link-inspector' ),
 		);
 		if ( TSOLIIN_Support::is_relative_url_tool_enabled() ) {
 			$actions = array_merge(
@@ -268,7 +269,7 @@ class TSOLIIN_List_Table extends WP_List_Table {
 			$filter = 'all';
 		}
 
-		$per_page = $this->get_items_per_page( 'tsoliin_per_page', 20 );
+		$per_page = TSOLIIN_Support::get_user_list_per_page();
 		$paged    = $this->get_pagenum();
 
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
