@@ -1344,7 +1344,7 @@
 						httpsParts.push( '✅ ' + self._bulkStats.converted + ' ' + ( tsoliinData.i18n.itemsUpgradedHttps || 'links upgraded to HTTPS.' ) );
 					}
 					if ( self._bulkStats.skipped > 0 ) {
-						httpsParts.push( '⚠ ' + self._bulkStats.skipped + ' ' + tsoliinData.i18n.itemsSkipped );
+						httpsParts.push( '⚠ ' + self._bulkStats.skipped + ' ' + ( tsoliinData.i18n.itemsSkippedHttps || tsoliinData.i18n.itemsSkipped ) );
 					}
 					if ( self._bulkStats.failed > 0 ) {
 						httpsParts.push( '❌ ' + self._bulkStats.failed + ' ' + tsoliinData.i18n.itemsFailed );
