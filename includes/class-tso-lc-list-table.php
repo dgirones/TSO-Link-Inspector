@@ -234,15 +234,15 @@ class TSOLIIN_List_Table extends WP_List_Table {
 			'delete'        => __( 'Delete from list', 'tso-link-inspector' ),
 		);
 		if ( TSOLIIN_Support::is_relative_url_tool_enabled() ) {
-			$actions = array_merge(
-				array(
-					'recheck'       => $actions['recheck'],
-					'unlink'        => $actions['unlink'],
-					'not_broken'    => $actions['not_broken'],
-					'make_relative' => __( 'Convert selected to /path', 'tso-link-inspector' ),
-				),
-				array( 'delete' => $actions['delete'] )
+			$ordered = array(
+				'recheck'       => $actions['recheck'],
+				'upgrade_https' => $actions['upgrade_https'],
+				'unlink'        => $actions['unlink'],
+				'not_broken'    => $actions['not_broken'],
+				'make_relative' => __( 'Convert selected to /path', 'tso-link-inspector' ),
+				'delete'        => $actions['delete'],
 			);
+			return $ordered;
 		}
 		return $actions;
 	}

@@ -55,6 +55,9 @@ class TSOLIIN_DB {
 	 */
 	public function create_table() {
 		global $wpdb;
+
+		$this->maybe_migrate_legacy_table();
+
 		$charset = $wpdb->get_charset_collate();
 		$sql     = "CREATE TABLE {$this->table} (
 			id bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -84,6 +87,84 @@ class TSOLIIN_DB {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange -- dbDelta is the WP standard for schema changes.
 		dbDelta( $sql );
 		$this->upgrade_schema();
+	}
+
+	/**
+	 * Rename or drop legacy {prefix}pc_tso_link_inspector when safe.
+	 *
+	 * Older maps referenced that name; current code only creates
+	 * {prefix}tso_link_inspector. Re-check every request (no permanent skip) so a
+	 * restored snapshot cannot leave the empty legacy table behind.
+	 *
+	 * @return void
+	 */
+	private function maybe_migrate_legacy_table() {
+		static $done_this_request = false;
+		if ( $done_this_request ) {
+			return;
+		}
+		$done_this_request = true;
+
+		global $wpdb;
+
+		$canonical_raw = $this->table;
+		$legacy_raw    = $wpdb->prefix . 'pc_tso_link_inspector';
+
+		if ( $canonical_raw === $legacy_raw ) {
+			return;
+		}
+
+		/*
+		 * DDL: names from $wpdb->prefix + fixed suffixes (not user input).
+		 * SHOW TABLES must use esc_like() so "_" is literal, not a wildcard.
+		 * Single phpcs:disable for the whole method (no enable before returns).
+		 */
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+		if ( ! $this->db_table_exists_exact( $legacy_raw ) ) {
+			delete_option( 'tsoliin_legacy_pc_table_cleared' );
+		} else {
+			$canonical = esc_sql( $canonical_raw );
+			$legacy    = esc_sql( $legacy_raw );
+
+			if ( ! $this->db_table_exists_exact( $canonical_raw ) ) {
+				$wpdb->query( "RENAME TABLE `{$legacy}` TO `{$canonical}`" );
+				$this->table_exists_cache = null;
+			} else {
+				$legacy_rows    = (int) $wpdb->get_var( "SELECT COUNT(1) FROM `{$legacy}`" );
+				$canonical_rows = (int) $wpdb->get_var( "SELECT COUNT(1) FROM `{$canonical}`" );
+
+				if ( 0 === $legacy_rows || ( $canonical_rows > 0 && $canonical_rows >= $legacy_rows ) ) {
+					$wpdb->query( "DROP TABLE IF EXISTS `{$legacy}`" );
+				} else {
+					$tmp     = esc_sql( $canonical_raw . '_mig_tmp' );
+					$wpdb->query( "DROP TABLE IF EXISTS `{$tmp}`" );
+					$renamed = $wpdb->query( "RENAME TABLE `{$canonical}` TO `{$tmp}`, `{$legacy}` TO `{$canonical}`" );
+					if ( false !== $renamed ) {
+						$wpdb->query( "DROP TABLE IF EXISTS `{$tmp}`" );
+						$this->table_exists_cache = null;
+					}
+				}
+			}
+		}
+		// phpcs:enable
+	}
+
+	/**
+	 * Whether a table name exists (exact match; "_" is not a LIKE wildcard).
+	 *
+	 * @param string $table_name Full table name.
+	 * @return bool
+	 */
+	private function db_table_exists_exact( $table_name ) {
+		global $wpdb;
+		$table_name = (string) $table_name;
+		if ( '' === $table_name ) {
+			return false;
+		}
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$found = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table_name ) ) );
+		return ( $found === $table_name );
 	}
 
 	/**
@@ -172,6 +253,7 @@ class TSOLIIN_DB {
 	 * Ensure the table exists (at most one SHOW TABLES query per request).
 	 */
 	public function ensure_table_exists() {
+		$this->maybe_migrate_legacy_table();
 		if ( $this->table_exists() ) {
 			$this->upgrade_schema();
 			return;
@@ -189,9 +271,7 @@ class TSOLIIN_DB {
 		if ( null !== $this->table_exists_cache ) {
 			return $this->table_exists_cache;
 		}
-		global $wpdb;
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		$this->table_exists_cache = (bool) $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $this->table ) );
+		$this->table_exists_cache = $this->db_table_exists_exact( $this->table );
 		return $this->table_exists_cache;
 	}
 
@@ -200,8 +280,13 @@ class TSOLIIN_DB {
 	 */
 	public function drop_table() {
 		global $wpdb;
+		$legacy = $wpdb->prefix . 'pc_tso_link_inspector';
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$wpdb->query( "DROP TABLE IF EXISTS `{$this->table}`" );
+		if ( $legacy !== $this->table ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+			$wpdb->query( "DROP TABLE IF EXISTS `{$legacy}`" );
+		}
 	}
 
 	// -------------------------------------------------------------------------

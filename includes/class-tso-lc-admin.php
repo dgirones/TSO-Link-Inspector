@@ -300,6 +300,7 @@ class TSOLIIN_Admin {
 				'itemsChecked'  => __( 'links rechecked.', 'tso-link-inspector' ),
 				'itemsUnlinked' => __( 'links unlinked.', 'tso-link-inspector' ),
 				'itemsSkipped'  => __( 'rows skipped (menu/widget/term).', 'tso-link-inspector' ),
+				'itemsSkippedHttps' => __( 'links skipped (HTTPS not verified or not editable).', 'tso-link-inspector' ),
 				'itemsFailed'   => __( 'requests failed.', 'tso-link-inspector' ),
 				'unlinking'     => __( 'Unlinking…', 'tso-link-inspector' ),
 				'confirmUnlink' => __( 'Are you sure? The text will remain but the link will be removed.', 'tso-link-inspector' ),
@@ -852,7 +853,7 @@ class TSOLIIN_Admin {
 		echo '<p><strong>' . esc_html__( 'Getting started', 'tso-link-inspector' ) . '</strong></p>';
 		echo '<ol class="tsoliin-onboarding__steps">';
 		echo '<li><strong>' . esc_html__( 'Scan now', 'tso-link-inspector' ) . '</strong> — ';
-		echo esc_html__( 'reads your content and adds links to this list. It does not test whether URLs work yet.', 'tso-link-inspector' );
+		echo esc_html__( 'Reads your content and adds links to this list. It does not test whether URLs work yet.', 'tso-link-inspector' );
 		echo '</li><li><strong>' . esc_html__( 'Check now', 'tso-link-inspector' ) . '</strong> — ';
 		echo esc_html__( 'sends HTTP requests to every saved URL (runs in the background; you can close this tab).', 'tso-link-inspector' );
 		echo '</li><li><strong>' . esc_html__( 'Review Broken', 'tso-link-inspector' ) . '</strong> — ';
@@ -860,8 +861,8 @@ class TSOLIIN_Admin {
 		echo '</li></ol>';
 		echo '<p class="tsoliin-onboarding__links">';
 		echo '<a href="' . esc_url( $broken_url ) . '" class="button button-secondary">' . esc_html__( 'Open Broken links', 'tso-link-inspector' ) . '</a> ';
-		echo '<a href="' . esc_url( $help_url ) . '" class="button button-link">' . esc_html__( 'Read help', 'tso-link-inspector' ) . '</a> ';
-		echo '<a href="' . esc_url( $settings_url ) . '" class="button button-link">' . esc_html__( 'Settings', 'tso-link-inspector' ) . '</a>';
+		echo '<a href="' . esc_url( $help_url ) . '" class="button button-secondary">' . esc_html__( 'Read help', 'tso-link-inspector' ) . '</a> ';
+		echo '<a href="' . esc_url( $settings_url ) . '" class="button button-secondary">' . esc_html__( 'Settings', 'tso-link-inspector' ) . '</a>';
 		echo '</p>';
 		echo '<button type="button" class="notice-dismiss tsoliin-onboarding-dismiss" aria-label="' . esc_attr__( 'Dismiss', 'tso-link-inspector' ) . '"></button>';
 		echo '</div>';
@@ -2663,6 +2664,7 @@ class TSOLIIN_Admin {
 			$link      = $this->db->get_link( $link_id );
 			$converted = false;
 			$skipped   = false;
+			$failed    = false;
 			$row_data  = array( 'link_id' => $link_id );
 			if ( $link ) {
 				$https_url = $this->get_verified_https_upgrade_for_link( $link );
@@ -2679,7 +2681,11 @@ class TSOLIIN_Admin {
 					);
 					$row_data  = $this->append_filter_match( $row_data, $updated );
 					$converted = true;
+				} else {
+					$failed = true;
 				}
+			} else {
+				$failed = true;
 			}
 			wp_send_json_success(
 				array(
@@ -2691,6 +2697,7 @@ class TSOLIIN_Admin {
 					'link_id'    => $link_id,
 					'converted'  => $converted,
 					'skipped'    => $skipped,
+					'failed'     => $failed,
 					'row'        => $row_data,
 					/* translators: 1: current, 2: total */
 					'message'    => sprintf( __( 'Upgrading to HTTPS %1$d of %2$d...', 'tso-link-inspector' ), $index + 1, $total ),
