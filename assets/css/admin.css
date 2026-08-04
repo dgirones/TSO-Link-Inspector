@@ -60,6 +60,14 @@
 
 .tsoliin-onboarding__links {
 	margin: 0;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: center;
+}
+
+.tsoliin-onboarding__links .button {
+	margin: 0;
 }
 
 .tsoliin-settings-tabs {
