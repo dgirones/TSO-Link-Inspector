@@ -5,7 +5,7 @@ Tags: broken links, link checker, seo, maintenance, links
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 2.3.1
+Stable tag: 2.3.3
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -101,10 +101,20 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 
 == Changelog ==
 
+= 2.3.3 =
+* New: Bulk action **Upgrade selected to HTTPS** — only when the server confirms a working HTTPS URL (same rules as Suggestion → Apply; unverified bot-wall suggestions are skipped).
+* New: **Links per page** screen option (default 20, min 10, max 500, filterable via `tsoliin_max_per_page`). Also used by Posts/Products with issues.
+* Fix: Spanish/Catalan strings for the new bulk HTTPS and per-page UI; bulk HTTPS skip summary no longer mislabels skips as menu/widget/term.
+* Fix: Getting started banner translation casing and consistent secondary buttons.
+* Fix: Leftover empty/legacy `{prefix}pc_tso_link_inspector` is dropped on admin load (exact SHOW TABLES match).
+
+= 2.3.2 =
+* Fix: Legacy empty `{prefix}pc_tso_link_inspector` is dropped on every admin load until gone (no permanent skip flag), with exact SHOW TABLES matching via esc_like.
+* Fix: Spanish/Catalan strings for Links per page, Upgrade selected to HTTPS, and related bulk HTTPS messages.
+
 = 2.3.1 =
-* New: Bulk action **Upgrade selected to HTTPS** — only when the server confirms HTTPS works (same rules as Suggestion → Apply).
-* New: **Links per page** screen option on the main list (10–500, capped on save so an oversized value cannot lock you out).
-* Improvement: Posts with issues view uses the same per-page preference.
+* Fix: Remove leftover empty/legacy `{prefix}pc_tso_link_inspector` table on admin load (Tables Cleaner no longer lists two Link Inspector tables after upgrade).
+* Fix: Getting started banner uses the translated Scan description (matching msgid casing) and consistent secondary buttons for Help / Settings.
 
 = 2.3.0 =
 * New: Optional **WooCommerce** scanning (Settings) for external product URLs, downloadable files, featured image, and gallery — off by default.
@@ -388,6 +398,15 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 * Initial release.
 
 == Upgrade Notice ==
+
+= 2.3.3 =
+Recommended. Adds verified bulk HTTP→HTTPS upgrade and Links per page screen option, plus translation and legacy-table cleanups.
+
+= 2.3.2 =
+Recommended if Tables Cleaner still lists a leftover `pc_tso_link_inspector` table after 2.3.1.
+
+= 2.3.1 =
+Recommended. Drops leftover legacy `pc_tso_link_inspector` and fixes Getting started translations/buttons.
 
 = 2.3.0 =
 Optional WooCommerce product link scanning and Products with issues view. Also improves Classic Editor focus scroll, gallery/image detection, HTTPS suggestions for auth-walled URLs, and row actions. Enable WooCommerce scanning under Settings if you run a store.

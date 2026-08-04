@@ -15,14 +15,20 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 
 global $wpdb;
 
-// ── Drop custom database table ──────────────────────────────────────────
-$tsoliin_table = $wpdb->prefix . 'tso_link_inspector';
-// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
-$wpdb->query( 'DROP TABLE IF EXISTS `' . esc_sql( $tsoliin_table ) . '`' );
+// ── Drop custom database tables (canonical + legacy name) ────────────────
+$tsoliin_tables = array(
+	$wpdb->prefix . 'tso_link_inspector',
+	$wpdb->prefix . 'pc_tso_link_inspector', // legacy table name
+);
+foreach ( $tsoliin_tables as $tsoliin_table ) {
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+	$wpdb->query( 'DROP TABLE IF EXISTS `' . esc_sql( $tsoliin_table ) . '`' );
+}
 
 // ── Delete all plugin options ────────────────────────────────────────────
 $tsoliin_options = array(
 	'tsoliin_version',
+	'tsoliin_legacy_pc_table_cleared',
 	'tsoliin_settings',
 	'tsoliin_last_full_scan',
 	'tsoliin_last_check_batch',
