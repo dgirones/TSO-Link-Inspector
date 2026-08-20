@@ -410,6 +410,9 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 
 == Upgrade Notice ==
 
+= 2.3.4 =
+Recommended. Fixes check-queue stalls, cron scan coverage, bulk Mark as OK UX, unverified HTTPS Apply, and related consistency bugs.
+
 = 2.3.3 =
 Recommended. Adds verified bulk HTTP→HTTPS upgrade and Links per page screen option, plus translation and legacy-table cleanups.
 
