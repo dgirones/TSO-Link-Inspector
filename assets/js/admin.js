@@ -1241,36 +1241,17 @@
 				return;
 			}
 
-			if ( 'recheck' === action || 'unlink' === action || 'make_relative' === action || 'upgrade_https' === action ) {
+			if ( 'recheck' === action || 'unlink' === action || 'make_relative' === action || 'upgrade_https' === action || 'not_broken' === action ) {
 				if ( 'make_relative' === action && ! window.confirm( tsoliinData.i18n.confirmMakeRelativeBulk ) ) {
 					return;
 				}
 				if ( 'upgrade_https' === action && ! window.confirm( tsoliinData.i18n.confirmUpgradeHttpsBulk ) ) {
 					return;
 				}
+				if ( 'not_broken' === action && ! window.confirm( tsoliinData.i18n.confirmNotBrokenBulk ) ) {
+					return;
+				}
 				self.bulkRecheckStep( linkIds, 0, action );
-			} else if ( 'not_broken' === action ) {
-				if ( ! window.confirm( tsoliinData.i18n.confirmNotBrokenBulk ) ) { return; }
-				$.ajax( {
-					url   : tsoliinData.ajaxUrl,
-					method: 'POST',
-					data  : $.extend( { action: 'tsoliin_bulk_action', nonce: tsoliinData.nonce, bulk_action: 'not_broken', link_ids: linkIds, index: 0 }, self.listFilterParam() ),
-					success: function ( r ) {
-						if ( r.success ) {
-							if ( 'all' !== ( tsoliinData.listFilter || 'all' ) ) {
-								self.scheduleListReload( 1200 );
-							} else {
-								self.$form.find( 'input[name="link_ids[]"]:checked' ).closest( 'tr' ).each( function () {
-									$( this ).find( '.column-status_code' ).html( '<span class="tsoliin-status tsoliin-status--ok">200 OK (manual)</span>' );
-									$( this ).removeClass( 'tsoliin-row--broken' );
-								} );
-								self.showNotice( r.data.message, 'success' );
-								self.refreshStats();
-							}
-						} else { alert( r.data ? r.data.message : tsoliinData.i18n.error ); }
-					},
-					error: function () { alert( tsoliinData.i18n.error ); }
-				} );
 			} else {
 				$.ajax( {
 					url   : tsoliinData.ajaxUrl,
@@ -1298,7 +1279,7 @@
 
 			// Show progress notice on first call.
 			if ( 0 === index ) {
-				self._bulkStats = { unlinked: 0, skipped: 0, failed: 0, converted: 0 };
+				self._bulkStats = { unlinked: 0, skipped: 0, failed: 0, converted: 0, marked: 0 };
 				self._bulkFilterRemoved = 0;
 				var initMsg = tsoliinData.i18n.checking;
 				if ( 'unlink' === act ) {
@@ -1307,6 +1288,8 @@
 					initMsg = tsoliinData.i18n.convertingRelative || 'Converting to /path…';
 				} else if ( 'upgrade_https' === act ) {
 					initMsg = tsoliinData.i18n.upgradingHttps || 'Upgrading to HTTPS…';
+				} else if ( 'not_broken' === act ) {
+					initMsg = tsoliinData.i18n.markingNotBroken || 'Marking as OK…';
 				}
 				self.$bulkProgress = $( '<div class="notice notice-info tsoliin-notice"><p><strong id="tsoliin-bulk-msg">' + initMsg + '</strong> <progress id="tsoliin-bulk-bar" max="100" value="0" style="width:200px;vertical-align:middle;"></progress></p></div>' );
 				$( '.tsoliin-toolbar' ).after( self.$bulkProgress );
@@ -1350,6 +1333,15 @@
 						httpsParts.push( '❌ ' + self._bulkStats.failed + ' ' + tsoliinData.i18n.itemsFailed );
 					}
 					doneMsg = httpsParts.length ? httpsParts.join( ' ' ) : ( '✅ 0 ' + ( tsoliinData.i18n.itemsUpgradedHttps || 'links upgraded to HTTPS.' ) );
+				} else if ( 'not_broken' === act ) {
+					var okParts = [];
+					if ( self._bulkStats.marked > 0 ) {
+						okParts.push( '✅ ' + self._bulkStats.marked + ' ' + ( tsoliinData.i18n.itemsMarkedOk || 'marked as OK.' ) );
+					}
+					if ( self._bulkStats.failed > 0 ) {
+						okParts.push( '❌ ' + self._bulkStats.failed + ' ' + tsoliinData.i18n.itemsFailed );
+					}
+					doneMsg = okParts.length ? okParts.join( ' ' ) : ( '✅ 0 ' + ( tsoliinData.i18n.itemsMarkedOk || 'marked as OK.' ) );
 				} else {
 					doneMsg = '✅ ' + total + ' ' + tsoliinData.i18n.itemsChecked;
 				}
@@ -1357,7 +1349,7 @@
 				$( '#tsoliin-bulk-bar' ).val( 100 );
 				if ( 'unlink' === act || 'make_relative' === act || 'upgrade_https' === act ) {
 					self.scheduleListReload( 1500 );
-				} else if ( 'recheck' === act && 'all' !== ( tsoliinData.listFilter || 'all' ) && self._bulkFilterRemoved > 0 ) {
+				} else if ( ( 'recheck' === act || 'not_broken' === act ) && 'all' !== ( tsoliinData.listFilter || 'all' ) && self._bulkFilterRemoved > 0 ) {
 					self.scheduleListReload( 1500 );
 				} else {
 					self.refreshStats();
@@ -1378,6 +1370,8 @@
 				progressLabel = tsoliinData.i18n.convertingRelative || 'Converting to /path…';
 			} else if ( 'upgrade_https' === act ) {
 				progressLabel = tsoliinData.i18n.upgradingHttps || 'Upgrading to HTTPS…';
+			} else if ( 'not_broken' === act ) {
+				progressLabel = tsoliinData.i18n.markingNotBroken || 'Marking as OK…';
 			}
 			var pct = Math.round( ( ( index + 1 ) / total ) * 100 );
 			$( '#tsoliin-bulk-msg' ).text( progressLabel + ' ' + ( index + 1 ) + '/' + total );
@@ -1468,11 +1462,35 @@
 							} else {
 								self._bulkStats.failed++;
 							}
+						} else if ( 'not_broken' === act && r.data.link_id ) {
+							if ( r.data.marked && r.data.row ) {
+								self._bulkStats.marked++;
+								var $tr4 = $( 'tr' ).filter( function () {
+									return $( this ).find( 'input[value="' + r.data.link_id + '"]' ).length > 0;
+								} );
+								if ( $tr4.length ) {
+									var d4 = r.data.row;
+									if ( self.removeRowIfFilterMismatch( $tr4, d4, true ) ) {
+										self._bulkFilterRemoved++;
+									} else {
+										if ( d4.status_html ) {
+											$tr4.find( '.column-status_code' ).html( d4.status_html );
+										} else if ( undefined !== d4.status_code && undefined !== d4.css_class && undefined !== d4.label ) {
+											$tr4.find( '.column-status_code' ).html( '<span class="tsoliin-status ' + d4.css_class + '">' + parseInt( d4.status_code, 10 ) + ' ' + self.escapeHtml( d4.label ) + '</span>' );
+										}
+										$tr4.removeClass( 'tsoliin-row--broken' );
+										$tr4.find( '.tsoliin-not-broken' ).closest( 'span' ).remove();
+										$tr4.find( '.tsoliin-suggest' ).closest( 'span' ).remove();
+									}
+								}
+							} else {
+								self._bulkStats.failed++;
+							}
 						}
 					self.bulkRecheckStep( linkIds, index + 1, act );
 				},
 				error: function () {
-					if ( 'unlink' === act || 'make_relative' === act || 'upgrade_https' === act ) {
+					if ( 'unlink' === act || 'make_relative' === act || 'upgrade_https' === act || 'not_broken' === act ) {
 						self._bulkStats.failed++;
 					}
 					alert( tsoliinData.i18n.error );
@@ -1687,7 +1705,7 @@
 							html += conf + ' <a href="' + urlAttr + '" target="_blank" rel="noopener">' + urlLabel + '</a>';
 							html += ' <span class="tsoliin-status ' + statusCls + '" style="font-size:11px;">' + parseInt( s.status_code, 10 ) + ' ' + self.escapeHtml( s.label ) + '</span>';
 							html += ' <em style="color:#646970;font-size:12px;">— ' + self.escapeHtml( s.reason ) + '</em>';
-							if ( actionable ) {
+							if ( actionable && ! s.unverified ) {
 								html += ' <button type="button" class="button button-small tsoliin-apply-suggest" style="margin-left:8px;"'
 									+ ' data-id="' + linkId + '" data-url="' + urlAttr + '">'
 									+ self.escapeHtml( tsoliinData.i18n.applyUrl ) + '</button>';

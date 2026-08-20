@@ -338,6 +338,8 @@ class TSOLIIN_Admin {
 				'relativeDisabled'  => __( 'Enable “Convert to /path” in Settings first.', 'tso-link-inspector' ),
 				'convertingRelative'=> __( 'Converting to /path…', 'tso-link-inspector' ),
 				'upgradingHttps'    => __( 'Upgrading to HTTPS…', 'tso-link-inspector' ),
+				'markingNotBroken'  => __( 'Marking as OK…', 'tso-link-inspector' ),
+				'itemsMarkedOk'     => __( 'marked as OK.', 'tso-link-inspector' ),
 				'itemsConverted'    => __( 'links converted to /path.', 'tso-link-inspector' ),
 				'itemsUpgradedHttps'=> __( 'links upgraded to HTTPS.', 'tso-link-inspector' ),
 				'confirmDeleteBulk' => __( 'Delete the selected records from the list? The posts will not be changed.', 'tso-link-inspector' ),
@@ -1894,6 +1896,7 @@ class TSOLIIN_Admin {
 		}
 		$link             = $this->resync_link_before_recheck( $link );
 		if ( ! $link ) {
+			$this->db->delete_link( $link_id );
 			wp_send_json_success(
 				array(
 					'removed'        => true,
@@ -1997,6 +2000,14 @@ class TSOLIIN_Admin {
 		}
 		if ( ! $url_changed && ! $anchor_changed ) {
 			wp_send_json_error( array( 'message' => __( 'No changes to save.', 'tso-link-inspector' ) ) );
+		}
+
+		if ( $url_changed && $this->rejects_unverified_https_upgrade( $link, $new_url ) ) {
+			wp_send_json_error(
+				array(
+					'message' => __( 'HTTPS could not be verified from the server. Use bulk Upgrade to HTTPS only when confirmed, or mark the link as OK manually.', 'tso-link-inspector' ),
+				)
+			);
 		}
 
 		$blocked = $this->get_non_editable_source_message( $link );
@@ -2180,6 +2191,25 @@ class TSOLIIN_Admin {
 			return '';
 		}
 		return $this->http->get_verified_https_upgrade_url( (string) $link->link_url, (int) $link->post_id );
+	}
+
+	/**
+	 * Whether a http→https URL change must be blocked (not server-verified).
+	 *
+	 * @param object $link    DB link row.
+	 * @param string $new_url Proposed URL.
+	 * @return bool
+	 */
+	private function rejects_unverified_https_upgrade( $link, $new_url ) {
+		if ( ! $link || ! TSOLIIN_HTTP::is_plain_http_url( (string) $link->link_url ) ) {
+			return false;
+		}
+		$new_url = (string) $new_url;
+		if ( ! preg_match( '#\Ahttps://#i', $new_url ) ) {
+			return false;
+		}
+		$verified = $this->http->get_verified_https_upgrade_url( (string) $link->link_url, (int) $link->post_id );
+		return '' === $verified || $verified !== $new_url;
 	}
 
 	/**
@@ -2511,6 +2541,7 @@ class TSOLIIN_Admin {
 				}
 			}
 			if ( ! $link ) {
+				$this->db->delete_link( $link_id );
 				wp_send_json_success(
 					array(
 						'done'           => ( $index + 1 ) >= $total,
@@ -2566,8 +2597,13 @@ class TSOLIIN_Admin {
 			$skipped = false;
 			if ( $link ) {
 				if ( ! TSOLIIN_Support::can_unlink_link( $link ) ) {
-					$ok      = false;
-					$skipped = true;
+					if ( $this->scanner->is_orphan_post_link_row( $link ) ) {
+						$this->db->delete_link( $link_id );
+						$ok = true;
+					} else {
+						$ok      = false;
+						$skipped = true;
+					}
 				} elseif ( 'comment' === $type ) {
 					$ok = $this->unlink_comment( $link );
 				} elseif ( 'widget' === $type ) {
@@ -2596,14 +2632,47 @@ class TSOLIIN_Admin {
 				'message'    => sprintf( __( 'Unlinking %1$d of %2$d...', 'tso-link-inspector' ), $index + 1, $total ),
 			) );
 		} elseif ( 'not_broken' === $action ) {
-			$processed = 0;
-			foreach ( $link_ids as $lid ) {
-				if ( $this->db->mark_as_not_broken( $lid ) ) {
-					$processed++;
+			$index   = isset( $_POST['index'] ) ? absint( $_POST['index'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+			$total   = count( $link_ids );
+			$link_id = isset( $link_ids[ $index ] ) ? $link_ids[ $index ] : 0;
+			if ( ! $link_id ) {
+				wp_send_json_success( array( 'done' => true, 'processed' => $total ) );
+			}
+			$row_data = array( 'link_id' => $link_id );
+			$marked   = false;
+			if ( $this->db->mark_as_not_broken( $link_id ) ) {
+				$updated = $this->db->get_link( $link_id );
+				if ( $updated ) {
+					$marked   = true;
+					$row_data = array_merge(
+						array( 'link_id' => $link_id ),
+						$this->append_filter_match(
+							array(
+								'status_html' => TSOLIIN_Support::render_link_status_html( $updated, $this->http ),
+								'status_code' => 200,
+								'css_class'   => 'tsoliin-status--ok',
+								'label'       => __( 'OK (manual)', 'tso-link-inspector' ),
+								'is_broken'   => 0,
+							),
+							$updated
+						)
+					);
 				}
 			}
-			/* translators: %d: count of links marked as OK */
-			wp_send_json_success( array( 'done' => true, 'processed' => $processed, 'message' => sprintf( __( '%d marked as OK and moved to Manual locks.', 'tso-link-inspector' ), $processed ) ) );
+			wp_send_json_success(
+				array(
+					'done'       => ( $index + 1 ) >= $total,
+					'processed'  => $index + 1,
+					'total'      => $total,
+					'pct'        => (int) round( ( ( $index + 1 ) / $total ) * 100 ),
+					'next_index' => $index + 1,
+					'link_id'    => $link_id,
+					'marked'     => $marked,
+					'row'        => $row_data,
+					/* translators: 1: current, 2: total */
+					'message'    => sprintf( __( 'Marking as OK %1$d of %2$d...', 'tso-link-inspector' ), $index + 1, $total ),
+				)
+			);
 		} elseif ( 'make_relative' === $action ) {
 			if ( ! TSOLIIN_Support::is_relative_url_tool_enabled() ) {
 				wp_send_json_error( array( 'message' => __( 'Enable “Convert to /path” in Settings first.', 'tso-link-inspector' ) ) );
