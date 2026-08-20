@@ -5,7 +5,7 @@
  * Version:           2.3.4
  * Requires at least: 6.0
  * Requires PHP:      7.4
- * Tested up to:       7.0
+ * Tested up to:       7.1
  * Author:            Tu Soporte Online
  * Author URI:        https://www.tusoporteonline.es/blog
  * License:           GPL-2.0-or-later
