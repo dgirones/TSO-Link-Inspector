@@ -65,6 +65,37 @@ class TSOLIIN_Scanner {
 		return $this->opt( 'scan_widgets', true );
 	}
 
+	/**
+	 * Prevent concurrent cursor updates for extended source scans (UI + cron).
+	 *
+	 * @param string $source comments|menus|terms|fse.
+	 * @return bool True when the lock was acquired.
+	 */
+	private function acquire_source_scan_lock( $source ) {
+		$source = sanitize_key( (string) $source );
+		if ( '' === $source ) {
+			return false;
+		}
+		$key = 'tsoliin_scan_lock_' . $source;
+		if ( get_transient( $key ) ) {
+			return false;
+		}
+		set_transient( $key, 1, 45 );
+		return true;
+	}
+
+	/**
+	 * @param string $source comments|menus|terms|fse.
+	 * @return void
+	 */
+	private function release_source_scan_lock( $source ) {
+		$source = sanitize_key( (string) $source );
+		if ( '' === $source ) {
+			return;
+		}
+		delete_transient( 'tsoliin_scan_lock_' . $source );
+	}
+
 	// -------------------------------------------------------------------------
 	// Post count helpers
 	// -------------------------------------------------------------------------
@@ -2432,6 +2463,9 @@ class TSOLIIN_Scanner {
 		if ( ! $this->opt( 'scan_comments' ) ) {
 			return 0;
 		}
+		if ( ! $this->acquire_source_scan_lock( 'comments' ) ) {
+			return 0;
+		}
 		global $wpdb;
 		$per_page = max( 1, absint( $per_page ) );
 		$after_id = absint( get_option( 'tsoliin_comment_scan_after_id', 0 ) );
@@ -2451,6 +2485,7 @@ class TSOLIIN_Scanner {
 
 		if ( empty( $comments ) ) {
 			update_option( 'tsoliin_comment_scan_after_id', 0, false );
+			$this->release_source_scan_lock( 'comments' );
 			return 0;
 		}
 
@@ -2465,7 +2500,8 @@ class TSOLIIN_Scanner {
 		}
 
 		update_option( 'tsoliin_comment_scan_after_id', $max_id, false );
-		return $found;
+		$this->release_source_scan_lock( 'comments' );
+		return max( 1, $found );
 	}
 
 	// -------------------------------------------------------------------------
@@ -2480,6 +2516,9 @@ class TSOLIIN_Scanner {
 	 */
 	public function scan_menus_batch( $per_page = 50 ) {
 		if ( ! $this->opt( 'scan_menus', true ) ) {
+			return 0;
+		}
+		if ( ! $this->acquire_source_scan_lock( 'menus' ) ) {
 			return 0;
 		}
 		global $wpdb;
@@ -2498,6 +2537,7 @@ class TSOLIIN_Scanner {
 
 		if ( empty( $rows ) ) {
 			update_option( 'tsoliin_menu_scan_after_id', 0, false );
+			$this->release_source_scan_lock( 'menus' );
 			return 0;
 		}
 
@@ -2514,7 +2554,8 @@ class TSOLIIN_Scanner {
 		}
 
 		update_option( 'tsoliin_menu_scan_after_id', $max_id, false );
-		return $found;
+		$this->release_source_scan_lock( 'menus' );
+		return max( 1, $found );
 	}
 
 	/**
@@ -6758,6 +6799,9 @@ class TSOLIIN_Scanner {
 		if ( ! $this->opt( 'scan_terms', true ) ) {
 			return 0;
 		}
+		if ( ! $this->acquire_source_scan_lock( 'terms' ) ) {
+			return 0;
+		}
 		global $wpdb;
 		$per_page = max( 1, absint( $per_page ) );
 		$after_id = absint( get_option( 'tsoliin_term_scan_after_id', 0 ) );
@@ -6781,6 +6825,7 @@ class TSOLIIN_Scanner {
 
 		if ( empty( $rows ) ) {
 			update_option( 'tsoliin_term_scan_after_id', 0, false );
+			$this->release_source_scan_lock( 'terms' );
 			return 0;
 		}
 
@@ -6795,7 +6840,8 @@ class TSOLIIN_Scanner {
 		}
 
 		update_option( 'tsoliin_term_scan_after_id', $max_id, false );
-		return $found;
+		$this->release_source_scan_lock( 'terms' );
+		return max( 1, $found );
 	}
 
 	/**
@@ -6806,6 +6852,9 @@ class TSOLIIN_Scanner {
 	 */
 	public function scan_fse_batch( $per_page = 20 ) {
 		if ( ! $this->opt( 'scan_fse', true ) ) {
+			return 0;
+		}
+		if ( ! $this->acquire_source_scan_lock( 'fse' ) ) {
 			return 0;
 		}
 		global $wpdb;
@@ -6829,6 +6878,7 @@ class TSOLIIN_Scanner {
 
 		if ( empty( $rows ) ) {
 			update_option( 'tsoliin_fse_scan_after_id', 0, false );
+			$this->release_source_scan_lock( 'fse' );
 			return 0;
 		}
 
@@ -6844,7 +6894,8 @@ class TSOLIIN_Scanner {
 		}
 
 		update_option( 'tsoliin_fse_scan_after_id', $max_id, false );
-		return $found;
+		$this->release_source_scan_lock( 'fse' );
+		return max( 1, $found );
 	}
 
 }

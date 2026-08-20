@@ -1391,7 +1391,7 @@ class TSOLIIN_HTTP {
 	 */
 	public static function is_hard_broken_status( $code ) {
 		$code = (int) $code;
-		if ( in_array( $code, array( -1, -5, -6, -7 ), true ) ) {
+		if ( in_array( $code, array( -1, -5, -6, -7, -8 ), true ) ) {
 			return false;
 		}
 		if ( $code <= 0 ) {

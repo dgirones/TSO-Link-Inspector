@@ -428,7 +428,7 @@ class TSOLIIN_DB {
 			$row = $wpdb->get_row(
 				$wpdb->prepare(
 					// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-					"SELECT anchor_text FROM {$this->table} WHERE id = %d LIMIT 1",
+					"SELECT anchor_text, link_url FROM {$this->table} WHERE id = %d LIMIT 1",
 					absint( $alias_id )
 				)
 			);
@@ -436,18 +436,44 @@ class TSOLIIN_DB {
 			if ( '' === $anchor && $row && '' !== trim( (string) $row->anchor_text ) ) {
 				$anchor_to_store = (string) $row->anchor_text;
 			}
-			$wpdb->update(
-				$this->table,
-				array(
-					'link_url'    => $link_url,
-					'anchor_text' => $anchor_to_store,
-					'link_type'   => $link_type,
-				),
-				array( 'id' => absint( $alias_id ) ),
-				array( '%s', '%s', '%s' ),
-				array( '%d' )
-			);
+			$url_changed = $row && (string) $row->link_url !== $link_url;
+			if ( $url_changed ) {
+				$wpdb->update(
+					$this->table,
+					array(
+						'link_url'                 => $link_url,
+						'anchor_text'              => $anchor_to_store,
+						'link_type'                => $link_type,
+						'status_code'              => 0,
+						'redirect_url'             => '',
+						'is_broken'                => 0,
+						'last_checked'             => null,
+						'consecutive_failures'     => 0,
+						'user_verified'            => 0,
+						'verify_baseline_link'     => '',
+						'verify_baseline_redirect' => '',
+					),
+					array( 'id' => absint( $alias_id ) ),
+					array( '%s', '%s', '%s', '%d', '%s', '%d', '%s', '%d', '%d', '%s', '%s' ),
+					array( '%d' )
+				);
+			} else {
+				$wpdb->update(
+					$this->table,
+					array(
+						'link_url'    => $link_url,
+						'anchor_text' => $anchor_to_store,
+						'link_type'   => $link_type,
+					),
+					array( 'id' => absint( $alias_id ) ),
+					array( '%s', '%s', '%s' ),
+					array( '%d' )
+				);
+			}
 			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			if ( $url_changed ) {
+				self::clear_stats_cache();
+			}
 			return absint( $alias_id );
 		}
 
@@ -828,7 +854,7 @@ class TSOLIIN_DB {
 			'redirect_url'         => $redirect_url,
 			'redirect_chain'       => $chain_json,
 			'is_broken'            => $is_broken,
-			'last_checked'         => ( -8 === $status_code ) ? null : current_time( 'mysql', true ),
+			'last_checked'         => current_time( 'mysql', true ),
 			'consecutive_failures' => ( -8 === $status_code ) ? $prev_failures : $failures,
 		);
 		$format = array( '%d', '%s', '%s', '%d', '%s', '%d' );

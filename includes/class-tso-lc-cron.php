@@ -88,7 +88,49 @@ class TSOLIIN_Cron {
 			$this->scanner->scan_all_widgets();
 		}
 
+		$this->drain_extended_scan_batches( $start );
+
 		update_option( 'tsoliin_last_full_scan', current_time( 'mysql', true ), false );
+	}
+
+	/**
+	 * Continue menu/term/FSE scan cursors during daily cron (matches UI scan_batch coverage).
+	 *
+	 * @param float $start microtime( true ) when run_scan() began.
+	 * @return void
+	 */
+	private function drain_extended_scan_batches( $start ) {
+		$batches = array();
+		if ( $this->is_scan_setting_enabled( 'scan_menus', true ) ) {
+			$batches[] = array( 'scan_menus_batch', self::BG_BATCH );
+		}
+		if ( $this->is_scan_setting_enabled( 'scan_terms', true ) ) {
+			$batches[] = array( 'scan_terms_batch', self::BG_BATCH );
+		}
+		if ( $this->is_scan_setting_enabled( 'scan_fse', true ) ) {
+			$batches[] = array( 'scan_fse_batch', max( 5, (int) floor( self::BG_BATCH / 2 ) ) );
+		}
+		foreach ( $batches as $batch ) {
+			while ( ( microtime( true ) - $start ) < 55 ) {
+				$n = call_user_func( array( $this->scanner, $batch[0] ), $batch[1] );
+				if ( $n <= 0 ) {
+					break;
+				}
+			}
+		}
+	}
+
+	/**
+	 * @param string $key     Settings key.
+	 * @param bool   $default Default when unset.
+	 * @return bool
+	 */
+	private function is_scan_setting_enabled( $key, $default = false ) {
+		$s = get_option( 'tsoliin_settings', array() );
+		if ( ! is_array( $s ) || ! array_key_exists( $key, $s ) ) {
+			return (bool) $default;
+		}
+		return ! empty( $s[ $key ] );
 	}
 
 	/** Hourly: check a batch of stale links. */
@@ -141,6 +183,20 @@ class TSOLIIN_Cron {
 	public function start_bg_check( $resume = true, $post_id = 0 ) {
 		$resume  = (bool) $resume;
 		$post_id = absint( $post_id );
+		$running = (int) get_option( 'tsoliin_bg_check_running', 0 );
+
+		if ( $running && $resume ) {
+			$ts = wp_next_scheduled( self::HOOK_BG_STEP );
+			if ( ! $ts ) {
+				wp_schedule_single_event( time(), self::HOOK_BG_STEP );
+				spawn_cron();
+			}
+			return;
+		}
+
+		if ( $running && ! $resume ) {
+			$this->stop_bg_check();
+		}
 
 		if ( $post_id > 0 ) {
 			$total = (int) $this->db->get_stats_for_post( $post_id )['total'];
