@@ -27,6 +27,13 @@ class TSOLIIN_Scanner {
 	/** @var array<int,bool> Post IDs that already received a pre-edit revision this request. */
 	private $revision_saved_for_posts = array();
 
+	/**
+	 * Dates to restore on wp_update_post when “preserve modified date” is enabled.
+	 *
+	 * @var array{ID:int,post_modified:string,post_modified_gmt:string}|null
+	 */
+	private $preserve_modified_context = null;
+
 	/** @var array<string,bool> Request-scoped is_url_editable_in_source() results. */
 	private $editable_source_cache = array();
 
@@ -4266,7 +4273,7 @@ class TSOLIIN_Scanner {
 	 */
 	public function replace_url_in_post_meta( $post_id, $old_url, $new_url ) {
 		$post_id = absint( $post_id );
-		if ( $post_id <= 0 ) {
+		if ( $post_id <= 0 || ! current_user_can( 'edit_post', $post_id ) ) {
 			return false;
 		}
 		$changed_any = false;
@@ -6020,6 +6027,9 @@ class TSOLIIN_Scanner {
 	 */
 	public function unlink_in_comment( $comment_id, $url ) {
 		$comment_id = absint( $comment_id );
+		if ( $comment_id <= 0 || ! current_user_can( 'edit_comment', $comment_id ) ) {
+			return false;
+		}
 		$comment    = get_comment( $comment_id );
 		if ( ! $comment ) {
 			return false;
@@ -6158,6 +6168,9 @@ class TSOLIIN_Scanner {
 	 */
 	public function replace_url_in_comment_content( $comment_id, $old_url, $new_url ) {
 		$comment_id = absint( $comment_id );
+		if ( $comment_id <= 0 || ! current_user_can( 'edit_comment', $comment_id ) ) {
+			return false;
+		}
 		$comment    = get_comment( $comment_id );
 		if ( ! $comment ) {
 			return false;
@@ -6194,6 +6207,9 @@ class TSOLIIN_Scanner {
 	 */
 	public function replace_anchor_in_comment_content( $comment_id, $url, $new_anchor ) {
 		$comment_id = absint( $comment_id );
+		if ( $comment_id <= 0 || ! current_user_can( 'edit_comment', $comment_id ) ) {
+			return false;
+		}
 		$comment    = get_comment( $comment_id );
 		$new_anchor = sanitize_text_field( (string) $new_anchor );
 		if ( ! $comment || '' === $new_anchor ) {
@@ -6227,39 +6243,79 @@ class TSOLIIN_Scanner {
 	}
 
 	/**
-	 * Update post_content while preserving post_modified date (optional).
-	 * Respects the tsoliin_preserve_dates setting.
+	 * Keep post_modified when the preserve-dates setting is on (wp_insert_post_data callback).
+	 *
+	 * @param array $data    Sanitized post data.
+	 * @param array $postarr Raw post array passed to wp_insert_post().
+	 * @return array
+	 */
+	public function filter_preserve_post_modified( $data, $postarr ) {
+		if ( ! is_array( $this->preserve_modified_context ) ) {
+			return $data;
+		}
+		$id = isset( $postarr['ID'] ) ? (int) $postarr['ID'] : 0;
+		if ( $id !== (int) $this->preserve_modified_context['ID'] ) {
+			return $data;
+		}
+		$data['post_modified']     = $this->preserve_modified_context['post_modified'];
+		$data['post_modified_gmt'] = $this->preserve_modified_context['post_modified_gmt'];
+		return $data;
+	}
+
+	/**
+	 * Update post_content via wp_update_post (revisions, cache, KSES).
+	 * Optionally keeps post_modified when tsoliin_preserve_dates is enabled.
 	 *
 	 * @param int    $post_id     Post ID.
 	 * @param string $new_content New post_content.
 	 * @return bool
 	 */
 	private function update_post_content( $post_id, $new_content ) {
+		$post_id = absint( $post_id );
+		if ( $post_id <= 0 || ! current_user_can( 'edit_post', $post_id ) ) {
+			return false;
+		}
+
+		$post = get_post( $post_id );
+		if ( ! $post ) {
+			return false;
+		}
+
 		$s              = get_option( 'tsoliin_settings', array() );
 		$preserve_dates = ! empty( $s['preserve_dates'] );
 
 		if ( $preserve_dates ) {
-			// Update directly via wpdb to avoid touching post_modified.
-			global $wpdb;
-			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-			$result = $wpdb->update(
-				$wpdb->posts,
-				array( 'post_content' => $new_content ),
-				array( 'ID' => absint( $post_id ) ),
-				array( '%s' ),
-				array( '%d' )
+			$this->preserve_modified_context = array(
+				'ID'                => $post_id,
+				'post_modified'     => (string) $post->post_modified,
+				'post_modified_gmt' => (string) $post->post_modified_gmt,
 			);
-			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-			if ( false === $result ) {
-				return false;
-			}
-			// Clear WP object cache for this post.
-			clean_post_cache( $post_id );
-			return true;
+			add_filter( 'wp_insert_post_data', array( $this, 'filter_preserve_post_modified' ), 10, 2 );
+			// Same as the old direct UPDATE: do not add an extra revision on this write.
+			remove_action( 'post_updated', 'wp_save_post_revision' );
 		}
 
-		$r = wp_update_post( array( 'ID' => $post_id, 'post_content' => $new_content ), true );
-		return ! is_wp_error( $r );
+		try {
+			$r = wp_update_post(
+				array(
+					'ID'           => $post_id,
+					'post_content' => $new_content,
+				),
+				true
+			);
+		} finally {
+			if ( $preserve_dates ) {
+				add_action( 'post_updated', 'wp_save_post_revision' );
+				remove_filter( 'wp_insert_post_data', array( $this, 'filter_preserve_post_modified' ), 10 );
+				$this->preserve_modified_context = null;
+			}
+		}
+
+		if ( is_wp_error( $r ) || ! $r ) {
+			return false;
+		}
+		clean_post_cache( $post_id );
+		return true;
 	}
 
 	// -------------------------------------------------------------------------
@@ -6777,6 +6833,9 @@ class TSOLIIN_Scanner {
 	 * @return bool
 	 */
 	public function replace_url_in_widget( $source_key, $old_url, $new_url ) {
+		if ( ! current_user_can( 'edit_theme_options' ) ) {
+			return false;
+		}
 		$resolved = $this->resolve_widget_from_source_key( $source_key );
 		if ( ! $resolved ) {
 			return false;
@@ -6804,6 +6863,9 @@ class TSOLIIN_Scanner {
 	 * @return bool
 	 */
 	public function replace_anchor_in_widget( $source_key, $url, $new_anchor ) {
+		if ( ! current_user_can( 'edit_theme_options' ) ) {
+			return false;
+		}
 		$resolved = $this->resolve_widget_from_source_key( $source_key );
 		if ( ! $resolved ) {
 			return false;
@@ -6850,6 +6912,9 @@ class TSOLIIN_Scanner {
 	 * @return bool
 	 */
 	private function unlink_url_in_widget_html( $source_key, $url ) {
+		if ( ! current_user_can( 'edit_theme_options' ) ) {
+			return false;
+		}
 		$resolved = $this->resolve_widget_from_source_key( $source_key );
 		if ( ! $resolved ) {
 			return false;
@@ -6934,6 +6999,9 @@ class TSOLIIN_Scanner {
 		if ( ! $item_id ) {
 			return false;
 		}
+		if ( ! current_user_can( 'edit_post', $item_id ) && ! current_user_can( 'edit_theme_options' ) ) {
+			return false;
+		}
 		$stored = (string) get_post_meta( $item_id, '_menu_item_url', true );
 		if ( '' === $stored && get_post( $item_id ) ) {
 			$item = wp_setup_nav_menu_item( get_post( $item_id ) );
@@ -6957,6 +7025,9 @@ class TSOLIIN_Scanner {
 		$item_id = $this->menu_item_id_from_source_key( $source_key );
 		$new_anchor = sanitize_text_field( (string) $new_anchor );
 		if ( ! $item_id || '' === $new_anchor ) {
+			return false;
+		}
+		if ( ! current_user_can( 'edit_post', $item_id ) && ! current_user_can( 'edit_theme_options' ) ) {
 			return false;
 		}
 		return false !== wp_update_post(
@@ -7000,6 +7071,9 @@ class TSOLIIN_Scanner {
 	 */
 	public function replace_url_in_term( $source_key, $old_url, $new_url ) {
 		$term_id = $this->term_id_from_source_key( $source_key );
+		if ( $term_id <= 0 || ! current_user_can( 'edit_term', $term_id ) ) {
+			return false;
+		}
 		$term    = $term_id ? get_term( $term_id ) : null;
 		if ( ! $term || is_wp_error( $term ) ) {
 			return false;
@@ -7028,6 +7102,9 @@ class TSOLIIN_Scanner {
 	 */
 	public function replace_anchor_in_term( $source_key, $url, $new_anchor ) {
 		$term_id = $this->term_id_from_source_key( $source_key );
+		if ( $term_id <= 0 || ! current_user_can( 'edit_term', $term_id ) ) {
+			return false;
+		}
 		$term    = $term_id ? get_term( $term_id ) : null;
 		if ( ! $term || is_wp_error( $term ) ) {
 			return false;
@@ -7059,6 +7136,9 @@ class TSOLIIN_Scanner {
 	 */
 	public function unlink_in_term( $source_key, $url ) {
 		$term_id = $this->term_id_from_source_key( $source_key );
+		if ( $term_id <= 0 || ! current_user_can( 'edit_term', $term_id ) ) {
+			return false;
+		}
 		$term    = $term_id ? get_term( $term_id ) : null;
 		if ( ! $term || is_wp_error( $term ) ) {
 			return false;
