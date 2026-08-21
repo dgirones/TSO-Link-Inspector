@@ -46,6 +46,7 @@ $tsoliin_options = array(
 	'tsoliin_fse_scan_after_id',
 	'tsoliin_broken_digest_last_sent',
 	'tsoliin_immediate_broken_queue',
+	'tsoliin_site_gate_state',
 );
 foreach ( $tsoliin_options as $tsoliin_option_name ) {
 	delete_option( $tsoliin_option_name );
@@ -63,6 +64,7 @@ $tsoliin_transients = array(
 	'tsoliin_scan_lock_widgets',
 	'tsoliin_scan_lock_acfopt',
 	'tsoliin_immediate_queue_lock',
+	'tsoliin_site_gate',
 );
 foreach ( $tsoliin_transients as $tsoliin_transient_name ) {
 	delete_transient( $tsoliin_transient_name );

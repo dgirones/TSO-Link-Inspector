@@ -19,9 +19,13 @@ if ( ! defined( 'ABSPATH' ) ) {
  *  -3   = timeout
  *  -4   = connection refused
  *  -5   = SSL error
+ *  -9   = site gated (coming soon / maintenance intercepts internal URLs)
  * 2-5   = legacy (stored by old absint() bug, same meaning as -2 to -5)
  */
 class TSOLIIN_HTTP {
+
+	/** Internal status: coming-soon / maintenance intercepts this site's HTML URLs. */
+	const STATUS_SITE_GATED = -9;
 
 	/** @var int Request timeout in seconds. */
 	private $timeout;
@@ -889,6 +893,216 @@ class TSOLIIN_HTTP {
 	}
 
 	/**
+	 * Result when the site's coming-soon / maintenance page intercepts internal HTML URLs.
+	 *
+	 * @return array{status_code:int,redirect_url:string,is_broken:int}
+	 */
+	private function site_gated_result() {
+		return array(
+			'status_code'  => self::STATUS_SITE_GATED,
+			'redirect_url' => '',
+			'is_broken'    => 0,
+		);
+	}
+
+	/**
+	 * Last coming-soon probe result (transient, then stored option).
+	 *
+	 * @return array{gated?:bool,home_code?:int,probe_code?:int}
+	 */
+	public function get_site_gate_state() {
+		$state = get_transient( 'tsoliin_site_gate' );
+		if ( ! is_array( $state ) ) {
+			$state = get_option( 'tsoliin_site_gate_state', array() );
+		}
+		return is_array( $state ) ? $state : array();
+	}
+
+	/**
+	 * Cached coming-soon verdict (no network). Used for admin notices.
+	 *
+	 * @return bool
+	 */
+	public function is_site_gated_cached() {
+		$state = get_transient( 'tsoliin_site_gate' );
+		return is_array( $state ) && ! empty( $state['gated'] );
+	}
+
+	/**
+	 * Whether internal HTML URLs currently hit a coming-soon / maintenance intercept.
+	 *
+	 * @return bool
+	 */
+	public function is_site_gated() {
+		$state = get_transient( 'tsoliin_site_gate' );
+		if ( is_array( $state ) && array_key_exists( 'gated', $state ) ) {
+			return ! empty( $state['gated'] );
+		}
+		return $this->detect_and_store_site_gate();
+	}
+
+	/**
+	 * Probe home vs a nonsense path and cache the gate verdict.
+	 *
+	 * @return bool
+	 */
+	private function detect_and_store_site_gate() {
+		$home  = home_url( '/' );
+		$probe = home_url( '/tsoliin-nx-' . strtolower( wp_generate_password( 12, false, false ) ) . '/' );
+		$home_res  = $this->gate_fetch( $home );
+		$probe_res = $this->gate_fetch( $probe );
+		$gated     = $this->responses_indicate_site_gate( $home_res, $probe_res );
+		$payload   = array(
+			'gated'      => $gated,
+			'home_code'  => isset( $home_res['code'] ) ? (int) $home_res['code'] : 0,
+			'probe_code' => isset( $probe_res['code'] ) ? (int) $probe_res['code'] : 0,
+		);
+		set_transient( 'tsoliin_site_gate', $payload, 10 * MINUTE_IN_SECONDS );
+		update_option( 'tsoliin_site_gate_state', $payload, false );
+		return $gated;
+	}
+
+	/**
+	 * @param string $url Absolute URL.
+	 * @return array{ok:bool,code:int,final:string,body:string}
+	 */
+	private function gate_fetch( $url ) {
+		$args = array(
+			'timeout'            => min( 10, max( 5, (int) $this->timeout ) ),
+			'redirection'        => 5,
+			'reject_unsafe_urls' => true,
+			'user-agent'         => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+			'sslverify'          => true,
+			'headers'            => array(
+				'Accept'          => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+				'Accept-Language' => 'ca,es;q=0.9,en;q=0.8',
+			),
+		);
+		$response = wp_remote_get( $url, $args );
+		if ( is_wp_error( $response ) ) {
+			return array(
+				'ok'    => false,
+				'code'  => 0,
+				'final' => '',
+				'body'  => '',
+			);
+		}
+		$final = wp_remote_retrieve_header( $response, 'location' );
+		$final = is_string( $final ) && '' !== $final ? $this->resolve_redirect_location( $final, $url ) : (string) $url;
+		if ( isset( $response['http_response'] ) && is_object( $response['http_response'] ) && method_exists( $response['http_response'], 'get_response_object' ) ) {
+			$obj = $response['http_response']->get_response_object();
+			if ( is_object( $obj ) && isset( $obj->url ) && is_string( $obj->url ) && '' !== $obj->url ) {
+				$final = (string) $obj->url;
+			}
+		}
+		return array(
+			'ok'    => true,
+			'code'  => (int) wp_remote_retrieve_response_code( $response ),
+			'final' => $final,
+			'body'  => (string) wp_remote_retrieve_body( $response ),
+		);
+	}
+
+	/**
+	 * @param array $home  Home fetch.
+	 * @param array $probe Nonsense-path fetch.
+	 * @return bool
+	 */
+	private function responses_indicate_site_gate( array $home, array $probe ) {
+		if ( empty( $home['ok'] ) || empty( $probe['ok'] ) ) {
+			return false;
+		}
+		$probe_code = (int) $probe['code'];
+		if ( in_array( $probe_code, array( 404, 410 ), true ) ) {
+			return false;
+		}
+		if ( ! in_array( $probe_code, array( 200, 401, 403, 503 ), true ) ) {
+			return false;
+		}
+		$home_code = (int) $home['code'];
+		if ( ! in_array( $home_code, array( 200, 401, 403, 503 ), true ) ) {
+			return false;
+		}
+
+		$home_final  = self::normalize_redirect_for_verify_compare( (string) $home['final'] );
+		$probe_final = self::normalize_redirect_for_verify_compare( (string) $probe['final'] );
+		if ( '' !== $home_final && $home_final === $probe_final && false === strpos( $home_final, 'wp-login.php' ) ) {
+			return true;
+		}
+
+		$home_fp  = $this->html_gate_fingerprint( (string) $home['body'] );
+		$probe_fp = $this->html_gate_fingerprint( (string) $probe['body'] );
+		if ( $this->gate_fingerprints_match( $home_fp, $probe_fp ) ) {
+			return true;
+		}
+		return $home_fp['has_marker'] && $probe_fp['has_marker'];
+	}
+
+	/**
+	 * @param string $html HTML body.
+	 * @return array{title:string,len:int,hash:string,has_marker:bool}
+	 */
+	private function html_gate_fingerprint( $html ) {
+		$title = '';
+		if ( preg_match( '#<title[^>]*>(.*?)</title>#is', (string) $html, $m ) ) {
+			$title = strtolower( trim( wp_strip_all_tags( (string) $m[1] ) ) );
+		}
+		$text = strtolower( wp_strip_all_tags( (string) $html ) );
+		$text = preg_replace( '/\s+/', ' ', $text );
+		$text = is_string( $text ) ? $text : '';
+		$hay  = $title . ' ' . $text;
+		$markers = array(
+			'coming soon',
+			'coming-soon',
+			'under construction',
+			'maintenance mode',
+			'mode maintenance',
+			'en mantenimiento',
+			'en manteniment',
+			'aviat disponible',
+			'próximamente',
+			'proximamente',
+			'sitio en construcci',
+			'this site is not yet',
+			'seedprod',
+			'cmp-coming-soon',
+		);
+		$has_marker = false;
+		foreach ( $markers as $marker ) {
+			if ( false !== strpos( $hay, $marker ) ) {
+				$has_marker = true;
+				break;
+			}
+		}
+		return array(
+			'title'      => $title,
+			'len'        => strlen( $text ),
+			'hash'       => md5( substr( $text, 0, 4000 ) ),
+			'has_marker' => $has_marker,
+		);
+	}
+
+	/**
+	 * @param array $a Fingerprint.
+	 * @param array $b Fingerprint.
+	 * @return bool
+	 */
+	private function gate_fingerprints_match( array $a, array $b ) {
+		if ( ! empty( $a['hash'] ) && $a['hash'] === $b['hash'] ) {
+			return true;
+		}
+		$title_a = isset( $a['title'] ) ? (string) $a['title'] : '';
+		$title_b = isset( $b['title'] ) ? (string) $b['title'] : '';
+		if ( '' === $title_a || $title_a !== $title_b ) {
+			return false;
+		}
+		$len_a = isset( $a['len'] ) ? (int) $a['len'] : 0;
+		$len_b = isset( $b['len'] ) ? (int) $b['len'] : 0;
+		$max   = max( $len_a, $len_b, 1 );
+		return ( abs( $len_a - $len_b ) / $max ) <= 0.15;
+	}
+
+	/**
 	 * Result when a URL cannot be requested from the server (SSRF / invalid host).
 	 *
 	 * @return array{status_code:int,redirect_url:string,is_broken:int}
@@ -1053,6 +1267,10 @@ class TSOLIIN_HTTP {
 	public function check( $url, $post_id = 0 ) {
 		$url = trim( str_replace( array( "\0", "\r", "\n" ), '', (string) $url ) );
 		$url = TSOLIIN_Scanner::resolve_to_absolute_url( $url, $post_id );
+
+		if ( self::is_internal_link_url( $url, $post_id ) && ! $this->is_static_asset_url( $url ) && $this->is_site_gated() ) {
+			return $this->site_gated_result();
+		}
 
 		$candidates = $this->build_check_url_candidates( $url, $post_id );
 		$last       = null;
@@ -1409,7 +1627,7 @@ class TSOLIIN_HTTP {
 	 */
 	public static function is_hard_broken_status( $code ) {
 		$code = (int) $code;
-		if ( in_array( $code, array( -1, -5, -6, -7, -8 ), true ) ) {
+		if ( in_array( $code, array( -1, -5, -6, -7, -8, self::STATUS_SITE_GATED ), true ) ) {
 			return false;
 		}
 		if ( $code <= 0 ) {
@@ -1924,6 +2142,7 @@ class TSOLIIN_HTTP {
 			-6   => __( 'Action link (logout)', 'tso-link-inspector' ),
 			-7   => __( 'Blocked (cannot check from server)', 'tso-link-inspector' ),
 			-8   => __( 'Not checkable (non-HTTP URL)', 'tso-link-inspector' ),
+			-9   => __( 'Unverifiable (coming soon / maintenance)', 'tso-link-inspector' ),
 			0    => __( 'Cannot connect', 'tso-link-inspector' ),
 			-2   => __( 'Domain does not exist (DNS)', 'tso-link-inspector' ),
 			-3   => __( 'Timed out', 'tso-link-inspector' ),
@@ -1980,7 +2199,7 @@ class TSOLIIN_HTTP {
 		$is_broken = (int) $is_broken;
 		$link_url  = trim( (string) $link_url );
 
-		if ( in_array( $code, array( -1, -6, -7, -8 ), true ) && ! $is_broken ) {
+		if ( in_array( $code, array( -1, -6, -7, -8, self::STATUS_SITE_GATED ), true ) && ! $is_broken ) {
 			return 'tsoliin-status--skipped';
 		}
 		if ( -5 === $code && ! $is_broken ) {

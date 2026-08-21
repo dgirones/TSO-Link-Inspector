@@ -378,7 +378,7 @@ class TSOLIIN_List_Table extends WP_List_Table {
 			&& ! $is_action
 			&& (
 				$is_broken
-				|| ( $code < 0 && ! in_array( $code, array( -1, -6, -7 ), true ) )
+				|| ( $code < 0 && ! in_array( $code, array( -1, -6, -7, -8, -9 ), true ) )
 				|| preg_match( '#^http://#i', $url )
 				|| in_array( $code, $redirect_codes, true )
 				|| ! empty( $item->redirect_url )

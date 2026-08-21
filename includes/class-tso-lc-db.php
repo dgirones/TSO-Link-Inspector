@@ -860,7 +860,7 @@ class TSOLIIN_DB {
 			'redirect_chain'       => $chain_json,
 			'is_broken'            => $is_broken,
 			'last_checked'         => current_time( 'mysql', true ),
-			'consecutive_failures' => ( -8 === $status_code ) ? $prev_failures : $failures,
+			'consecutive_failures' => in_array( (int) $status_code, array( -8, -9 ), true ) ? $prev_failures : $failures,
 		);
 		$format = array( '%d', '%s', '%s', '%d', '%s', '%d' );
 
