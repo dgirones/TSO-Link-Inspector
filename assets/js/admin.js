@@ -33,6 +33,8 @@
 		suggestTrigger  : null,
 		suggestRequestId: 0,
 		listReloadTimer : null,
+		_pendingAjax    : 0,
+		_bulkInProgress : false,
 
 		/**
 		 * Escape text for safe HTML insertion.
@@ -68,9 +70,70 @@
 		 * @return {jQuery}
 		 */
 		findLinkRow: function ( linkId ) {
+			var id = String( linkId );
+			var $byCb = $( 'input[name="link_ids[]"][value="' + id + '"]' ).closest( 'tr' );
+			if ( $byCb.length ) {
+				return $byCb.first();
+			}
 			return $( 'tr' ).filter( function () {
-				return $( this ).find( '.tsoliin-edit-link[data-id="' + linkId + '"], .tsoliin-suggest[data-id="' + linkId + '"]' ).length > 0;
+				return $( this ).find(
+					'.tsoliin-edit-link[data-id="' + id + '"], .tsoliin-suggest[data-id="' + id + '"], .tsoliin-make-relative[data-id="' + id + '"], .tsoliin-upgrade-https[data-id="' + id + '"], .tsoliin-recheck[data-id="' + id + '"]'
+				).length > 0;
 			} ).first();
+		},
+
+		/**
+		 * jQuery.ajax wrapper that counts in-flight plugin requests (so Check now can wait).
+		 *
+		 * @param {Object} opts $.ajax options.
+		 * @return {jqXHR}
+		 */
+		trackedAjax: function ( opts ) {
+			var self = this;
+			self._pendingAjax = ( self._pendingAjax || 0 ) + 1;
+			var origComplete = opts.complete;
+			opts.complete = function () {
+				self._pendingAjax = Math.max( 0, ( self._pendingAjax || 1 ) - 1 );
+				if ( typeof origComplete === 'function' ) {
+					origComplete.apply( this, arguments );
+				}
+			};
+			return $.ajax( opts );
+		},
+
+		/**
+		 * Whether a Check now reload would interrupt the user.
+		 *
+		 * @param {number} started   Date.now() when waiting began.
+		 * @param {number} maxWaitMs Cap for short AJAX (not modal/scan/bulk).
+		 * @return {boolean}
+		 */
+		shouldDeferCheckReload: function ( started, maxWaitMs ) {
+			if ( this.scanning ) {
+				return true;
+			}
+			if ( this.polling || parseInt( tsoliinData.bgRunning, 10 ) === 1 ) {
+				return true;
+			}
+			if ( this._bulkInProgress ) {
+				return true;
+			}
+			if ( this.$modal && this.$modal.is( ':visible' ) ) {
+				return true;
+			}
+			if ( ( Date.now() - started ) >= maxWaitMs ) {
+				return false;
+			}
+			if ( ( this._pendingAjax || 0 ) > 0 ) {
+				return true;
+			}
+			if ( this.searchXhr && this.searchXhr.readyState !== 4 ) {
+				return true;
+			}
+			if ( this.suggestXhr && this.suggestXhr.readyState !== 4 ) {
+				return true;
+			}
+			return false;
 		},
 
 		// ---------------------------------------------------------------
@@ -221,6 +284,12 @@
 				e.preventDefault();
 				if ( ! window.confirm( tsoliinData.i18n.confirmMakeRelative ) ) { return; }
 				self.makeRelative( parseInt( $( this ).data( 'id' ), 10 ), $( this ) );
+			} );
+
+			$( document ).on( 'click', '.tsoliin-upgrade-https', function ( e ) {
+				e.preventDefault();
+				if ( ! window.confirm( tsoliinData.i18n.confirmUpgradeHttps ) ) { return; }
+				self.upgradeHttps( parseInt( $( this ).data( 'id' ), 10 ), $( this ) );
 			} );
 
 			$( document ).on( 'click', '.tsoliin-delete', function ( e ) {
@@ -574,10 +643,20 @@
 			this.$checkBtn.prop( 'disabled', false ).html(
 				'<span class="dashicons dashicons-yes-alt"></span> ' + tsoliinData.i18n.checkDone
 			);
-			// Reload once to show final stats. completed flag prevents loop.
-			setTimeout( function () {
+			// Reload to show final stats, but not while the user is editing or an AJAX action is running.
+			var self = this;
+			var delayMs = 2000;
+			var maxWaitMs = 120000;
+			var started = Date.now();
+			var tryReload = function () {
+				if ( self.shouldDeferCheckReload( started, maxWaitMs ) ) {
+					self.updateCheckProgress( 100, tsoliinData.i18n.checkCompleteWaiting || tsoliinData.i18n.checkDone );
+					setTimeout( tryReload, 500 );
+					return;
+				}
 				window.location.reload();
-			}, 2000 );
+			};
+			setTimeout( tryReload, delayMs );
 		},
 
 		// ---------------------------------------------------------------
@@ -710,7 +789,14 @@
 			self.cancelListReload();
 			self.listReloadTimer = window.setTimeout( function () {
 				self.listReloadTimer = null;
-				window.location.reload();
+				var wait = function () {
+					if ( self.$modal && self.$modal.is( ':visible' ) ) {
+						self.listReloadTimer = window.setTimeout( wait, 500 );
+						return;
+					}
+					window.location.reload();
+				};
+				wait();
 			}, delay || 1200 );
 		},
 
@@ -778,7 +864,7 @@
 			$trigger.text( tsoliinData.i18n.rechecking );
 			$status.html( '<em>...</em>' );
 
-			$.ajax( {
+			self.trackedAjax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
 				data  : $.extend( { action: 'tsoliin_recheck', nonce: tsoliinData.nonce, link_id: linkId }, self.listFilterParam() ),
@@ -993,7 +1079,7 @@
 			this.$modalSpinner.addClass( 'is-active' );
 			this.$feedback.text( '' ).removeClass( 'is-error is-success' );
 
-			$.ajax( {
+			this.trackedAjax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
 				data  : $.extend( {
@@ -1046,7 +1132,7 @@
 			var self = this;
 			var $row = $trigger.closest( 'tr' );
 			$trigger.text( tsoliinData.i18n.saving );
-			$.ajax( {
+			self.trackedAjax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
 				data  : { action: 'tsoliin_unlink', nonce: tsoliinData.nonce, link_id: linkId },
@@ -1082,7 +1168,7 @@
 			}
 
 			$trigger.text( tsoliinData.i18n.saving || 'Saving...' );
-			$.ajax( {
+			self.trackedAjax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
 				data  : $.extend( {
@@ -1133,7 +1219,7 @@
 			var self = this;
 			var $row = $trigger.closest( 'tr' );
 			$trigger.text( tsoliinData.i18n.saving );
-			$.ajax( {
+			self.trackedAjax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
 				data  : $.extend( {
@@ -1165,6 +1251,42 @@
 			} );
 		},
 
+		upgradeHttps: function ( linkId, $trigger ) {
+			var self = this;
+			var $row = $trigger.closest( 'tr' );
+			$trigger.text( tsoliinData.i18n.upgradingHttps || tsoliinData.i18n.saving );
+			self.trackedAjax( {
+				url   : tsoliinData.ajaxUrl,
+				method: 'POST',
+				data  : $.extend( {
+					action  : 'tsoliin_upgrade_https',
+					nonce   : tsoliinData.nonce,
+					link_id : linkId
+				}, self.listFilterParam() ),
+				success: function ( r ) {
+					if ( ! r.success ) {
+						alert( r.data && r.data.message ? r.data.message : ( tsoliinData.i18n.upgradeHttpsFailed || tsoliinData.i18n.error ) );
+						$trigger.text( tsoliinData.i18n.upgradeHttps || 'Upgrade to HTTPS' );
+						return;
+					}
+					var d = r.data || {};
+					if ( self.removeRowIfFilterMismatch( $row, d ) ) {
+						self.showNotice( d.message, 'success' );
+						self.refreshStats();
+						return;
+					}
+					self.applyLinkEditToRow( $row, d );
+					$trigger.closest( 'span' ).remove();
+					self.showNotice( d.message, 'success' );
+					self.refreshStats();
+				},
+				error: function () {
+					alert( tsoliinData.i18n.error );
+					$trigger.text( tsoliinData.i18n.upgradeHttps || 'Upgrade to HTTPS' );
+				}
+			} );
+		},
+
 		// ---------------------------------------------------------------
 		// Mark as not broken
 		// ---------------------------------------------------------------
@@ -1172,7 +1294,7 @@
 			var self = this;
 			var $row = $trigger.closest( 'tr' );
 			$trigger.text( tsoliinData.i18n.saving );
-			$.ajax( {
+			self.trackedAjax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
 				data  : $.extend( { action: 'tsoliin_not_broken', nonce: tsoliinData.nonce, link_id: linkId }, self.listFilterParam() ),
@@ -1207,7 +1329,7 @@
 		deleteItem: function ( linkId, $trigger ) {
 			var self = this;
 			var $row = $trigger.closest( 'tr' );
-			$.ajax( {
+			self.trackedAjax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
 				data  : { action: 'tsoliin_delete_link', nonce: tsoliinData.nonce, link_id: linkId },
@@ -1257,7 +1379,8 @@
 				}
 				self.bulkRecheckStep( linkIds, 0, action );
 			} else {
-				$.ajax( {
+				self._bulkInProgress = true;
+				self.trackedAjax( {
 					url   : tsoliinData.ajaxUrl,
 					method: 'POST',
 					data  : $.extend( { action: 'tsoliin_bulk_action', nonce: tsoliinData.nonce, bulk_action: action, link_ids: linkIds, index: 0 }, self.listFilterParam() ),
@@ -1268,7 +1391,10 @@
 							self.scheduleListReload( 1200 );
 						} else { alert( r.data ? r.data.message : tsoliinData.i18n.error ); }
 					},
-					error: function () { alert( tsoliinData.i18n.error ); }
+					error: function () { alert( tsoliinData.i18n.error ); },
+					complete: function () {
+						self._bulkInProgress = false;
+					}
 				} );
 			}
 		},
@@ -1283,6 +1409,7 @@
 
 			// Show progress notice on first call.
 			if ( 0 === index ) {
+				self._bulkInProgress = true;
 				self._bulkStats = { unlinked: 0, skipped: 0, failed: 0, converted: 0, marked: 0, deleted: 0 };
 				self._bulkFilterRemoved = 0;
 				var initMsg = tsoliinData.i18n.checking;
@@ -1302,6 +1429,7 @@
 			}
 
 			if ( index >= total ) {
+				self._bulkInProgress = false;
 				var doneMsg;
 				if ( 'unlink' === act ) {
 					var parts = [];
@@ -1773,7 +1901,7 @@
 			self.cancelListReload();
 			$btn.prop( 'disabled', true ).text( tsoliinData.i18n.saving );
 
-			$.ajax( {
+			self.trackedAjax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
 				data  : $.extend( { action: 'tsoliin_update_link', nonce: tsoliinData.nonce, link_id: linkId, new_url: newUrl }, self.listFilterParam() ),

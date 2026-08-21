@@ -402,7 +402,7 @@ class TSOLIIN_List_Table extends WP_List_Table {
 		/*
 		 * Unified action order (always when present):
 		 * 1 Go to edit → 2 Edit link → 3 Recheck → 4 Not broken → 5 Unlink → 6 Delete → 7 Ignore domain
-		 * Particularities (Convert to /path after Edit; Suggestion at end) only when applicable.
+		 * Particularities (Convert to /path and Upgrade to HTTPS after Edit; Suggestion at end) only when applicable.
 		 */
 		$actions = array();
 
@@ -436,6 +436,15 @@ class TSOLIIN_List_Table extends WP_List_Table {
 					esc_attr( $nonce ),
 					esc_attr__( 'Replace https://yoursite.com/page/ with /page/ in the post (same site only)', 'tso-link-inspector' ),
 					esc_html__( 'Convert to /path', 'tso-link-inspector' )
+				);
+			}
+			if ( TSOLIIN_HTTP::is_plain_http_url( $url ) ) {
+				$actions['upgrade_https'] = sprintf(
+					'<a href="#" class="tsoliin-upgrade-https" data-id="%d" data-nonce="%s" title="%s">%s</a>',
+					absint( $item->id ),
+					esc_attr( $nonce ),
+					esc_attr__( 'Replace http:// with https:// after the plugin confirms HTTPS works', 'tso-link-inspector' ),
+					esc_html__( 'Upgrade to HTTPS', 'tso-link-inspector' )
 				);
 			}
 		}
