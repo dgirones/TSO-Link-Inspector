@@ -1922,10 +1922,7 @@
 							self.refreshStats();
 							return;
 						}
-						$row.find( '.column-status_code' ).html( '<span class="tsoliin-status ' + d.css_class + '">' + parseInt( d.status_code, 10 ) + ' ' + self.escapeHtml( d.label ) + '</span>' );
-						$row.find( '.tsoliin-url a' ).attr( 'href', d.new_url ).text( d.new_url.substring( 0, 57 ) );
-						$row.find( '.tsoliin-edit-link' ).attr( 'data-url', d.new_url ).data( 'url', d.new_url );
-						$row.toggleClass( 'tsoliin-row--broken', 1 === d.is_broken );
+						self.applyLinkEditToRow( $row, d );
 						$btn.closest( '.tsoliin-suggest-row' ).fadeOut( 300, function () { $( this ).remove(); } );
 						self.showNotice( '✅ ' + tsoliinData.i18n.urlUpdated + ' ' + d.new_url, 'success' );
 						self.refreshStats();

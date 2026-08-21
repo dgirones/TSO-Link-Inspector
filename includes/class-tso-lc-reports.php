@@ -272,9 +272,10 @@ class TSOLIIN_Reports {
 	 */
 	public static function stream_pdf_html( TSOLIIN_DB $db, array $args ) {
 		$filter = isset( $args['filter'] ) ? sanitize_key( (string) $args['filter'] ) : 'all';
+		$scope  = isset( $args['scope'] ) ? (string) $args['scope'] : 'all';
 		$stats  = ! empty( $args['post_id'] )
-			? $db->get_stats_for_post( (int) $args['post_id'] )
-			: $db->get_stats();
+			? $db->get_stats_for_post( (int) $args['post_id'], $scope )
+			: $db->get_stats( $scope );
 		$export = self::get_pdf_links( $db, $args );
 		$items  = $export['items'];
 		$total  = $export['total'];

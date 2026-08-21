@@ -114,9 +114,6 @@ class TSOLIIN_Elementor {
 			if ( isset( $item['source_key'] ) && (string) $item['source_key'] === $sk ) {
 				return isset( $item['url'] ) && (string) $item['url'] === $url;
 			}
-			if ( isset( $item['url'] ) && (string) $item['url'] === $url ) {
-				return true;
-			}
 		}
 		return false;
 	}

@@ -129,7 +129,7 @@ class TSOLIIN_Quality {
 		if ( '' === $col ) {
 			$col = 'link_url';
 		}
-		return "{$col} NOT LIKE '%youtu.be/%' AND {$col} NOT LIKE '%youtube.com/%' AND {$col} NOT LIKE '%youtube-nocookie.com/%' AND {$col} NOT LIKE '%vimeo.com/%'";
+		return "{$col} NOT LIKE '%youtu.be/%' AND {$col} NOT LIKE '%youtube.com/%' AND {$col} NOT LIKE '%youtube-nocookie.com/%' AND {$col} NOT LIKE '%vimeo.com/%' AND {$col} NOT LIKE '%dai.ly/%'";
 	}
 
 	/**

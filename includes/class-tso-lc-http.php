@@ -34,7 +34,7 @@ class TSOLIIN_HTTP {
 	/** @var bool Curl DNS pinning active for the current check_request(). */
 	private static $dns_pinning = false;
 
-	/** @var array<string, string[]> Hostname => public IPs to pin on curl. */
+	/** @var array<int, array{host:string,port:int,ips:string[]}> Curl CURLOPT_RESOLVE pins for this check. */
 	private static $dns_pins = array();
 
 	public function __construct() {
@@ -738,7 +738,14 @@ class TSOLIIN_HTTP {
 		if ( function_exists( 'wp_http_validate_url' ) && false === wp_http_validate_url( $url ) ) {
 			return false;
 		}
-		$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+		$parsed = wp_parse_url( $url );
+		if ( ! is_array( $parsed ) ) {
+			return false;
+		}
+		if ( ! empty( $parsed['user'] ) || ! empty( $parsed['pass'] ) ) {
+			return false;
+		}
+		$host = strtolower( (string) ( isset( $parsed['host'] ) ? $parsed['host'] : '' ) );
 		if ( '' === $host ) {
 			return false;
 		}
@@ -898,9 +905,14 @@ class TSOLIIN_HTTP {
 			return;
 		}
 		$entries = array();
-		foreach ( self::$dns_pins as $host => $ips ) {
-			$host = strtolower( (string) $host );
-			if ( '' === $host || ! is_array( $ips ) ) {
+		foreach ( self::$dns_pins as $pin ) {
+			if ( ! is_array( $pin ) ) {
+				continue;
+			}
+			$host = strtolower( (string) ( isset( $pin['host'] ) ? $pin['host'] : '' ) );
+			$port = isset( $pin['port'] ) ? (int) $pin['port'] : 0;
+			$ips  = isset( $pin['ips'] ) && is_array( $pin['ips'] ) ? $pin['ips'] : array();
+			if ( '' === $host || $port <= 0 || empty( $ips ) ) {
 				continue;
 			}
 			foreach ( $ips as $ip ) {
@@ -911,8 +923,7 @@ class TSOLIIN_HTTP {
 				if ( false !== strpos( $ip, ':' ) ) {
 					$ip = '[' . trim( $ip, '[]' ) . ']';
 				}
-				$entries[] = $host . ':80:' . $ip;
-				$entries[] = $host . ':443:' . $ip;
+				$entries[] = $host . ':' . $port . ':' . $ip;
 			}
 		}
 		if ( empty( $entries ) ) {
@@ -928,18 +939,32 @@ class TSOLIIN_HTTP {
 	 * @return void
 	 */
 	private static function store_dns_pin_for_url( $url ) {
-		$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+		$parsed = wp_parse_url( $url );
+		if ( ! is_array( $parsed ) ) {
+			return;
+		}
+		$host = strtolower( (string) ( isset( $parsed['host'] ) ? $parsed['host'] : '' ) );
 		if ( '' === $host ) {
 			return;
 		}
+		$scheme = strtolower( (string) ( isset( $parsed['scheme'] ) ? $parsed['scheme'] : 'http' ) );
+		$port   = isset( $parsed['port'] ) ? (int) $parsed['port'] : 0;
+		if ( $port <= 0 ) {
+			$port = ( 'https' === $scheme ) ? 443 : 80;
+		}
 		if ( filter_var( $host, FILTER_VALIDATE_IP ) ) {
-			self::$dns_pins[ $host ] = array( $host );
+			$ips = array( $host );
+		} else {
+			$ips = self::resolve_host_ips( $host, false );
+		}
+		if ( empty( $ips ) ) {
 			return;
 		}
-		$ips = self::resolve_host_ips( $host, false );
-		if ( ! empty( $ips ) ) {
-			self::$dns_pins[ $host ] = $ips;
-		}
+		self::$dns_pins[] = array(
+			'host' => $host,
+			'port' => $port,
+			'ips'  => array_values( $ips ),
+		);
 	}
 
 	/**
@@ -1084,6 +1109,9 @@ class TSOLIIN_HTTP {
 	 */
 	public function is_site_gated_cached() {
 		$state = get_transient( 'tsoliin_site_gate' );
+		if ( ! is_array( $state ) ) {
+			$state = get_option( 'tsoliin_site_gate_state', array() );
+		}
 		return is_array( $state ) && ! empty( $state['gated'] );
 	}
 
@@ -1539,10 +1567,10 @@ class TSOLIIN_HTTP {
 		if ( self::is_ignored_url( $url ) ) {
 			return $this->skipped_url_result();
 		}
-		if ( ! self::is_safe_remote_url( $url ) ) {
+		if ( ! self::is_safe_remote_url( $url, true ) ) {
 			return $this->blocked_url_result();
 		}
-		if ( self::hostname_has_no_dns( $url ) ) {
+		if ( self::hostname_has_no_dns( $url, true ) ) {
 			return $this->dns_failure_result();
 		}
 
@@ -1588,10 +1616,7 @@ class TSOLIIN_HTTP {
 		do {
 			$guard = $this->guard_remote_url_for_request( $final_url );
 			if ( 'ok' !== $guard ) {
-				if ( 0 === $hops ) {
-					return ( 'dns' === $guard ) ? $this->dns_failure_result() : $this->blocked_url_result();
-				}
-				break;
+				return ( 'dns' === $guard ) ? $this->dns_failure_result() : $this->blocked_url_result();
 			}
 
 			$response = wp_remote_head( $final_url, $args );
@@ -1638,8 +1663,12 @@ class TSOLIIN_HTTP {
 					break;
 				}
 
-				if ( self::is_ignored_url( $loc ) || 'ok' !== $this->guard_remote_url_for_request( $loc ) ) {
+				if ( self::is_ignored_url( $loc ) ) {
 					break;
+				}
+				$loc_guard = $this->guard_remote_url_for_request( $loc );
+				if ( 'ok' !== $loc_guard ) {
+					return ( 'dns' === $loc_guard ) ? $this->dns_failure_result() : $this->blocked_url_result();
 				}
 
 				if ( 0 === $hops ) {

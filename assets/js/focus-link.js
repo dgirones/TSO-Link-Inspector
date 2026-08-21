@@ -5,7 +5,7 @@
 	'use strict';
 
 	var data = window.tsoliinFocusLink;
-	if ( ! data || ! data.variants || ! data.variants.length ) {
+	if ( ! data || ( ( ! data.variants || ! data.variants.length ) && ! data.contentNeedle ) ) {
 		return;
 	}
 
@@ -18,9 +18,16 @@
 	function getSearchVariants() {
 		var out  = [];
 		var seen = {};
+		var list = [];
+		if ( data.contentNeedle ) {
+			list.push( data.contentNeedle );
+		}
+		if ( data.variants && data.variants.length ) {
+			list = list.concat( data.variants );
+		}
 		var i;
-		for ( i = 0; i < data.variants.length; i++ ) {
-			var raw      = data.variants[ i ];
+		for ( i = 0; i < list.length; i++ ) {
+			var raw      = list[ i ];
 			var decoded  = decodeEntities( raw );
 			[ raw, decoded ].forEach( function ( value ) {
 				if ( value && ! seen[ value ] ) {

@@ -67,6 +67,7 @@ class TSOLIIN_Cron {
 	public function run_scan() {
 		$page  = 1;
 		$start = microtime( true );
+		$r     = array( 'done' => false );
 		do {
 			$r = $this->scanner->scan_batch( $page, TSOLIIN_BATCH_SIZE );
 			$page++;
@@ -97,7 +98,9 @@ class TSOLIIN_Cron {
 
 		$this->drain_extended_scan_batches( $start );
 
-		update_option( 'tsoliin_last_full_scan', current_time( 'mysql', true ), false );
+		if ( ! empty( $r['done'] ) ) {
+			update_option( 'tsoliin_last_full_scan', current_time( 'mysql', true ), false );
+		}
 	}
 
 	/**
@@ -171,7 +174,9 @@ class TSOLIIN_Cron {
 		}
 
 		// Only update timestamp when links were actually checked.
-		update_option( 'tsoliin_last_check_batch', current_time( 'mysql', true ), false );
+		if ( $checked > 0 ) {
+			update_option( 'tsoliin_last_check_batch', current_time( 'mysql', true ), false );
+		}
 		update_option( 'tsoliin_last_check_count', $checked, false );
 		$this->send_immediate_broken_summary_email( $newly_detected );
 		$this->maybe_send_digest_broken_email();
@@ -296,10 +301,13 @@ class TSOLIIN_Cron {
 	 */
 	private function flush_immediate_broken_queue() {
 		$queued = get_option( self::OPT_IMMEDIATE_QUEUE, array() );
-		if ( is_array( $queued ) && ! empty( $queued ) ) {
-			$this->send_immediate_broken_summary_email( $queued );
+		if ( ! is_array( $queued ) || empty( $queued ) ) {
+			delete_option( self::OPT_IMMEDIATE_QUEUE );
+			return;
 		}
-		delete_option( self::OPT_IMMEDIATE_QUEUE );
+		if ( $this->send_immediate_broken_summary_email( $queued ) ) {
+			delete_option( self::OPT_IMMEDIATE_QUEUE );
+		}
 	}
 
 	/**
@@ -597,16 +605,16 @@ class TSOLIIN_Cron {
 	 * Send one summary email for newly detected hard-broken links.
 	 *
 	 * @param array $items Queue items.
-	 * @return void
+	 * @return bool True when sent, skipped (mode off / empty), or no recipient. False when wp_mail failed.
 	 */
 	private function send_immediate_broken_summary_email( array $items ) {
 		$mode = $this->get_email_mode();
 		if ( ! in_array( $mode, array( 'immediate', 'confirmed' ), true ) || empty( $items ) ) {
-			return;
+			return true;
 		}
 		$to = $this->get_notification_email();
 		if ( '' === $to ) {
-			return;
+			return true;
 		}
 
 		$items          = array_values( $items );
@@ -648,7 +656,7 @@ class TSOLIIN_Cron {
 			$normalized[] = TSOLIIN_Email::normalize_broken_item( $item );
 		}
 
-		TSOLIIN_Email::send_broken_links_report( $to, $subject, $intro, $normalized, 0 );
+		return TSOLIIN_Email::send_broken_links_report( $to, $subject, $intro, $normalized, 0 );
 	}
 
 	/**

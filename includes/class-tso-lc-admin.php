@@ -387,9 +387,10 @@ class TSOLIIN_Admin {
 		}
 
 		// Detect if we are viewing a single post's links.
-		$stats = $view_post_id
-			? $this->db->get_stats_for_post( $view_post_id )
-			: $this->db->get_stats();
+		$list_scope = $this->get_scope_from_request();
+		$stats      = $view_post_id
+			? $this->db->get_stats_for_post( $view_post_id, $list_scope )
+			: $this->db->get_stats( $list_scope );
 		$bg       = $this->cron->get_bg_progress();
 		$last_scan  = (string) get_option( 'tsoliin_last_full_scan', '' );
 		$last_check = (string) get_option( 'tsoliin_last_check_batch', '' );
@@ -3310,6 +3311,7 @@ class TSOLIIN_Admin {
 			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		}
 		$this->clear_scan_progress_options();
+		TSOLIIN_DB::clear_stats_cache();
 	}
 
 	public function ajax_diagnose() {
