@@ -377,6 +377,57 @@ class TSOLIIN_Support {
 	}
 
 	/**
+	 * Whether the current user may change this link in WordPress content.
+	 *
+	 * Uses object capabilities (edit_post, edit_comment, edit_term, edit_theme_options)
+	 * rather than manage_options alone.
+	 *
+	 * @param object|null $link DB link row.
+	 * @return bool
+	 */
+	public static function current_user_can_mutate_link( $link ) {
+		if ( ! $link ) {
+			return false;
+		}
+		$type = isset( $link->link_type ) ? (string) $link->link_type : 'link';
+
+		if ( 'comment' === $type ) {
+			$cid = self::get_comment_id_from_link_row( $link );
+			return $cid > 0 && current_user_can( 'edit_comment', $cid );
+		}
+
+		if ( 'widget' === $type ) {
+			return current_user_can( 'edit_theme_options' );
+		}
+
+		if ( 'term' === $type ) {
+			$term_id = 0;
+			if ( ! empty( $link->source_key ) && preg_match( '/^t-(\d+)-/', (string) $link->source_key, $m ) ) {
+				$term_id = absint( $m[1] );
+			}
+			return $term_id > 0 && current_user_can( 'edit_term', $term_id );
+		}
+
+		if ( 'menu' === $type ) {
+			$item_id = 0;
+			if ( ! empty( $link->source_key ) && preg_match( '/^mi-(\d+)/', (string) $link->source_key, $m ) ) {
+				$item_id = absint( $m[1] );
+			}
+			if ( $item_id > 0 && current_user_can( 'edit_post', $item_id ) ) {
+				return true;
+			}
+			return current_user_can( 'edit_theme_options' );
+		}
+
+		$post_id = isset( $link->post_id ) ? absint( $link->post_id ) : 0;
+		if ( $post_id > 0 ) {
+			return current_user_can( 'edit_post', $post_id );
+		}
+
+		return current_user_can( 'manage_options' );
+	}
+
+	/**
 	 * Public front-end URL to view the post (or jump to a comment for comment rows).
 	 *
 	 * @param object|null $link DB link row.

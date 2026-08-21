@@ -1607,6 +1607,18 @@ class TSOLIIN_Admin {
 	}
 
 	/**
+	 * Require object-level caps to change WordPress content for this link row.
+	 *
+	 * @param object|null $link DB link row.
+	 * @return void
+	 */
+	private function require_link_mutation_cap( $link ) {
+		if ( ! TSOLIIN_Support::current_user_can_mutate_link( $link ) ) {
+			wp_send_json_error( array( 'message' => __( 'Insufficient permissions.', 'tso-link-inspector' ) ), 403 );
+		}
+	}
+
+	/**
 	 * Hidden filters + list table markup (main page and live search AJAX).
 	 *
 	 * @param TSOLIIN_List_Table $table        Prepared list table.
@@ -1996,6 +2008,7 @@ class TSOLIIN_Admin {
 		if ( ! $link ) {
 			wp_send_json_error( array( 'message' => __( 'Link not found.', 'tso-link-inspector' ) ) );
 		}
+		$this->require_link_mutation_cap( $link );
 
 		$link_type = isset( $link->link_type ) ? (string) $link->link_type : 'link';
 		if ( 'widget' === $link_type ) {
@@ -2334,6 +2347,9 @@ class TSOLIIN_Admin {
 		$cid     = $this->get_comment_id_from_link( $link );
 		$comment = $cid ? get_comment( $cid ) : null;
 		if ( $comment ) {
+			if ( ! current_user_can( 'edit_comment', $cid ) ) {
+				return false;
+			}
 			$old_url    = (string) $link->link_url;
 			$author_url = trim( (string) $comment->comment_author_url );
 
@@ -2354,8 +2370,9 @@ class TSOLIIN_Admin {
 		}
 		$done = false;
 		foreach ( $cids as $cid ) {
-			$c = get_comment( absint( $cid ) );
-			if ( ! $c ) {
+			$cid = absint( $cid );
+			$c   = get_comment( $cid );
+			if ( ! $c || ! current_user_can( 'edit_comment', $cid ) ) {
 				continue;
 			}
 			if ( $this->scanner->comment_author_url_matches_row_url( trim( (string) $c->comment_author_url ), (string) $link->link_url ) ) {
@@ -2393,6 +2410,10 @@ class TSOLIIN_Admin {
 				$blocked = __( 'Cannot unlink this item.', 'tso-link-inspector' );
 			}
 			wp_send_json_error( array( 'message' => $blocked ) );
+		}
+
+		if ( ! $this->scanner->is_orphan_post_link_row( $link ) ) {
+			$this->require_link_mutation_cap( $link );
 		}
 
 		if ( 'comment' === $type ) {
@@ -2518,6 +2539,7 @@ class TSOLIIN_Admin {
 		if ( ! $link ) {
 			wp_send_json_error( array( 'message' => __( 'Link not found.', 'tso-link-inspector' ) ) );
 		}
+		$this->require_link_mutation_cap( $link );
 
 		$blocked = $this->get_non_editable_source_message( $link );
 		if ( '' !== $blocked ) {
@@ -2557,6 +2579,7 @@ class TSOLIIN_Admin {
 		if ( ! $link ) {
 			wp_send_json_error( array( 'message' => __( 'Link not found.', 'tso-link-inspector' ) ) );
 		}
+		$this->require_link_mutation_cap( $link );
 
 		$blocked = $this->get_non_editable_source_message( $link );
 		if ( '' !== $blocked ) {
@@ -2692,7 +2715,10 @@ class TSOLIIN_Admin {
 			$ok      = false;
 			$skipped = false;
 			if ( $link ) {
-				if ( ! TSOLIIN_Support::can_unlink_link( $link ) ) {
+				if ( ! TSOLIIN_Support::current_user_can_mutate_link( $link ) && ! $this->scanner->is_orphan_post_link_row( $link ) ) {
+					$ok      = false;
+					$skipped = true;
+				} elseif ( ! TSOLIIN_Support::can_unlink_link( $link ) ) {
 					if ( $this->scanner->is_orphan_post_link_row( $link ) ) {
 						$this->db->delete_link( $link_id );
 						$ok = true;
@@ -2784,7 +2810,7 @@ class TSOLIIN_Admin {
 			$skipped   = false;
 			$row_data  = array( 'link_id' => $link_id );
 			if ( $link ) {
-				if ( $this->is_non_editable_source( $link ) ) {
+				if ( ! TSOLIIN_Support::current_user_can_mutate_link( $link ) || $this->is_non_editable_source( $link ) ) {
 					$skipped = true;
 				} else {
 					$relative = TSOLIIN_HTTP::absolute_internal_to_relative( (string) $link->link_url );
@@ -2832,22 +2858,26 @@ class TSOLIIN_Admin {
 			$failed    = false;
 			$row_data  = array( 'link_id' => $link_id );
 			if ( $link ) {
-				$https_url = $this->get_verified_https_upgrade_for_link( $link );
-				if ( '' === $https_url ) {
+				if ( ! TSOLIIN_Support::current_user_can_mutate_link( $link ) ) {
 					$skipped = true;
-				} elseif ( $this->replace_link_url_in_source( $link, $https_url ) ) {
-					$this->db->update_link_url( $link_id, $https_url );
-					$r = $this->http->check( $https_url, (int) $link->post_id );
-					$this->db->update_check_result( $link_id, $r['status_code'], $r['redirect_url'], $r['is_broken'], isset( $r['redirect_chain'] ) ? $r['redirect_chain'] : '' );
-					$updated   = $this->db->get_link( $link_id );
-					$row_data  = array_merge(
-						array( 'link_id' => $link_id, 'new_url' => $https_url ),
-						$this->status_payload_from_link( $updated, $https_url, true )
-					);
-					$row_data  = $this->append_filter_match( $row_data, $updated );
-					$converted = true;
 				} else {
-					$failed = true;
+					$https_url = $this->get_verified_https_upgrade_for_link( $link );
+					if ( '' === $https_url ) {
+						$skipped = true;
+					} elseif ( $this->replace_link_url_in_source( $link, $https_url ) ) {
+						$this->db->update_link_url( $link_id, $https_url );
+						$r = $this->http->check( $https_url, (int) $link->post_id );
+						$this->db->update_check_result( $link_id, $r['status_code'], $r['redirect_url'], $r['is_broken'], isset( $r['redirect_chain'] ) ? $r['redirect_chain'] : '' );
+						$updated   = $this->db->get_link( $link_id );
+						$row_data  = array_merge(
+							array( 'link_id' => $link_id, 'new_url' => $https_url ),
+							$this->status_payload_from_link( $updated, $https_url, true )
+						);
+						$row_data  = $this->append_filter_match( $row_data, $updated );
+						$converted = true;
+					} else {
+						$failed = true;
+					}
 				}
 			} else {
 				$failed = true;
