@@ -121,6 +121,9 @@ class TSOLIIN_Quality {
 	/**
 	 * SQL fragment excluding URL-only expected links from empty-anchor counts/filters.
 	 *
+	 * LIKE wildcards must be written as %% so $wpdb->prepare() does not treat %d in
+	 * dai.ly (and similar host fragments) as integer placeholders. After prepare, %% becomes %.
+	 *
 	 * @param string $url_column Column name (e.g. l.link_url or link_url).
 	 * @return string AND clauses.
 	 */
@@ -129,7 +132,7 @@ class TSOLIIN_Quality {
 		if ( '' === $col ) {
 			$col = 'link_url';
 		}
-		return "{$col} NOT LIKE '%youtu.be/%' AND {$col} NOT LIKE '%youtube.com/%' AND {$col} NOT LIKE '%youtube-nocookie.com/%' AND {$col} NOT LIKE '%vimeo.com/%' AND {$col} NOT LIKE '%dai.ly/%'";
+		return "{$col} NOT LIKE '%%youtu.be/%%' AND {$col} NOT LIKE '%%youtube.com/%%' AND {$col} NOT LIKE '%%youtube-nocookie.com/%%' AND {$col} NOT LIKE '%%vimeo.com/%%' AND {$col} NOT LIKE '%%dai.ly/%%'";
 	}
 
 	/**
