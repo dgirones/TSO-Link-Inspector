@@ -390,6 +390,7 @@ final class TSOLIIN_Link_Inspector {
 			$this->db->cleanup_querystring_redirects();
 			$this->db->cleanup_transparent_redirects();
 			$this->db->cleanup_action_url_rows();
+			$this->db->cleanup_blocked_dns_rows();
 			$this->db->cleanup_mislabeled_skip_rows( true, 15 );
 			$this->db->cleanup_misclassified_plain_image_rows();
 			$this->db->cleanup_attachment_permalink_rows();

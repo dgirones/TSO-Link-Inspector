@@ -15,10 +15,11 @@ if ( ! defined( 'ABSPATH' ) ) {
  *
  * Status codes used internally:
  *   0   = generic connection error
- *  -2   = DNS failure
+ *  -2   = DNS failure (NXDOMAIN / empty lookup)
  *  -3   = timeout
  *  -4   = connection refused
  *  -5   = SSL error
+ *  -7   = blocked (SSRF / private or reserved host)
  *  -9   = site gated (coming soon / maintenance intercepts internal URLs)
  * 2-5   = legacy (stored by old absint() bug, same meaning as -2 to -5)
  */
@@ -746,7 +747,8 @@ class TSOLIIN_HTTP {
 		}
 		$ips = self::resolve_host_ips( $host );
 		if ( empty( $ips ) ) {
-			return false;
+			// NXDOMAIN / no A+AAAA is not SSRF. The HTTP checker reports DNS failure (-2).
+			return true;
 		}
 		foreach ( $ips as $ip ) {
 			if ( ! self::is_public_ip( $ip ) ) {
@@ -754,6 +756,20 @@ class TSOLIIN_HTTP {
 			}
 		}
 		return true;
+	}
+
+	/**
+	 * Whether the URL host has no A/AAAA records (NXDOMAIN or empty DNS).
+	 *
+	 * @param string $url Absolute http(s) URL.
+	 * @return bool
+	 */
+	public static function hostname_has_no_dns( $url ) {
+		$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+		if ( '' === $host || filter_var( $host, FILTER_VALIDATE_IP ) ) {
+			return false;
+		}
+		return empty( self::resolve_host_ips( $host ) );
 	}
 
 	/**
@@ -773,6 +789,11 @@ class TSOLIIN_HTTP {
 	 * @return string[]
 	 */
 	private static function resolve_host_ips( $host ) {
+		$host = strtolower( (string) $host );
+		static $cache = array();
+		if ( isset( $cache[ $host ] ) ) {
+			return $cache[ $host ];
+		}
 		$ips = array();
 		if ( function_exists( 'dns_get_record' ) ) {
 			$dns_type = defined( 'DNS_A' ) ? DNS_A : 1;
@@ -797,7 +818,8 @@ class TSOLIIN_HTTP {
 				$ips = $resolved;
 			}
 		}
-		return array_unique( array_filter( $ips ) );
+		$cache[ $host ] = array_values( array_unique( array_filter( $ips ) ) );
+		return $cache[ $host ];
 	}
 
 	/**
@@ -1116,6 +1138,19 @@ class TSOLIIN_HTTP {
 	}
 
 	/**
+	 * Result when the host has no DNS records (NXDOMAIN / empty lookup).
+	 *
+	 * @return array{status_code:int,redirect_url:string,is_broken:int}
+	 */
+	private function dns_failure_result() {
+		return array(
+			'status_code'  => -2,
+			'redirect_url' => '',
+			'is_broken'    => 1,
+		);
+	}
+
+	/**
 	 * Result for action URLs (logout, etc.) that must not be HTTP-checked.
 	 *
 	 * @return array{status_code:int,redirect_url:string,is_broken:int}
@@ -1236,7 +1271,10 @@ class TSOLIIN_HTTP {
 	}
 
 	/**
-	 * When a social/bot-wall host returns 404 to our checker, treat as unverifiable — not broken.
+	 * When a social/bot-wall host returns 404 to our checker, treat as unverifiable only if
+	 * the site origin also 404s (crawler fake 404). A reachable origin + path 404 is a real miss.
+	 *
+	 * X/Twitter in particular may answer crawlers with 404 for every URL, including live tweets.
 	 *
 	 * @param string $url  URL that was checked (original or final destination).
 	 * @param int    $code HTTP status from the server.
@@ -1248,11 +1286,50 @@ class TSOLIIN_HTTP {
 			return null;
 		}
 
+		if ( ! $this->bot_wall_origin_looks_like_fake_404( $url ) ) {
+			return null;
+		}
+
 		return array(
 			'status_code'  => 403,
 			'redirect_url' => '',
 			'is_broken'    => 0,
 		);
+	}
+
+	/**
+	 * Whether this bot-wall host 404s its origin for our checker (cannot tell missing pages apart).
+	 *
+	 * @param string $url URL on a bot-wall host.
+	 * @return bool
+	 */
+	private function bot_wall_origin_looks_like_fake_404( $url ) {
+		$parts  = wp_parse_url( $url );
+		$scheme = isset( $parts['scheme'] ) ? strtolower( (string) $parts['scheme'] ) : '';
+		$host   = isset( $parts['host'] ) ? strtolower( (string) $parts['host'] ) : '';
+		if ( '' === $host ) {
+			return true;
+		}
+		if ( ! in_array( $scheme, array( 'http', 'https' ), true ) ) {
+			$scheme = 'https';
+		}
+		$path = isset( $parts['path'] ) ? rtrim( (string) $parts['path'], '/' ) : '';
+		if ( '' === $path ) {
+			// Origin itself 404'd — crawler is blocked, not a missing inner page.
+			return true;
+		}
+
+		$origin = $scheme . '://' . $host . '/';
+		static $origin_codes = array();
+		if ( ! isset( $origin_codes[ $origin ] ) ) {
+			$res                     = $this->gate_fetch( $origin );
+			$origin_codes[ $origin ] = isset( $res['code'] ) ? (int) $res['code'] : 0;
+		}
+		$home_code = $origin_codes[ $origin ];
+		if ( 0 === $home_code ) {
+			return true;
+		}
+		return in_array( $home_code, array( 404, 410 ), true );
 	}
 
 	/**
@@ -1327,6 +1404,9 @@ class TSOLIIN_HTTP {
 		}
 		if ( ! self::is_safe_remote_url( $url ) ) {
 			return $this->blocked_url_result();
+		}
+		if ( self::hostname_has_no_dns( $url ) ) {
+			return $this->dns_failure_result();
 		}
 
 		$chrome_unavail = $this->maybe_chrome_webstore_unavailable_result( $url );
@@ -1587,8 +1667,25 @@ class TSOLIIN_HTTP {
 	 */
 	private function classify_error( $error ) {
 		$msg = strtolower( (string) $error->get_error_message() );
-		if ( false !== strpos( $msg, 'could not resolve' ) || false !== strpos( $msg, 'name or service not known' ) || false !== strpos( $msg, 'nodename nor servname' ) ) {
-			return -2;
+		$dns_needles = array(
+			'could not resolve',
+			'couldn\'t resolve',
+			'name or service not known',
+			'nodename nor servname',
+			'getaddrinfo',
+			'failed to resolve',
+			'no address associated with hostname',
+			'no such host is known',
+			'php_network_getaddresses',
+			'error resolving',
+			'dns lookup failed',
+			'resolve host',
+			'curl error 6',
+		);
+		foreach ( $dns_needles as $needle ) {
+			if ( false !== strpos( $msg, $needle ) ) {
+				return -2;
+			}
 		}
 		if ( false !== strpos( $msg, 'timed out' ) || false !== strpos( $msg, 'timeout' ) ) {
 			return -3;
@@ -2235,15 +2332,13 @@ class TSOLIIN_HTTP {
 	 *
 	 * Covers:
 	 *  - Trailing slash added/removed  (/article → /article/)
-	 *  - Same host/path except one interior segment dropped (e.g. /blog2/category/post → /blog2/post)
 	 *  - Bare host vs www + tracking-only query (youtube.com/x → www.youtube.com/x?ucbcb=1&cbrd=1)
 	 *  - Same article path with/without www (case- or encoding-normalised paths)
 	 *  - Chrome Web Store legacy host → chromewebstore.google.com (same extension path)
-	 *  - LiberKey /{lang}/catalog/… → /{lang}.html (retired catalog → locale home)
 	 *  - Stable “latest” vendor download (/dl/…) → versioned installer on same vendor host (Telegram)
-	 *  - WordPress attachment page → media file (/post-slug/ → /wp-content/uploads/file.jpg)
-	 *  - Asset/static file served from CDN subdomain (pixel.gif → cdn.paypalobjects.com/pixel.gif)
-	 *  - Direct download link → CDN with token (/dl/apk → cdn.example.com/file?token=xxx)
+	 *  - WordPress attachment page → media file on the same site (/post-slug/ → /wp-content/uploads/file.jpg)
+	 *  - Asset/static file served from a related CDN host (pixel.gif → cdn.example.com/pixel.gif)
+	 *  - Direct download link → same-site/vendor CDN with token (/dl/apk → cdn.example.com/file?token=xxx)
 	 *
 	 * @param string $original Original URL (without fragment, without query strip).
 	 * @param string $final    Final URL after redirect chain.
@@ -2258,14 +2353,9 @@ class TSOLIIN_HTTP {
 			return true;
 		}
 
-		// 1b. One interior path segment removed on the same host (common after permalink / category-base changes).
-		if ( $this->is_single_interior_path_segment_removed_redirect( $original, $final ) ) {
-			return true;
-		}
-
-		// 2. WordPress attachment post URL → wp-content/uploads media file.
+		// 2. WordPress attachment post URL → wp-content/uploads media file (same site / related host).
 		// e.g. /blog/my-post/image-name/ → /blog/wp-content/uploads/2013/10/image.jpg
-		if ( false !== strpos( $final, '/wp-content/uploads/' ) ) {
+		if ( false !== strpos( $final, '/wp-content/uploads/' ) && $this->hosts_are_related_for_redirect( $original, $final ) ) {
 			$ext = strtolower( (string) pathinfo( wp_parse_url( $final, PHP_URL_PATH ), PATHINFO_EXTENSION ) );
 			$media_ext = array( 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'mp4', 'mp3', 'pdf', 'zip' );
 			if ( in_array( $ext, $media_ext, true ) ) {
@@ -2273,7 +2363,7 @@ class TSOLIIN_HTTP {
 			}
 		}
 
-		// 3. Static asset (image, script, font) served from a CDN subdomain of the same host.
+		// 3. Static asset (image, script, font) served from a related CDN host.
 		// e.g. www.paypal.com/i/scr/pixel.gif → www.paypalobjects.com/es_ES/i/scr/pixel.gif
 		$orig_parts  = wp_parse_url( $original );
 		$final_parts = wp_parse_url( $final );
@@ -2283,9 +2373,9 @@ class TSOLIIN_HTTP {
 			$orig_ext   = strtolower( (string) pathinfo( $orig_path, PATHINFO_EXTENSION ) );
 			$static_ext = array( 'gif', 'png', 'jpg', 'jpeg', 'webp', 'svg', 'js', 'css', 'woff', 'woff2', 'ttf' );
 			if ( in_array( $orig_ext, $static_ext, true ) ) {
-				// Same file extension and same filename.
-				if ( basename( $orig_path ) === basename( $final_path ) ) {
-					return true; // Asset redirect to CDN, transparent.
+				// Same file extension and same filename, and destination is a related host (CDN), not an unrelated site.
+				if ( basename( $orig_path ) === basename( $final_path ) && $this->hosts_are_related_for_redirect( $original, $final ) ) {
+					return true;
 				}
 			}
 		}
@@ -2295,7 +2385,7 @@ class TSOLIIN_HTTP {
 		// final has a very long query string (token, signature, etc.).
 		$orig_query  = isset( $orig_parts['query'] ) ? $orig_parts['query'] : '';
 		$final_query = isset( $final_parts['query'] ) ? $final_parts['query'] : '';
-		if ( '' === $orig_query && strlen( $final_query ) > 100 ) {
+		if ( '' === $orig_query && strlen( $final_query ) > 100 && $this->hosts_are_related_for_redirect( $original, $final ) ) {
 			// Original is a clean download URL, final has a long CDN token.
 			$dl_patterns = array( '/dl/', '/download/', '/get/', '/file/' );
 			foreach ( $dl_patterns as $p ) {
@@ -2348,16 +2438,52 @@ class TSOLIIN_HTTP {
 			return true;
 		}
 
-		// 9. LiberKey retired catalog URLs → language home (same host; old marketing paths only).
-		if ( $this->is_liberkey_catalog_to_locale_home_redirect( $original, $final ) ) {
-			return true;
-		}
-
-		// 10. YouTube short/share links → watch URL for the same video (youtu.be/ID, /shorts/ID, etc.).
+		// 9. YouTube short/share links → watch URL for the same video (youtu.be/ID, /shorts/ID, etc.).
 		if ( $this->is_youtube_same_video_redirect( $original, $final ) ) {
 			return true;
 		}
 
+		return false;
+	}
+
+	/**
+	 * Whether two URLs belong to the same site or a related CDN/vendor host.
+	 *
+	 * Same host (ignoring www), subdomain of the other, or a shared brand prefix
+	 * (paypal.com → paypalobjects.com, example.com → cdn.example.com).
+	 *
+	 * @param string $original Original URL.
+	 * @param string $final    Destination URL.
+	 * @return bool
+	 */
+	private function hosts_are_related_for_redirect( $original, $final ) {
+		$orig_host = strtolower( (string) wp_parse_url( $original, PHP_URL_HOST ) );
+		$fin_host  = strtolower( (string) wp_parse_url( $final, PHP_URL_HOST ) );
+		if ( '' === $orig_host || '' === $fin_host ) {
+			return false;
+		}
+		$a = self::normalize_registrable_host( $orig_host );
+		$b = self::normalize_registrable_host( $fin_host );
+		if ( $a === $b ) {
+			return true;
+		}
+		$dot_a = '.' . $a;
+		$dot_b = '.' . $b;
+		if ( strlen( $a ) >= 4 && substr( $b, -strlen( $dot_a ) ) === $dot_a ) {
+			return true;
+		}
+		if ( strlen( $b ) >= 4 && substr( $a, -strlen( $dot_b ) ) === $dot_b ) {
+			return true;
+		}
+		$a_labels = explode( '.', $a );
+		$b_labels = explode( '.', $b );
+		$a0       = isset( $a_labels[0] ) ? (string) $a_labels[0] : '';
+		$b0       = isset( $b_labels[0] ) ? (string) $b_labels[0] : '';
+		$a_rest   = implode( '.', array_slice( $a_labels, 1 ) );
+		$b_rest   = implode( '.', array_slice( $b_labels, 1 ) );
+		if ( '' !== $a_rest && $a_rest === $b_rest && strlen( $a0 ) >= 5 && ( 0 === strpos( $b0, $a0 ) || 0 === strpos( $a0, $b0 ) ) ) {
+			return true;
+		}
 		return false;
 	}
 
@@ -2596,83 +2722,6 @@ class TSOLIIN_HTTP {
 	}
 
 	/**
-	 * Same scheme + host + query; final path is the original path with exactly one non-final segment removed.
-	 *
-	 * Example: /blog2/android/post-slug → /blog2/post-slug (drops a single folder such as a former category segment).
-	 * Does not treat dropping the last segment as trivial (/a/b/c → /a/b).
-	 *
-	 * @param string $original Original URL (no fragment).
-	 * @param string $final    Final URL after redirects.
-	 * @return bool
-	 */
-	private function is_single_interior_path_segment_removed_redirect( $original, $final ) {
-		$o = wp_parse_url( $original );
-		$f = wp_parse_url( $final );
-		if ( ! $o || ! $f || empty( $o['host'] ) || empty( $f['host'] ) ) {
-			return false;
-		}
-		if ( strtolower( (string) $o['host'] ) !== strtolower( (string) $f['host'] ) ) {
-			return false;
-		}
-		$scheme_o = isset( $o['scheme'] ) ? strtolower( (string) $o['scheme'] ) : '';
-		$scheme_f = isset( $f['scheme'] ) ? strtolower( (string) $f['scheme'] ) : '';
-		if ( '' === $scheme_o || $scheme_o !== $scheme_f ) {
-			return false;
-		}
-		$q_o = isset( $o['query'] ) ? (string) $o['query'] : '';
-		$q_f = isset( $f['query'] ) ? (string) $f['query'] : '';
-		if ( $q_o !== $q_f ) {
-			return false;
-		}
-		$path_o = isset( $o['path'] ) ? trim( rawurldecode( (string) $o['path'] ), '/' ) : '';
-		$path_f = isset( $f['path'] ) ? trim( rawurldecode( (string) $f['path'] ), '/' ) : '';
-		if ( '' === $path_o || '' === $path_f ) {
-			return false;
-		}
-		$seg_o = array_values(
-			array_filter(
-				explode( '/', $path_o ),
-				static function ( $p ) {
-					return '' !== (string) $p;
-				}
-			)
-		);
-		$seg_f = array_values(
-			array_filter(
-				explode( '/', $path_f ),
-				static function ( $p ) {
-					return '' !== (string) $p;
-				}
-			)
-		);
-		$n_o   = count( $seg_o );
-		$n_f   = count( $seg_f );
-		if ( $n_o !== $n_f + 1 || $n_f < 1 ) {
-			return false;
-		}
-		$norm = static function ( array $segments ) {
-			return array_map(
-				static function ( $p ) {
-					return strtolower( (string) $p );
-				},
-				$segments
-			);
-		};
-		$seg_f_n = $norm( $seg_f );
-		for ( $i = 0; $i < $n_o; $i++ ) {
-			if ( $i === $n_o - 1 ) {
-				continue;
-			}
-			$candidate = $seg_o;
-			array_splice( $candidate, $i, 1 );
-			if ( $norm( $candidate ) === $seg_f_n ) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	/**
 	 * Whether two stored redirect outcomes are the same for user-verify locking (handles trivial redirects vs empty).
 	 *
 	 * @param string $link_url          Stored href for the row.
@@ -2851,37 +2900,6 @@ class TSOLIIN_HTTP {
 			return false;
 		}
 		return $this->query_differs_only_by_noise_params( $o, $f );
-	}
-
-	/**
-	 * LiberKey used to expose long /{lang}/catalog/... URLs that now 303 to /{lang}.html.
-	 *
-	 * @param string $original Original URL.
-	 * @param string $final    Final URL.
-	 * @return bool
-	 */
-	private function is_liberkey_catalog_to_locale_home_redirect( $original, $final ) {
-		$o = wp_parse_url( $original );
-		$f = wp_parse_url( $final );
-		if ( ! $o || ! $f || empty( $o['host'] ) || empty( $f['host'] ) ) {
-			return false;
-		}
-		$norm_host = static function ( $h ) {
-			return preg_replace( '/^www\./', '', strtolower( (string) $h ) );
-		};
-		if ( 'liberkey.com' !== $norm_host( $o['host'] ) || 'liberkey.com' !== $norm_host( $f['host'] ) ) {
-			return false;
-		}
-		$op = strtolower( rawurldecode( (string) ( $o['path'] ?? '' ) ) );
-		if ( false === strpos( $op, '/catalog/' ) && false === strpos( $op, 'browse.html' ) ) {
-			return false;
-		}
-		$fp = strtolower( rtrim( rawurldecode( (string) ( $f['path'] ?? '' ) ), '/' ) );
-		// e.g. /en.html, /es.html, /fr/ (short locale entry only).
-		if ( preg_match( '#^/[a-z]{2}(\.html)?$#', $fp ) ) {
-			return true;
-		}
-		return false;
 	}
 
 	/**
