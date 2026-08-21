@@ -1571,16 +1571,17 @@ class TSOLIIN_DB {
 	/**
 	 * Build SQL fragment for internal vs external link scope.
 	 *
-	 * @param string $scope Scope key.
+	 * @param string $scope  Scope key.
+	 * @param string $column SQL column (l.link_url for joins, link_url for unaliased stats).
 	 * @return array{where:string,params:array}
 	 */
-	private function build_link_scope_sql( $scope ) {
+	private function build_link_scope_sql( $scope, $column = 'l.link_url' ) {
 		$scope = $this->sanitize_link_scope( $scope );
 		if ( 'all' === $scope ) {
 			return array( 'where' => '', 'params' => array() );
 		}
 
-		$internal = TSOLIIN_HTTP::build_internal_link_scope_sql( 'l.link_url' );
+		$internal = TSOLIIN_HTTP::build_internal_link_scope_sql( $column );
 		if ( 'internal' === $scope ) {
 			return array(
 				'where'  => ' AND ' . $internal['sql'],
@@ -1588,7 +1589,7 @@ class TSOLIIN_DB {
 			);
 		}
 
-		$external = TSOLIIN_HTTP::build_external_link_scope_sql( 'l.link_url' );
+		$external = TSOLIIN_HTTP::build_external_link_scope_sql( $column );
 		return array(
 			'where'  => ' AND ' . $external['sql'],
 			'params' => $external['params'],
@@ -1597,6 +1598,9 @@ class TSOLIIN_DB {
 
 	/**
 	 * Whether a link row matches an internal/external scope.
+	 *
+	 * Single-row helper for AJAX after-edit payloads. List queries use
+	 * build_link_scope_sql() so they never load the full table to classify.
 	 *
 	 * @param object|array $link  Link row.
 	 * @param string       $scope Scope key.
@@ -2015,20 +2019,42 @@ class TSOLIIN_DB {
 		return self::$broken_urls_by_post_cache[ $post_id ];
 	}
 
-	/** @return array */
-	public function get_stats() {
-		if ( isset( self::$stats_cache['all'] ) ) {
-			return self::$stats_cache['all'];
+	/**
+	 * Aggregate dashboard counts, optionally scoped to internal/external and one post.
+	 *
+	 * @param string $scope   all|internal|external.
+	 * @param int    $post_id 0 = whole site.
+	 * @return array<string,int>
+	 */
+	private function query_aggregate_stats( $scope = 'all', $post_id = 0 ) {
+		$scope   = $this->sanitize_link_scope( $scope );
+		$post_id = absint( $post_id );
+		$cache_key = ( $post_id ? 'post_' . $post_id : 'site' ) . '_' . $scope;
+		if ( isset( self::$stats_cache[ $cache_key ] ) ) {
+			return self::$stats_cache[ $cache_key ];
 		}
 
 		$this->maybe_cleanup_transparent_redirects();
 
 		global $wpdb;
 		$generic = TSOLIIN_Quality::build_generic_anchor_count_expr();
+		$where   = ' WHERE 1=1';
+		$params  = array_merge( array( 'http://%', 'http://%' ), $generic['params'] );
+
+		if ( $post_id > 0 ) {
+			$where   .= ' AND post_id = %d';
+			$params[] = $post_id;
+		}
+
+		$scope_sql = $this->build_link_scope_sql( $scope, 'link_url' );
+		if ( '' !== $scope_sql['where'] ) {
+			$where  .= $scope_sql['where'];
+			$params  = array_merge( $params, $scope_sql['params'] );
+		}
+
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Static SQL fragments; values passed via $wpdb->prepare().
-		$sql    = "SELECT COUNT(*) AS total, SUM(CASE WHEN is_broken=1 AND user_verified=0 THEN 1 ELSE 0 END) AS broken, SUM(CASE WHEN " . self::sql_redirect_match() . " THEN 1 ELSE 0 END) AS redirect, SUM(CASE WHEN status_code=200 AND link_url NOT LIKE %s AND user_verified=0 THEN 1 ELSE 0 END) AS ok, SUM(CASE WHEN last_checked IS NULL AND user_verified=0 THEN 1 ELSE 0 END) AS unchecked, SUM(CASE WHEN link_url LIKE %s AND is_broken=0 AND user_verified=0 THEN 1 ELSE 0 END) AS http_insecure, SUM(CASE WHEN user_verified=1 THEN 1 ELSE 0 END) AS manual_locked, " . TSOLIIN_Quality::build_empty_anchor_count_expr() . " AS empty_anchor, {$generic['expr']} AS generic_anchor FROM {$this->table}";
-		$params = array_merge( array( 'http://%', 'http://%' ), $generic['params'] );
-		$row    = $wpdb->get_row(
+		$sql = "SELECT COUNT(*) AS total, SUM(CASE WHEN is_broken=1 AND user_verified=0 THEN 1 ELSE 0 END) AS broken, SUM(CASE WHEN " . self::sql_redirect_match() . " THEN 1 ELSE 0 END) AS redirect, SUM(CASE WHEN status_code=200 AND link_url NOT LIKE %s AND user_verified=0 THEN 1 ELSE 0 END) AS ok, SUM(CASE WHEN last_checked IS NULL AND user_verified=0 THEN 1 ELSE 0 END) AS unchecked, SUM(CASE WHEN link_url LIKE %s AND is_broken=0 AND user_verified=0 THEN 1 ELSE 0 END) AS http_insecure, SUM(CASE WHEN user_verified=1 THEN 1 ELSE 0 END) AS manual_locked, " . TSOLIIN_Quality::build_empty_anchor_count_expr() . " AS empty_anchor, {$generic['expr']} AS generic_anchor FROM {$this->table}{$where}";
+		$row = $wpdb->get_row(
 			$wpdb->prepare(
 				// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 				$sql,
@@ -2050,11 +2076,25 @@ class TSOLIIN_DB {
 			'unpublished_target'  => 0,
 		);
 		$stats = $row ? array_map( 'absint', $row ) : $defaults;
-		if ( is_admin() || ( defined( 'DOING_AJAX' ) && DOING_AJAX ) ) {
+		if ( 'external' === $scope ) {
+			$stats['unpublished_target'] = 0;
+		} elseif ( $post_id > 0 ) {
+			$stats['unpublished_target'] = $this->count_unpublished_targets( $post_id );
+		} elseif ( is_admin() || ( defined( 'DOING_AJAX' ) && DOING_AJAX ) ) {
 			$stats['unpublished_target'] = $this->count_unpublished_targets( 0 );
 		}
-		self::$stats_cache['all'] = $stats;
+		self::$stats_cache[ $cache_key ] = $stats;
 		return $stats;
+	}
+
+	/**
+	 * Site-wide dashboard counts.
+	 *
+	 * @param string $scope Optional internal/external scope (SQL, not PHP row scan).
+	 * @return array
+	 */
+	public function get_stats( $scope = 'all' ) {
+		return $this->query_aggregate_stats( $scope, 0 );
 	}
 
 	/** @return int */
@@ -2172,49 +2212,12 @@ class TSOLIIN_DB {
 	/**
 	 * Get stats scoped to a single post.
 	 *
-	 * @param int $post_id Post ID.
+	 * @param int    $post_id Post ID.
+	 * @param string $scope   Optional internal/external scope (SQL).
 	 * @return array
 	 */
-	public function get_stats_for_post( $post_id ) {
-		$post_id = absint( $post_id );
-
-		$cache_key = 'post_' . $post_id;
-		if ( isset( self::$stats_cache[ $cache_key ] ) ) {
-			return self::$stats_cache[ $cache_key ];
-		}
-
-		$this->maybe_cleanup_transparent_redirects();
-
-		global $wpdb;
-		$generic = TSOLIIN_Quality::build_generic_anchor_count_expr();
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Static SQL fragments; values passed via $wpdb->prepare().
-		$sql    = "SELECT COUNT(*) AS total, SUM(CASE WHEN is_broken=1 AND user_verified=0 THEN 1 ELSE 0 END) AS broken, SUM(CASE WHEN " . self::sql_redirect_match() . " THEN 1 ELSE 0 END) AS redirect, SUM(CASE WHEN status_code=200 AND link_url NOT LIKE %s AND user_verified=0 THEN 1 ELSE 0 END) AS ok, SUM(CASE WHEN last_checked IS NULL AND user_verified=0 THEN 1 ELSE 0 END) AS unchecked, SUM(CASE WHEN link_url LIKE %s AND is_broken=0 AND user_verified=0 THEN 1 ELSE 0 END) AS http_insecure, SUM(CASE WHEN user_verified=1 THEN 1 ELSE 0 END) AS manual_locked, " . TSOLIIN_Quality::build_empty_anchor_count_expr() . " AS empty_anchor, {$generic['expr']} AS generic_anchor FROM {$this->table} WHERE post_id = %d";
-		$params = array_merge( array( 'http://%', 'http://%' ), $generic['params'], array( $post_id ) );
-		$row    = $wpdb->get_row(
-			$wpdb->prepare(
-				// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-				$sql,
-				...$params
-			),
-			ARRAY_A
-		);
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, PluginCheck.Security.DirectDB.UnescapedDBParameter
-		$defaults = array(
-			'total'               => 0,
-			'broken'              => 0,
-			'redirect'            => 0,
-			'ok'                  => 0,
-			'unchecked'           => 0,
-			'http_insecure'       => 0,
-			'manual_locked'       => 0,
-			'empty_anchor'        => 0,
-			'generic_anchor'      => 0,
-			'unpublished_target'  => 0,
-		);
-		$stats = $row ? array_map( 'absint', $row ) : $defaults;
-		$stats['unpublished_target'] = $this->count_unpublished_targets( $post_id );
-		self::$stats_cache[ $cache_key ] = $stats;
-		return $stats;
+	public function get_stats_for_post( $post_id, $scope = 'all' ) {
+		return $this->query_aggregate_stats( $scope, absint( $post_id ) );
 	}
 
 	/**

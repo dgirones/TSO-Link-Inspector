@@ -231,6 +231,13 @@
 				}
 			} );
 
+			$( document ).on( 'submit', '.tsoliin-reset-form', function ( e ) {
+				var msg = $( this ).find( '#tsoliin-reset-all' ).attr( 'data-tsoliin-confirm' );
+				if ( msg && ! window.confirm( msg ) ) {
+					e.preventDefault();
+				}
+			} );
+
 			$( document ).on( 'click', '.tsoliin-toggle-chain', function ( e ) {
 				e.preventDefault();
 				var $btn  = $( this );
@@ -757,7 +764,8 @@
 				data  : {
 					action  : 'tsoliin_get_stats',
 					nonce   : tsoliinData.nonce,
-					post_id : parseInt( tsoliinData.viewPostId, 10 ) || 0
+					post_id : parseInt( tsoliinData.viewPostId, 10 ) || 0,
+					scope   : tsoliinData.listScope || 'all'
 				},
 				success: function ( r ) {
 					if ( ! r.success || ! r.data ) {

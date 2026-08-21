@@ -37,6 +37,9 @@ class TSOLIIN_Scanner {
 	/** @var array<string,bool> Request-scoped is_url_editable_in_source() results. */
 	private $editable_source_cache = array();
 
+	/** @var int|null Request cache for get_total_posts(). */
+	private $total_posts_cache = null;
+
 	public function __construct( TSOLIIN_DB $db ) {
 		$this->db = $db;
 	}
@@ -201,14 +204,27 @@ class TSOLIIN_Scanner {
 
 	/** @return int */
 	public function get_total_posts() {
-		$q = new WP_Query( array(
-			'post_type'      => $this->get_post_types(),
-			'post_status'    => 'publish',
-			'posts_per_page' => -1,
-			'fields'         => 'ids',
-			'no_found_rows'  => false,
-		) );
-		return (int) $q->found_posts;
+		if ( null !== $this->total_posts_cache ) {
+			return $this->total_posts_cache;
+		}
+		$types = $this->get_post_types();
+		if ( empty( $types ) ) {
+			$this->total_posts_cache = 0;
+			return 0;
+		}
+		$q = new WP_Query(
+			array(
+				'post_type'              => $types,
+				'post_status'            => 'publish',
+				'posts_per_page'         => 1,
+				'fields'                 => 'ids',
+				'no_found_rows'          => false,
+				'update_post_meta_cache' => false,
+				'update_post_term_cache' => false,
+			)
+		);
+		$this->total_posts_cache = (int) $q->found_posts;
+		return $this->total_posts_cache;
 	}
 
 	/**

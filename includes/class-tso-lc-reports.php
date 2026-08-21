@@ -293,6 +293,9 @@ class TSOLIIN_Reports {
 		header( 'Content-Type: text/html; charset=utf-8' );
 		header( 'Content-Disposition: inline; filename="tso-link-inspector-report-' . gmdate( 'Y-m-d' ) . '.html"' );
 
+		wp_enqueue_style( 'tsoliin-report', TSOLIIN_PLUGIN_URL . 'assets/css/report.css', array(), TSOLIIN_VERSION );
+		wp_enqueue_script( 'tsoliin-report', TSOLIIN_PLUGIN_URL . 'assets/js/report.js', array(), TSOLIIN_VERSION, true );
+
 		?>
 <!DOCTYPE html>
 <html <?php language_attributes(); ?>>
@@ -300,35 +303,11 @@ class TSOLIIN_Reports {
 	<meta charset="<?php bloginfo( 'charset' ); ?>">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title><?php echo esc_html( get_bloginfo( 'name' ) . ' — ' . __( 'Link report', 'tso-link-inspector' ) ); ?></title>
-	<style>
-		* { box-sizing: border-box; }
-		body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif; color: #1d2327; margin: 0; padding: 24px 32px 48px; line-height: 1.5; }
-		.tsoliin-report-header { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 2px solid #2271b1; }
-		.tsoliin-report-header img { max-height: 56px; max-width: 160px; object-fit: contain; }
-		.tsoliin-report-header h1 { margin: 0; font-size: 22px; }
-		.tsoliin-report-header p { margin: 4px 0 0; color: #646970; font-size: 13px; }
-		.tsoliin-report-actions { margin-bottom: 20px; }
-		.tsoliin-report-actions button { background: #2271b1; color: #fff; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; }
-		.tsoliin-stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; margin-bottom: 28px; }
-		.tsoliin-stat-card { background: #f6f7f7; border: 1px solid #dcdcde; border-radius: 6px; padding: 12px; text-align: center; }
-		.tsoliin-stat-card strong { display: block; font-size: 22px; color: #2271b1; }
-		.tsoliin-stat-card span { font-size: 12px; color: #646970; }
-		.tsoliin-stat-card--broken strong { color: #d63638; }
-		h2 { font-size: 16px; margin: 0 0 12px; }
-		table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 24px; }
-		th, td { border: 1px solid #dcdcde; padding: 8px 10px; text-align: left; vertical-align: top; }
-		th { background: #f0f0f1; font-weight: 600; }
-		td a { color: #2271b1; word-break: break-all; }
-		.tsoliin-report-footer { margin-top: 32px; padding-top: 16px; border-top: 1px solid #dcdcde; font-size: 11px; color: #646970; }
-		@media print {
-			.tsoliin-report-actions { display: none; }
-			body { padding: 12px; }
-		}
-	</style>
+	<?php wp_print_styles( array( 'tsoliin-report' ) ); ?>
 </head>
 <body class="tsoliin-report">
 	<div class="tsoliin-report-actions">
-		<button type="button" onclick="window.print();"><?php esc_html_e( 'Print / Save as PDF', 'tso-link-inspector' ); ?></button>
+		<button type="button" id="tsoliin-report-print" class="tsoliin-report-print"><?php esc_html_e( 'Print / Save as PDF', 'tso-link-inspector' ); ?></button>
 	</div>
 
 	<header class="tsoliin-report-header">
@@ -404,6 +383,7 @@ class TSOLIIN_Reports {
 		);
 		?>
 	</footer>
+	<?php wp_print_scripts( array( 'tsoliin-report' ) ); ?>
 </body>
 </html>
 		<?php

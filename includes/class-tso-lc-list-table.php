@@ -633,8 +633,8 @@ class TSOLIIN_List_Table extends WP_List_Table {
 		$view_post_id_nav = isset( $_REQUEST['post_id'] ) ? absint( $_REQUEST['post_id'] ) : 0;
 		$scope_current    = $this->read_request_scope();
 		$stats = $view_post_id_nav
-			? $this->db->get_stats_for_post( $view_post_id_nav )
-			: $this->db->get_stats();
+			? $this->db->get_stats_for_post( $view_post_id_nav, $scope_current )
+			: $this->db->get_stats( $scope_current );
 
 		$filters = array(
 			/* translators: %s: number of links */

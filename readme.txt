@@ -94,6 +94,20 @@ Only if you want it to. Enable **Do not update modification date** in Settings t
 = What does "Mark as OK" do? =
 It sets the link status to 200 OK manually without making an HTTP request. The post is not modified. Useful for URLs that are temporarily blocked but you know they work.
 
+== External services ==
+
+This plugin does not send data to servers operated by the plugin author. HTTP and DNS run from your WordPress server only after an administrator clicks **Scan now**, **Check now**, **Suggestion**, **Upgrade to HTTPS**, or when scheduled checks are enabled in Settings.
+
+= HTTP checks of URLs stored on your site =
+
+When a check runs, the plugin sends HTTP HEAD and, if needed, HTTP GET requests to each stored `http://` or `https://` URL. Data sent: the destination URL, a browser-like User-Agent, and standard `Accept` / `Accept-Language` headers. Responses are stored only in your WordPress database (status code, redirect URL, redirect chain).
+
+Those destinations are websites already linked from your content, not a service chosen by the plugin. Terms of use and privacy policy: those of each destination site.
+
+= DNS lookups =
+
+Before requesting a hostname, the plugin may resolve A/AAAA records on the server (`dns_get_record` / `gethostbynamel`) so private, loopback, or reserved addresses are not contacted. This is a DNS lookup from your server; post content and user accounts are not sent.
+
 == Screenshots ==
 
 1. Main dashboard with statistics and link list.
@@ -105,6 +119,8 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 * Fix: Check queue, bulk Mark as OK/unlink, Recheck sync, cron scan coverage, and verified HTTPS Suggest.
 * Fix: **Go to edit** for multi-gallery classic posts, YouTube embeds, and Jetpack galleries.
 * Improvement: Admin transient lock performance; tested up to WordPress 7.1.
+* Fix: WordPress.org review — External services in readme, POST export/reset, report CSS/JS via enqueue (no inline style/onclick).
+* Fix: Count published posts without loading every ID; Internal/External tab counts stay in SQL; pin DNS before each HTTP hop.
 
 = 2.3.3 =
 * New: Bulk action **Upgrade selected to HTTPS** — only when the server confirms a working HTTPS URL (same rules as Suggestion → Apply; unverified bot-wall suggestions are skipped).

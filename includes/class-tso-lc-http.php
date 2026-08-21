@@ -31,6 +31,12 @@ class TSOLIIN_HTTP {
 	/** @var int Request timeout in seconds. */
 	private $timeout;
 
+	/** @var bool Curl DNS pinning active for the current check_request(). */
+	private static $dns_pinning = false;
+
+	/** @var array<string, string[]> Hostname => public IPs to pin on curl. */
+	private static $dns_pins = array();
+
 	public function __construct() {
 		$s             = get_option( 'tsoliin_settings', array() );
 		$this->timeout = isset( $s['timeout'] ) ? absint( $s['timeout'] ) : 15;
@@ -720,10 +726,11 @@ class TSOLIIN_HTTP {
 	/**
 	 * Whether an http(s) URL is safe to request from the server (SSRF mitigation).
 	 *
-	 * @param string $url Full URL.
+	 * @param string $url       Full URL.
+	 * @param bool   $fresh_dns When true, bypass the request DNS cache (pre-hop re-check).
 	 * @return bool
 	 */
-	public static function is_safe_remote_url( $url ) {
+	public static function is_safe_remote_url( $url, $fresh_dns = false ) {
 		$url = trim( str_replace( array( "\0", "\r", "\n" ), '', (string) $url ) );
 		if ( ! preg_match( '#^https?://#i', $url ) ) {
 			return false;
@@ -745,7 +752,7 @@ class TSOLIIN_HTTP {
 		if ( filter_var( $host, FILTER_VALIDATE_IP ) ) {
 			return self::is_public_ip( $host );
 		}
-		$ips = self::resolve_host_ips( $host );
+		$ips = self::resolve_host_ips( $host, (bool) $fresh_dns );
 		if ( empty( $ips ) ) {
 			// NXDOMAIN / no A+AAAA is not SSRF. The HTTP checker reports DNS failure (-2).
 			return true;
@@ -761,15 +768,16 @@ class TSOLIIN_HTTP {
 	/**
 	 * Whether the URL host has no A/AAAA records (NXDOMAIN or empty DNS).
 	 *
-	 * @param string $url Absolute http(s) URL.
+	 * @param string $url       Absolute http(s) URL.
+	 * @param bool   $fresh_dns When true, bypass the request DNS cache.
 	 * @return bool
 	 */
-	public static function hostname_has_no_dns( $url ) {
+	public static function hostname_has_no_dns( $url, $fresh_dns = false ) {
 		$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
 		if ( '' === $host || filter_var( $host, FILTER_VALIDATE_IP ) ) {
 			return false;
 		}
-		return empty( self::resolve_host_ips( $host ) );
+		return empty( self::resolve_host_ips( $host, (bool) $fresh_dns ) );
 	}
 
 	/**
@@ -785,13 +793,14 @@ class TSOLIIN_HTTP {
 	}
 
 	/**
-	 * @param string $host Hostname.
+	 * @param string $host  Hostname.
+	 * @param bool   $fresh Bypass the request-scoped DNS cache.
 	 * @return string[]
 	 */
-	private static function resolve_host_ips( $host ) {
+	private static function resolve_host_ips( $host, $fresh = false ) {
 		$host = strtolower( (string) $host );
 		static $cache = array();
-		if ( isset( $cache[ $host ] ) ) {
+		if ( ! $fresh && isset( $cache[ $host ] ) ) {
 			return $cache[ $host ];
 		}
 		$ips = array();
@@ -820,6 +829,134 @@ class TSOLIIN_HTTP {
 		}
 		$cache[ $host ] = array_values( array_unique( array_filter( $ips ) ) );
 		return $cache[ $host ];
+	}
+
+	/**
+	 * Enable curl DNS pinning for the current check (SSRF TOCTOU).
+	 *
+	 * @return void
+	 */
+	private static function enable_dns_pinning() {
+		if ( self::$dns_pinning ) {
+			return;
+		}
+		self::$dns_pinning = true;
+		self::$dns_pins    = array();
+		add_action( 'http_api_curl', array( __CLASS__, 'pin_http_api_curl' ), 10, 3 );
+		add_action( 'requests-curl.before_request', array( __CLASS__, 'pin_requests_curl_handle' ), 10, 1 );
+	}
+
+	/**
+	 * Disable curl DNS pinning after the check finishes.
+	 *
+	 * @return void
+	 */
+	private static function disable_dns_pinning() {
+		if ( ! self::$dns_pinning ) {
+			return;
+		}
+		self::$dns_pinning = false;
+		self::$dns_pins    = array();
+		remove_action( 'http_api_curl', array( __CLASS__, 'pin_http_api_curl' ), 10 );
+		remove_action( 'requests-curl.before_request', array( __CLASS__, 'pin_requests_curl_handle' ), 10 );
+	}
+
+	/**
+	 * Pin curl to IPs already verified as public (legacy WP_Http_Curl).
+	 *
+	 * @param mixed  $handle      Curl handle.
+	 * @param array  $parsed_args Request args.
+	 * @param string $url         Request URL.
+	 * @return void
+	 */
+	public static function pin_http_api_curl( $handle, $parsed_args = array(), $url = '' ) {
+		unset( $parsed_args, $url );
+		self::apply_curl_dns_pins( $handle );
+	}
+
+	/**
+	 * Pin curl to IPs already verified as public (Requests curl transport).
+	 *
+	 * @param mixed $handle Curl handle.
+	 * @return void
+	 */
+	public static function pin_requests_curl_handle( $handle ) {
+		self::apply_curl_dns_pins( $handle );
+	}
+
+	/**
+	 * Apply CURLOPT_RESOLVE for hosts stored by store_dns_pin_for_url().
+	 *
+	 * @param mixed $handle Curl handle.
+	 * @return void
+	 */
+	private static function apply_curl_dns_pins( $handle ) {
+		if ( ! self::$dns_pinning || empty( self::$dns_pins ) || ! defined( 'CURLOPT_RESOLVE' ) ) {
+			return;
+		}
+		if ( ! is_resource( $handle ) && ! is_object( $handle ) ) {
+			return;
+		}
+		$entries = array();
+		foreach ( self::$dns_pins as $host => $ips ) {
+			$host = strtolower( (string) $host );
+			if ( '' === $host || ! is_array( $ips ) ) {
+				continue;
+			}
+			foreach ( $ips as $ip ) {
+				$ip = (string) $ip;
+				if ( '' === $ip ) {
+					continue;
+				}
+				if ( false !== strpos( $ip, ':' ) ) {
+					$ip = '[' . trim( $ip, '[]' ) . ']';
+				}
+				$entries[] = $host . ':80:' . $ip;
+				$entries[] = $host . ':443:' . $ip;
+			}
+		}
+		if ( empty( $entries ) ) {
+			return;
+		}
+		curl_setopt( $handle, CURLOPT_RESOLVE, $entries );
+	}
+
+	/**
+	 * Remember public IPs for curl pinning after a fresh safe-URL check.
+	 *
+	 * @param string $url Absolute http(s) URL.
+	 * @return void
+	 */
+	private static function store_dns_pin_for_url( $url ) {
+		$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+		if ( '' === $host ) {
+			return;
+		}
+		if ( filter_var( $host, FILTER_VALIDATE_IP ) ) {
+			self::$dns_pins[ $host ] = array( $host );
+			return;
+		}
+		$ips = self::resolve_host_ips( $host, false );
+		if ( ! empty( $ips ) ) {
+			self::$dns_pins[ $host ] = $ips;
+		}
+	}
+
+	/**
+	 * Fresh DNS + public-IP check immediately before an outbound hop.
+	 *
+	 * @param string $url Absolute http(s) URL.
+	 * @return string ok|blocked|dns
+	 */
+	private function guard_remote_url_for_request( $url ) {
+		if ( ! self::is_safe_remote_url( $url, true ) ) {
+			return 'blocked';
+		}
+		if ( self::hostname_has_no_dns( $url, true ) ) {
+			return 'dns';
+		}
+		self::store_dns_pin_for_url( $url );
+		return 'ok';
 	}
 
 	/**
@@ -1438,6 +1575,8 @@ class TSOLIIN_HTTP {
 			),
 		);
 
+		self::enable_dns_pinning();
+		try {
 		// Follow redirect chain manually (up to 8 hops).
 		$final_url      = $url;
 		$redirect_to    = '';
@@ -1447,6 +1586,14 @@ class TSOLIIN_HTTP {
 		$redirect_chain = array();
 
 		do {
+			$guard = $this->guard_remote_url_for_request( $final_url );
+			if ( 'ok' !== $guard ) {
+				if ( 0 === $hops ) {
+					return ( 'dns' === $guard ) ? $this->dns_failure_result() : $this->blocked_url_result();
+				}
+				break;
+			}
+
 			$response = wp_remote_head( $final_url, $args );
 			$code     = is_wp_error( $response ) ? 0 : (int) wp_remote_retrieve_response_code( $response );
 
@@ -1491,7 +1638,7 @@ class TSOLIIN_HTTP {
 					break;
 				}
 
-				if ( self::is_ignored_url( $loc ) || ! self::is_safe_remote_url( $loc ) ) {
+				if ( self::is_ignored_url( $loc ) || 'ok' !== $this->guard_remote_url_for_request( $loc ) ) {
 					break;
 				}
 
@@ -1612,6 +1759,9 @@ class TSOLIIN_HTTP {
 			'redirect_chain' => array(),
 			'is_broken'      => $this->is_broken( $code ) ? 1 : 0,
 		);
+		} finally {
+			self::disable_dns_pinning();
+		}
 	}
 
 	/**
