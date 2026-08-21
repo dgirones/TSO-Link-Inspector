@@ -58,8 +58,9 @@ class TSOLIIN_Admin {
 		add_action( 'wp_ajax_tsoliin_get_stats',       array( $this, 'ajax_get_stats' ) );
 		add_action( 'wp_ajax_tsoliin_smart_suggest',   array( $this, 'ajax_smart_suggest' ) );
 		add_action( 'wp_ajax_tsoliin_diagnose',        array( $this, 'ajax_diagnose' ) );
-		add_action( 'wp_ajax_tsoliin_export_csv',      array( $this, 'ajax_export_csv' ) );
-		add_action( 'wp_ajax_tsoliin_export_pdf',      array( $this, 'ajax_export_pdf' ) );
+		add_action( 'admin_post_tsoliin_export_csv',   array( $this, 'handle_export_csv' ) );
+		add_action( 'admin_post_tsoliin_export_pdf',   array( $this, 'handle_export_pdf' ) );
+		add_action( 'admin_post_tsoliin_reset_all',    array( $this, 'handle_reset_all' ) );
 		add_action( 'wp_ajax_tsoliin_add_ignore',      array( $this, 'ajax_add_ignore' ) );
 		add_action( 'wp_ajax_tsoliin_dismiss_onboarding', array( $this, 'ajax_dismiss_onboarding' ) );
 		add_action( 'wp_ajax_tsoliin_make_relative',     array( $this, 'ajax_make_relative' ) );
@@ -575,34 +576,23 @@ class TSOLIIN_Admin {
 		$export_scope = $this->get_scope_from_request();
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$export_search = isset( $_REQUEST['s'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['s'] ) ) : '';
-		$export_nonce  = wp_create_nonce( 'tsoliin_action' );
-		$export_args   = array(
-			'action' => 'tsoliin_export_csv',
+		$export_fields = array(
 			'filter' => $export_filter,
-			'nonce'  => $export_nonce,
 		);
 		if ( '' !== $export_quality ) {
-			$export_args['quality_filter'] = $export_quality;
+			$export_fields['quality_filter'] = $export_quality;
 		}
 		if ( 'all' !== $export_scope ) {
-			$export_args['scope'] = $export_scope;
+			$export_fields['scope'] = $export_scope;
 		}
 		if ( $view_post_id ) {
-			$export_args['post_id'] = $view_post_id;
+			$export_fields['post_id'] = $view_post_id;
 		}
 		if ( '' !== $export_search ) {
-			$export_args['s'] = $export_search;
+			$export_fields['s'] = $export_search;
 		}
-		echo '<a href="' . esc_url( add_query_arg( $export_args, admin_url( 'admin-ajax.php' ) ) ) . '" class="button button-secondary" id="tsoliin-export-csv">';
-		echo '<span class="dashicons dashicons-download"></span> ';
-		echo esc_html__( 'Export CSV', 'tso-link-inspector' );
-		echo '</a>';
-		$pdf_args           = $export_args;
-		$pdf_args['action'] = 'tsoliin_export_pdf';
-		echo '<a href="' . esc_url( add_query_arg( $pdf_args, admin_url( 'admin-ajax.php' ) ) ) . '" class="button button-secondary" id="tsoliin-export-pdf" target="_blank" rel="noopener noreferrer">';
-		echo '<span class="dashicons dashicons-media-document"></span> ';
-		echo esc_html__( 'Export report (PDF)', 'tso-link-inspector' );
-		echo '</a>';
+		$this->render_export_form( 'tsoliin_export_csv', 'tsoliin-export-csv', __( 'Export CSV', 'tso-link-inspector' ), 'download', $export_fields, false );
+		$this->render_export_form( 'tsoliin_export_pdf', 'tsoliin-export-pdf', __( 'Export report (PDF)', 'tso-link-inspector' ), 'media-document', $export_fields, true );
 		echo '<div id="tsoliin-scan-progress" class="tsoliin-progress" style="display:none;" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"><div class="tsoliin-progress__bar"></div><span class="tsoliin-progress__label"></span></div>';
 		echo '<div id="tsoliin-check-progress" class="tsoliin-progress tsoliin-progress--check" style="display:' . esc_attr( $check_prog_display ) . ';" role="progressbar" aria-valuenow="' . esc_attr( (string) $check_prog_pct ) . '" aria-valuemin="0" aria-valuemax="100">';
 		echo '<div class="tsoliin-progress__bar" style="width:' . esc_attr( (string) $check_prog_pct ) . '%"></div>';
@@ -1077,22 +1067,9 @@ class TSOLIIN_Admin {
 			}
 		}
 
-		// Handle reset.
-		if ( isset( $_GET['tsoliin_action'], $_GET['_wpnonce'] ) && 'reset_all' === sanitize_key( wp_unslash( $_GET['tsoliin_action'] ) ) ) {
-			$rnonce = sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) );
-			if ( wp_verify_nonce( $rnonce, 'tsoliin_reset_all' ) ) {
-				global $wpdb;
-				$table = $this->db->get_table();
-				// Validate table name against known DB table before query.
-				$expected_table = $this->db->get_table();
-				if ( $table === $expected_table ) {
-					// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
-					$wpdb->query( 'TRUNCATE TABLE `' . esc_sql( $table ) . '`' ); // Table name validated against get_table() on line above.
-					// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
-				}
-				$this->clear_scan_progress_options();
-				echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Records deleted.', 'tso-link-inspector' ) . '</p></div>';
-			}
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- notice after POST redirect, not a destructive action.
+		if ( isset( $_GET['tsoliin_notice'] ) && 'reset' === sanitize_key( wp_unslash( $_GET['tsoliin_notice'] ) ) ) {
+			echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Records deleted.', 'tso-link-inspector' ) . '</p></div>';
 		}
 
 		$s           = get_option( 'tsoliin_settings', array() );
@@ -1367,8 +1344,11 @@ class TSOLIIN_Admin {
 		echo '</div>';
 		$reset_confirm = __( 'Delete all plugin records?', 'tso-link-inspector' ) . "\n\n"
 			. __( 'This empties the link database and resets scan/check progress. Posts and Settings are not changed. You will need to run Scan now and Check now again.', 'tso-link-inspector' );
-		$reset_url = wp_nonce_url( add_query_arg( 'tsoliin_action', 'reset_all', admin_url( 'tools.php?page=tso-link-inspector-settings' ) ), 'tsoliin_reset_all' );
-		echo '<p><a href="' . esc_url( $reset_url ) . '" class="button button-secondary" onclick="return confirm(\'' . esc_js( $reset_confirm ) . '\')">' . esc_html__( 'Delete all plugin records', 'tso-link-inspector' ) . '</a></p>';
+		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="tsoliin-reset-form">';
+		wp_nonce_field( 'tsoliin_reset_all' );
+		echo '<input type="hidden" name="action" value="tsoliin_reset_all" />';
+		echo '<p><button type="submit" class="button button-secondary" id="tsoliin-reset-all" data-tsoliin-confirm="' . esc_attr( $reset_confirm ) . '">' . esc_html__( 'Delete all plugin records', 'tso-link-inspector' ) . '</button></p>';
+		echo '</form>';
 		echo '</div>';
 	}
 
@@ -2980,7 +2960,8 @@ class TSOLIIN_Admin {
 	public function ajax_get_stats() {
 		$this->check_nonce_and_cap();
 		$post_id = isset( $_POST['post_id'] ) ? absint( $_POST['post_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
-		$stats   = $post_id ? $this->db->get_stats_for_post( $post_id ) : $this->db->get_stats();
+		$scope   = isset( $_POST['scope'] ) ? $this->db->sanitize_scope_input( wp_unslash( $_POST['scope'] ) ) : 'all'; // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		$stats   = $post_id ? $this->db->get_stats_for_post( $post_id, $scope ) : $this->db->get_stats( $scope );
 		$display = array();
 		foreach ( $stats as $key => $value ) {
 			$display[ $key ] = TSOLIIN_Support::format_display_number( (int) $value );
@@ -3216,58 +3197,119 @@ class TSOLIIN_Admin {
 		wp_send_json_success( $preview );
 	}
 
-	public function ajax_export_csv() {
-		$nonce = isset( $_GET['nonce'] ) ? sanitize_text_field( wp_unslash( $_GET['nonce'] ) ) : '';
-		if ( ! wp_verify_nonce( $nonce, 'tsoliin_action' ) ) {
-			wp_die( esc_html__( 'Nonce invalid.', 'tso-link-inspector' ) );
+	/**
+	 * POST form for CSV/PDF export (no nonce in GET/query string).
+	 *
+	 * @param string               $action        admin-post action.
+	 * @param string               $button_id     Button element id.
+	 * @param string               $label         Button label (already translated).
+	 * @param string               $dashicon      Dashicons suffix without prefix.
+	 * @param array<string,mixed>  $fields        Hidden field name => value.
+	 * @param bool                 $target_blank  Open in a new tab (PDF HTML).
+	 * @return void
+	 */
+	private function render_export_form( $action, $button_id, $label, $dashicon, array $fields, $target_blank ) {
+		$action    = sanitize_key( (string) $action );
+		$button_id = sanitize_html_class( (string) $button_id );
+		$dashicon  = sanitize_html_class( (string) $dashicon );
+		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="tsoliin-export-form"';
+		if ( $target_blank ) {
+			echo ' target="_blank" rel="noopener noreferrer"';
 		}
-		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_die( esc_html__( 'Insufficient permissions.', 'tso-link-inspector' ) );
+		echo '>';
+		wp_nonce_field( 'tsoliin_action', 'tsoliin_export_nonce' );
+		echo '<input type="hidden" name="action" value="' . esc_attr( $action ) . '" />';
+		foreach ( $fields as $name => $value ) {
+			$name = sanitize_key( (string) $name );
+			if ( '' === $name ) {
+				continue;
+			}
+			echo '<input type="hidden" name="' . esc_attr( $name ) . '" value="' . esc_attr( (string) $value ) . '" />';
 		}
-
-		$filter  = isset( $_GET['filter'] ) ? $this->sanitize_list_filter( wp_unslash( $_GET['filter'] ) ) : 'all'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
-		$quality = $this->get_list_quality_filter_from_request();
-		$scope   = $this->get_scope_from_request();
-		$post_id = isset( $_GET['post_id'] ) ? absint( $_GET['post_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
-		$search  = isset( $_GET['s'] ) ? sanitize_text_field( wp_unslash( $_GET['s'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
-
-		TSOLIIN_Reports::stream_csv(
-			$this->db,
-			array(
-				'filter'         => $filter,
-				'quality_filter' => $quality,
-				'scope'          => $scope,
-				'search'         => $search,
-				'post_id'        => $post_id,
-			)
-		);
+		echo '<button type="submit" class="button button-secondary" id="' . esc_attr( $button_id ) . '">';
+		echo '<span class="dashicons dashicons-' . esc_attr( $dashicon ) . '"></span> ';
+		echo esc_html( $label );
+		echo '</button>';
+		echo '</form>';
 	}
 
-	public function ajax_export_pdf() {
-		$nonce = isset( $_GET['nonce'] ) ? sanitize_text_field( wp_unslash( $_GET['nonce'] ) ) : '';
-		if ( ! wp_verify_nonce( $nonce, 'tsoliin_action' ) ) {
-			wp_die( esc_html__( 'Nonce invalid.', 'tso-link-inspector' ) );
-		}
+	/**
+	 * Shared export POST: capability, nonce, then stream.
+	 *
+	 * @param string $format csv|pdf.
+	 * @return void
+	 */
+	private function stream_export_from_post( $format ) {
 		if ( ! current_user_can( 'manage_options' ) ) {
 			wp_die( esc_html__( 'Insufficient permissions.', 'tso-link-inspector' ) );
 		}
+		check_admin_referer( 'tsoliin_action', 'tsoliin_export_nonce' );
 
-		$filter  = isset( $_GET['filter'] ) ? $this->sanitize_list_filter( wp_unslash( $_GET['filter'] ) ) : 'all'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
-		$quality = $this->get_list_quality_filter_from_request();
-		$scope   = $this->get_scope_from_request();
-		$post_id = isset( $_GET['post_id'] ) ? absint( $_GET['post_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
-		$search  = isset( $_GET['s'] ) ? sanitize_text_field( wp_unslash( $_GET['s'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$filter  = isset( $_POST['filter'] ) ? $this->sanitize_list_filter( wp_unslash( $_POST['filter'] ) ) : 'all';
+		$quality = isset( $_POST['quality_filter'] ) ? $this->sanitize_list_quality_filter( wp_unslash( $_POST['quality_filter'] ) ) : '';
+		$scope   = isset( $_POST['scope'] ) ? $this->db->sanitize_scope_input( wp_unslash( $_POST['scope'] ) ) : 'all';
+		$post_id = isset( $_POST['post_id'] ) ? absint( $_POST['post_id'] ) : 0;
+		$search  = isset( $_POST['s'] ) ? sanitize_text_field( wp_unslash( $_POST['s'] ) ) : '';
 
-		TSOLIIN_Reports::stream_pdf_html(
-			$this->db,
-			array(
-				'filter'         => $filter,
-				'quality_filter' => $quality,
-				'scope'          => $scope,
-				'search'         => $search,
-				'post_id'        => $post_id,
-			)
+		$args = array(
+			'filter'         => $filter,
+			'quality_filter' => $quality,
+			'scope'          => $scope,
+			'search'         => $search,
+			'post_id'        => $post_id,
 		);
+		if ( 'pdf' === $format ) {
+			TSOLIIN_Reports::stream_pdf_html( $this->db, $args );
+		} else {
+			TSOLIIN_Reports::stream_csv( $this->db, $args );
+		}
+	}
+
+	public function handle_export_csv() {
+		$this->stream_export_from_post( 'csv' );
+	}
+
+	public function handle_export_pdf() {
+		$this->stream_export_from_post( 'pdf' );
+	}
+
+	/**
+	 * Empty the inspector table and scan/check progress (Settings POST).
+	 *
+	 * @return void
+	 */
+	public function handle_reset_all() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'Insufficient permissions.', 'tso-link-inspector' ) );
+		}
+		check_admin_referer( 'tsoliin_reset_all' );
+		$this->truncate_plugin_records();
+		$redirect = add_query_arg(
+			array(
+				'page'            => 'tso-link-inspector-settings',
+				'tsoliin_notice'  => 'reset',
+			),
+			admin_url( 'tools.php' )
+		);
+		wp_safe_redirect( $redirect );
+		exit;
+	}
+
+	/**
+	 * Truncate the plugin table and clear scan/check progress options.
+	 *
+	 * @return void
+	 */
+	private function truncate_plugin_records() {
+		global $wpdb;
+		$table          = $this->db->get_table();
+		$expected_table = $this->db->get_table();
+		if ( $table === $expected_table ) {
+			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+			$wpdb->query( 'TRUNCATE TABLE `' . esc_sql( $table ) . '`' ); // Table name validated against get_table() on line above.
+			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+		}
+		$this->clear_scan_progress_options();
 	}
 
 	public function ajax_diagnose() {

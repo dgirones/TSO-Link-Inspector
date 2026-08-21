@@ -94,18 +94,8 @@ class TSOLIIN_WooCommerce {
 
 		$items = self::collect_fields_for_post( $product_id, $product_id, '' );
 
-		$variation_ids = get_posts(
-			array(
-				'post_parent'    => $product_id,
-				'post_type'      => 'product_variation',
-				'post_status'    => array( 'publish', 'private' ),
-				'posts_per_page' => -1,
-				'fields'         => 'ids',
-				'orderby'        => 'ID',
-				'order'          => 'ASC',
-			)
-		);
-		if ( is_array( $variation_ids ) ) {
+		$variation_ids = self::get_variation_ids( $product_id );
+		if ( ! empty( $variation_ids ) ) {
 			foreach ( $variation_ids as $variation_id ) {
 				$variation_id = absint( $variation_id );
 				if ( $variation_id <= 0 ) {
@@ -119,6 +109,51 @@ class TSOLIIN_WooCommerce {
 		}
 
 		return $items;
+	}
+
+	/**
+	 * Variation IDs for a product (paged; never loads unbounded rows in one query).
+	 *
+	 * @param int $product_id Product ID.
+	 * @return int[]
+	 */
+	private static function get_variation_ids( $product_id ) {
+		$product_id = absint( $product_id );
+		if ( $product_id <= 0 ) {
+			return array();
+		}
+		$ids      = array();
+		$page     = 1;
+		$per_page = 200;
+		do {
+			$batch = get_posts(
+				array(
+					'post_parent'            => $product_id,
+					'post_type'              => 'product_variation',
+					'post_status'            => array( 'publish', 'private' ),
+					'posts_per_page'         => $per_page,
+					'paged'                  => $page,
+					'fields'                 => 'ids',
+					'orderby'                => 'ID',
+					'order'                  => 'ASC',
+					'no_found_rows'          => true,
+					'update_post_meta_cache' => false,
+					'update_post_term_cache' => false,
+				)
+			);
+			if ( ! is_array( $batch ) || empty( $batch ) ) {
+				break;
+			}
+			foreach ( $batch as $vid ) {
+				$vid = absint( $vid );
+				if ( $vid > 0 ) {
+					$ids[] = $vid;
+				}
+			}
+			$page++;
+		} while ( count( $batch ) === $per_page );
+
+		return $ids;
 	}
 
 	/**
@@ -252,16 +287,8 @@ class TSOLIIN_WooCommerce {
 	 */
 	private static function raw_meta_has_url( $product_id, $url ) {
 		$post_ids      = array( absint( $product_id ) );
-		$variation_ids = get_posts(
-			array(
-				'post_parent'    => absint( $product_id ),
-				'post_type'      => 'product_variation',
-				'post_status'    => array( 'publish', 'private' ),
-				'posts_per_page' => -1,
-				'fields'         => 'ids',
-			)
-		);
-		if ( is_array( $variation_ids ) ) {
+		$variation_ids = self::get_variation_ids( $product_id );
+		if ( ! empty( $variation_ids ) ) {
 			foreach ( $variation_ids as $vid ) {
 				$post_ids[] = absint( $vid );
 			}

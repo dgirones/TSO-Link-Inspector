@@ -269,6 +269,12 @@
 	margin-right: 4px;
 }
 
+.tsoliin-export-form,
+.tsoliin-reset-form {
+	display: inline;
+	margin: 0;
+}
+
 /* ── List table region ───────────────────────────────────────── */
 .tsoliin-list-table-region {
 	display: flow-root;
