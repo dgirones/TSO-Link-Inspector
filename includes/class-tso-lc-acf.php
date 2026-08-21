@@ -111,9 +111,6 @@ class TSOLIIN_Acf {
 			if ( isset( $item['source_key'] ) && (string) $item['source_key'] === $sk ) {
 				return isset( $item['url'] ) && (string) $item['url'] === $url;
 			}
-			if ( isset( $item['url'] ) && (string) $item['url'] === $url ) {
-				return true;
-			}
 		}
 		return false;
 	}
@@ -128,6 +125,11 @@ class TSOLIIN_Acf {
 		if ( ! self::is_plugin_active() ) {
 			return '';
 		}
+		$fallback = '';
+		$token    = '';
+		if ( preg_match( '/^acf-o([a-z0-9]+)-/', sanitize_key( (string) $source_key ), $m ) ) {
+			$token = (string) $m[1];
+		}
 		if ( function_exists( 'acf_get_options_pages' ) ) {
 			$pages = acf_get_options_pages();
 			if ( is_array( $pages ) ) {
@@ -135,11 +137,29 @@ class TSOLIIN_Acf {
 					if ( ! is_array( $page ) || empty( $page['menu_slug'] ) ) {
 						continue;
 					}
-					return admin_url( 'admin.php?page=' . sanitize_key( (string) $page['menu_slug'] ) );
+					$url = admin_url( 'admin.php?page=' . sanitize_key( (string) $page['menu_slug'] ) );
+					if ( '' === $fallback ) {
+						$fallback = $url;
+					}
+					if ( '' === $token ) {
+						continue;
+					}
+					$pid = isset( $page['post_id'] ) ? (string) $page['post_id'] : '';
+					$ids = array( sanitize_key( $pid ) );
+					if ( 'options' === $pid ) {
+						$ids[] = 'option';
+					} elseif ( 'option' === $pid ) {
+						$ids[] = 'options';
+					}
+					if ( in_array( $token, $ids, true ) ) {
+						return $url;
+					}
 				}
 			}
 		}
-		unset( $source_key );
+		if ( '' !== $fallback ) {
+			return $fallback;
+		}
 		return admin_url( 'edit.php?post_type=acf-field-group' );
 	}
 

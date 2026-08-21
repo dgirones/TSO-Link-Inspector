@@ -7046,13 +7046,35 @@ class TSOLIIN_Scanner {
 		if ( ! current_user_can( 'edit_post', $item_id ) && ! current_user_can( 'edit_theme_options' ) ) {
 			return false;
 		}
-		return false !== wp_update_post(
-			array(
-				'ID'         => $item_id,
-				'post_title' => $new_anchor,
-			),
-			true
-		);
+		$menu_post = get_post( $item_id );
+		if ( ! $menu_post ) {
+			return false;
+		}
+		$s              = get_option( 'tsoliin_settings', array() );
+		$preserve_dates = ! empty( $s['preserve_dates'] );
+		if ( $preserve_dates ) {
+			$this->preserve_modified_context = array(
+				'ID'                => $item_id,
+				'post_modified'     => (string) $menu_post->post_modified,
+				'post_modified_gmt' => (string) $menu_post->post_modified_gmt,
+			);
+			add_filter( 'wp_insert_post_data', array( $this, 'filter_preserve_post_modified' ), 10, 2 );
+		}
+		try {
+			$updated = wp_update_post(
+				array(
+					'ID'         => $item_id,
+					'post_title' => $new_anchor,
+				),
+				true
+			);
+		} finally {
+			if ( $preserve_dates ) {
+				remove_filter( 'wp_insert_post_data', array( $this, 'filter_preserve_post_modified' ), 10 );
+				$this->preserve_modified_context = null;
+			}
+		}
+		return ! is_wp_error( $updated ) && $updated;
 	}
 
 	/**

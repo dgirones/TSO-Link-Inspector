@@ -72,6 +72,8 @@ foreach ( $tsoliin_transients as $tsoliin_transient_name ) {
 
 // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->usermeta} WHERE meta_key = %s", 'tsoliin_onboarding_dismissed' ) );
+// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->usermeta} WHERE meta_key = %s", 'tsoliin_per_page' ) );
 
 // ── Clear all scheduled cron events ─────────────────────────────────────
 $tsoliin_hooks = array(
