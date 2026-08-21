@@ -6,7 +6,7 @@ msgstr ""
 "Project-Id-Version: TSO Link Inspector 2.1.0\n"
 "Report-Msgid-Bugs-To: https://tusoporteonline.es\n"
 "POT-Creation-Date: 2024-01-01 00:00:00+00:00\n"
-"PO-Revision-Date: 2026-08-21 10:22+0000\n"
+"PO-Revision-Date: 2026-08-21 11:20+0000\n"
 "Last-Translator: Tu Soporte Online <info@tusoporteonline.es>\n"
 "Language-Team: Catalan\n"
 "Language: ca\n"
@@ -860,6 +860,9 @@ msgstr "Escaneig completat!"
 
 msgid "Check completed!"
 msgstr "Comprovació completada!"
+
+msgid "Check completed. Waiting for other actions to finish…"
+msgstr "Comprovació completada. Esperant que acabin altres accions…"
 
 msgid "Check started. You can continue browsing."
 msgstr "Comprovació iniciada. Pots continuar navegant."
@@ -2664,6 +2667,21 @@ msgstr "Enllaços per pàgina"
 
 msgid "Upgrade selected to HTTPS"
 msgstr "Actualitzar seleccionats a HTTPS"
+
+msgid "Upgrade to HTTPS"
+msgstr "Actualitza a HTTPS"
+
+msgid "Upgrade this URL to HTTPS? The plugin will only apply it if HTTPS is reachable."
+msgstr "Actualitzar aquesta URL a HTTPS? El connector només l'aplicarà si HTTPS és accessible."
+
+msgid "Link upgraded to HTTPS."
+msgstr "Enllaç actualitzat a HTTPS."
+
+msgid "HTTPS could not be verified for this URL."
+msgstr "No s'ha pogut verificar HTTPS per a aquesta URL."
+
+msgid "Replace http:// with https:// after the plugin confirms HTTPS works"
+msgstr "Substitueix http:// per https:// després que el connector confirmi que HTTPS funciona"
 
 msgid ""
 "Upgrade the selected http:// links to https:// where the server confirms "

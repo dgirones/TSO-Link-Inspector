@@ -63,6 +63,7 @@ class TSOLIIN_Admin {
 		add_action( 'wp_ajax_tsoliin_add_ignore',      array( $this, 'ajax_add_ignore' ) );
 		add_action( 'wp_ajax_tsoliin_dismiss_onboarding', array( $this, 'ajax_dismiss_onboarding' ) );
 		add_action( 'wp_ajax_tsoliin_make_relative',     array( $this, 'ajax_make_relative' ) );
+		add_action( 'wp_ajax_tsoliin_upgrade_https',     array( $this, 'ajax_upgrade_https' ) );
 		add_action( 'wp_ajax_tsoliin_link_preview',      array( $this, 'ajax_link_preview' ) );
 		add_action( 'wp_ajax_tsoliin_search_list',       array( $this, 'ajax_search_list' ) );
 	}
@@ -264,6 +265,7 @@ class TSOLIIN_Admin {
 				'scanDone'      => __( 'Scan completed!', 'tso-link-inspector' ),
 				'checking'      => __( 'Checking...', 'tso-link-inspector' ),
 				'checkDone'     => __( 'Check completed!', 'tso-link-inspector' ),
+				'checkCompleteWaiting' => __( 'Check completed. Waiting for other actions to finish…', 'tso-link-inspector' ),
 				'checkStarted'  => __( 'Check started. You can continue browsing.', 'tso-link-inspector' ),
 				'stopped'       => __( 'Stopped', 'tso-link-inspector' ),
 				'scanNow'       => __( 'Scan now', 'tso-link-inspector' ),
@@ -332,8 +334,12 @@ class TSOLIIN_Admin {
 				'makeRelative'      => __( 'Convert to /path', 'tso-link-inspector' ),
 				'confirmMakeRelative' => __( 'Remove the site domain from this link? It will be saved as a path starting with / (e.g. /contact/). Only for links on this site.', 'tso-link-inspector' ),
 				'confirmMakeRelativeBulk' => __( 'Remove the site domain from the selected same-site links and save them as /path URLs?', 'tso-link-inspector' ),
+				'upgradeHttps'          => __( 'Upgrade to HTTPS', 'tso-link-inspector' ),
+				'confirmUpgradeHttps'   => __( 'Upgrade this URL to HTTPS? The plugin will only apply it if HTTPS is reachable.', 'tso-link-inspector' ),
 				'confirmUpgradeHttpsBulk' => __( 'Upgrade the selected http:// links to https:// where the server confirms HTTPS works?', 'tso-link-inspector' )
 					. "\n\n" . __( 'Links without a verified HTTPS response are skipped.', 'tso-link-inspector' ),
+				'httpsUpgraded'         => __( 'Link upgraded to HTTPS.', 'tso-link-inspector' ),
+				'upgradeHttpsFailed'    => __( 'HTTPS could not be verified for this URL.', 'tso-link-inspector' ),
 				'relativeDone'      => __( 'Link saved as /path (domain removed).', 'tso-link-inspector' ),
 				'relativeDisabled'  => __( 'Enable “Convert to /path” in Settings first.', 'tso-link-inspector' ),
 				'convertingRelative'=> __( 'Converting to /path…', 'tso-link-inspector' ),
@@ -2537,6 +2543,44 @@ class TSOLIIN_Admin {
 		$response = array_merge(
 			array( 'new_url' => $relative, 'message' => __( 'Link saved as /path (domain removed).', 'tso-link-inspector' ) ),
 			$this->status_payload_from_link( $updated, $relative, true )
+		);
+		wp_send_json_success( $this->append_filter_match( $response, $updated ) );
+	}
+
+	/**
+	 * Upgrade one http:// URL to verified https:// (same rules as bulk upgrade).
+	 */
+	public function ajax_upgrade_https() {
+		$this->check_nonce_and_cap();
+		$link_id = isset( $_POST['link_id'] ) ? absint( $_POST['link_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		$link    = $link_id ? $this->db->get_link( $link_id ) : null;
+		if ( ! $link ) {
+			wp_send_json_error( array( 'message' => __( 'Link not found.', 'tso-link-inspector' ) ) );
+		}
+
+		$blocked = $this->get_non_editable_source_message( $link );
+		if ( '' !== $blocked ) {
+			wp_send_json_error( array( 'message' => $blocked ) );
+		}
+
+		$https_url = $this->get_verified_https_upgrade_for_link( $link );
+		if ( '' === $https_url ) {
+			wp_send_json_error( array( 'message' => __( 'HTTPS could not be verified for this URL.', 'tso-link-inspector' ) ) );
+		}
+
+		$done = $this->replace_link_url_in_source( $link, $https_url );
+		if ( ! $done ) {
+			wp_send_json_error( array( 'message' => __( 'Original URL not found in the source. Check whether the link was edited manually.', 'tso-link-inspector' ) ) );
+		}
+
+		$this->db->update_link_url( $link_id, $https_url );
+		$r = $this->http->check( $https_url, (int) $link->post_id );
+		$this->db->update_check_result( $link_id, $r['status_code'], $r['redirect_url'], $r['is_broken'], isset( $r['redirect_chain'] ) ? $r['redirect_chain'] : '' );
+		$updated = $this->db->get_link( $link_id );
+
+		$response = array_merge(
+			array( 'new_url' => $https_url, 'message' => __( 'Link upgraded to HTTPS.', 'tso-link-inspector' ) ),
+			$this->status_payload_from_link( $updated, $https_url, true )
 		);
 		wp_send_json_success( $this->append_filter_match( $response, $updated ) );
 	}
