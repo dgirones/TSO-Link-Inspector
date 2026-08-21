@@ -2346,6 +2346,26 @@ class TSOLIIN_DB {
 				continue;
 			}
 
+			if ( TSOLIIN_HTTP::hostname_has_no_dns( $url ) ) {
+				// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+				$changed = $wpdb->update(
+					$this->table,
+					array(
+						'status_code'  => -2,
+						'redirect_url' => '',
+						'is_broken'    => 1,
+					),
+					array( 'id' => (int) $row->id ),
+					array( '%d', '%s', '%d' ),
+					array( '%d' )
+				);
+				// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+				if ( false !== $changed ) {
+					$updated++;
+				}
+				continue;
+			}
+
 			if ( ! TSOLIIN_HTTP::is_safe_remote_url( $url ) ) {
 				// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 				$changed = $wpdb->update(
@@ -2463,6 +2483,54 @@ class TSOLIIN_DB {
 					'status_code'  => -6,
 					'redirect_url' => '',
 					'is_broken'    => 0,
+				),
+				array( 'id' => (int) $row->id ),
+				array( '%d', '%s', '%d' ),
+				array( '%d' )
+			);
+			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			if ( false !== $changed ) {
+				$updated++;
+			}
+		}
+
+		if ( $updated > 0 ) {
+			self::clear_stats_cache();
+		}
+
+		return $updated;
+	}
+
+	/**
+	 * Reclassify NXDOMAIN / empty-DNS rows that were stored as -7 (SSRF block).
+	 *
+	 * @return int Rows updated.
+	 */
+	public function cleanup_blocked_dns_rows() {
+		global $wpdb;
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$rows = $wpdb->get_results(
+			"SELECT id, link_url FROM {$this->table} WHERE status_code = -7"
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+		if ( empty( $rows ) ) {
+			return 0;
+		}
+
+		$updated = 0;
+		foreach ( $rows as $row ) {
+			$url = (string) $row->link_url;
+			if ( ! TSOLIIN_HTTP::hostname_has_no_dns( $url ) ) {
+				continue;
+			}
+			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$changed = $wpdb->update(
+				$this->table,
+				array(
+					'status_code'  => -2,
+					'redirect_url' => '',
+					'is_broken'    => 1,
 				),
 				array( 'id' => (int) $row->id ),
 				array( '%d', '%s', '%d' ),

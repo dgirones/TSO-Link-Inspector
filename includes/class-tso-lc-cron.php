@@ -313,6 +313,7 @@ class TSOLIIN_Cron {
 		update_option( 'tsoliin_last_check_batch', current_time( 'mysql', true ), false );
 		$this->db->maybe_cleanup_transparent_redirects();
 		$this->db->cleanup_action_url_rows();
+		$this->db->cleanup_blocked_dns_rows();
 		$this->db->cleanup_mislabeled_skip_rows( true, 15 );
 		$this->maybe_send_digest_broken_email();
 	}
