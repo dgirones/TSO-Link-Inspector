@@ -122,6 +122,7 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 * Fix: WordPress.org review — External services in readme, POST export/reset, report CSS/JS via enqueue (no inline style/onclick).
 * Fix: Count published posts without loading every ID; Internal/External tab counts stay in SQL; pin DNS before each HTTP hop.
 * Fix: Scoped dashboard/PDF stats, stale reset counts, cron incomplete-scan timestamp, blocked-redirect reporting, ACF Options Go to edit, and front-end focus needle.
+* Fix: Dashboard totals and filter tabs no longer show 0 when links exist (Dailymotion `dai.ly` LIKE clause broke `$wpdb->prepare()`).
 
 = 2.3.3 =
 * New: Bulk action **Upgrade selected to HTTPS** — only when the server confirms a working HTTPS URL (same rules as Suggestion → Apply; unverified bot-wall suggestions are skipped).
