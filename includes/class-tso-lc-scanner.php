@@ -52,6 +52,82 @@ class TSOLIIN_Scanner {
 		return $t;
 	}
 
+	/**
+	 * Builder template post types that often hold header/footer/popup links.
+	 *
+	 * @return string[]
+	 */
+	public static function builder_template_post_types() {
+		return array( 'elementor_library', 'porto_builder' );
+	}
+
+	/**
+	 * Public post types plus known builder types (even when not public).
+	 *
+	 * @return array<string, WP_Post_Type>
+	 */
+	public function get_settings_post_type_objects() {
+		$all = get_post_types( array( 'public' => true ), 'objects' );
+		if ( ! is_array( $all ) ) {
+			$all = array();
+		}
+		foreach ( self::builder_template_post_types() as $slug ) {
+			if ( isset( $all[ $slug ] ) ) {
+				continue;
+			}
+			$obj = get_post_type_object( $slug );
+			if ( $obj ) {
+				$all[ $slug ] = $obj;
+			}
+		}
+		return $all;
+	}
+
+	/**
+	 * Builder types that exist on the site but are not enabled in Settings.
+	 *
+	 * @return array<int, array{slug:string,label:string}>
+	 */
+	public function get_unchecked_builder_post_types() {
+		$enabled = $this->get_post_types();
+		$out     = array();
+		foreach ( self::builder_template_post_types() as $slug ) {
+			if ( ! post_type_exists( $slug ) || in_array( $slug, $enabled, true ) ) {
+				continue;
+			}
+			$obj   = get_post_type_object( $slug );
+			$label = ( $obj && ! empty( $obj->labels->singular_name ) ) ? (string) $obj->labels->singular_name : $slug;
+			$out[] = array(
+				'slug'  => $slug,
+				'label' => $label,
+			);
+		}
+		return $out;
+	}
+
+	/**
+	 * Whether a source_key is owned by ACF / WooCommerce / Elementor modules.
+	 *
+	 * @param string $source_key DB source_key.
+	 * @return bool
+	 */
+	private function is_dedicated_source_key( $source_key ) {
+		$sk = (string) $source_key;
+		if ( '' === $sk ) {
+			return false;
+		}
+		if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk ) ) {
+			return true;
+		}
+		if ( class_exists( 'TSOLIIN_Acf', false ) && TSOLIIN_Acf::is_acf_source_key( $sk ) ) {
+			return true;
+		}
+		if ( class_exists( 'TSOLIIN_Elementor', false ) && TSOLIIN_Elementor::is_elementor_source_key( $sk ) ) {
+			return true;
+		}
+		return false;
+	}
+
 	/** @return bool */
 	private function opt( $key, $default = false ) {
 		$s = get_option( 'tsoliin_settings', array() );
@@ -2160,6 +2236,12 @@ class TSOLIIN_Scanner {
 			}
 		}
 
+		if ( ( $force_all || $this->opt( 'scan_meta' ) ) && class_exists( 'TSOLIIN_Elementor', false ) ) {
+			foreach ( TSOLIIN_Elementor::collect_post_items( $post_id ) as $item ) {
+				$this->push_scan_item( $items, $seen, $item, $post_id );
+			}
+		}
+
 		$items = $this->enrich_scan_item_anchors( $items, $post->post_content, $post_id, $html );
 		$items = $this->finalize_scan_items( $items, $post_id );
 		$items = $this->reclassify_hyperlink_items( $items, $post->post_content, $post_id, $html );
@@ -2174,11 +2256,7 @@ class TSOLIIN_Scanner {
 			}
 			$type = isset( $item['type'] ) ? (string) $item['type'] : 'link';
 			$sk   = isset( $item['source_key'] ) ? (string) $item['source_key'] : '';
-			if ( '' !== $sk && class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk ) ) {
-				$this->db->upsert_link( $post_id, $item['url'], $item['anchor'], $type, $sk );
-				continue;
-			}
-			if ( '' !== $sk && class_exists( 'TSOLIIN_Acf', false ) && TSOLIIN_Acf::is_acf_source_key( $sk ) ) {
+			if ( '' !== $sk && $this->is_dedicated_source_key( $sk ) ) {
 				$this->db->upsert_link( $post_id, $item['url'], $item['anchor'], $type, $sk );
 				continue;
 			}
@@ -2261,12 +2339,7 @@ class TSOLIIN_Scanner {
 			$sk = isset( $item['source_key'] ) ? (string) $item['source_key'] : '';
 			// Match upsert eligibility: do not keep rows for URLs found only in rendered HTML
 			// (or other non-editable places) — those produced false "Go to edit" targets.
-			if ( '' !== $sk && class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk ) ) {
-				$active_keys[ $sk ] = true;
-				$active[ $this->scan_url_key( $url, $post_id ) ] = true;
-				continue;
-			}
-			if ( '' !== $sk && class_exists( 'TSOLIIN_Acf', false ) && TSOLIIN_Acf::is_acf_source_key( $sk ) ) {
+			if ( '' !== $sk && $this->is_dedicated_source_key( $sk ) ) {
 				$active_keys[ $sk ] = true;
 				$active[ $this->scan_url_key( $url, $post_id ) ] = true;
 				continue;
@@ -2298,14 +2371,7 @@ class TSOLIIN_Scanner {
 				continue;
 			}
 			$sk = isset( $row->source_key ) ? (string) $row->source_key : '';
-			if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk ) ) {
-				if ( isset( $active_keys[ $sk ] ) ) {
-					continue;
-				}
-				$this->db->delete_link( (int) $row->id );
-				continue;
-			}
-			if ( class_exists( 'TSOLIIN_Acf', false ) && TSOLIIN_Acf::is_acf_source_key( $sk ) ) {
+			if ( $this->is_dedicated_source_key( $sk ) ) {
 				if ( isset( $active_keys[ $sk ] ) ) {
 					continue;
 				}
@@ -2442,9 +2508,13 @@ class TSOLIIN_Scanner {
 		if ( is_string( $val ) ) {
 			return false !== strpos( $val, 'href=' )
 				|| $this->looks_like_link_url( $val )
-				|| ( $this->opt( 'scan_meta_plain', true ) && false !== preg_match( '#https?://#i', $val ) );
+				|| ( $this->opt( 'scan_meta_plain', true ) && false !== preg_match( '#https?://#i', $val ) )
+				|| ( class_exists( 'TSOLIIN_Elementor', false ) && TSOLIIN_Elementor::value_might_contain_dynamic_tags( $val ) );
 		}
 		if ( is_array( $val ) ) {
+			if ( class_exists( 'TSOLIIN_Elementor', false ) && TSOLIIN_Elementor::value_might_contain_dynamic_tags( $val ) ) {
+				return true;
+			}
 			if ( isset( $val['url'] ) && is_string( $val['url'] ) && $this->looks_like_link_url( $val['url'] ) ) {
 				return true;
 			}
@@ -2892,6 +2962,13 @@ class TSOLIIN_Scanner {
 				return $row;
 			}
 			$row = $this->db->get_link_by_source_key( $sk, 'acf', 0 );
+			if ( $row ) {
+				return $row;
+			}
+		}
+
+		if ( '' !== $sk && class_exists( 'TSOLIIN_Elementor', false ) && TSOLIIN_Elementor::is_elementor_source_key( $sk ) ) {
+			$row = $this->db->get_link_by_source_key( $sk, $type, $post_id );
 			if ( $row ) {
 				return $row;
 			}
@@ -3786,6 +3863,11 @@ class TSOLIIN_Scanner {
 		}
 		if ( class_exists( 'TSOLIIN_Acf', false ) && TSOLIIN_Acf::is_acf_source_key( $sk ) ) {
 			$result = TSOLIIN_Acf::source_has_url( $link );
+			$this->editable_source_cache[ $cache_key ] = $result;
+			return $result;
+		}
+		if ( class_exists( 'TSOLIIN_Elementor', false ) && TSOLIIN_Elementor::is_elementor_source_key( $sk ) ) {
+			$result = TSOLIIN_Elementor::source_has_url( $link );
 			$this->editable_source_cache[ $cache_key ] = $result;
 			return $result;
 		}
@@ -5489,10 +5571,7 @@ class TSOLIIN_Scanner {
 			return false;
 		}
 		$sk = isset( $link->source_key ) ? (string) $link->source_key : '';
-		if ( class_exists( 'TSOLIIN_Acf', false ) && TSOLIIN_Acf::is_acf_source_key( $sk ) ) {
-			return false;
-		}
-		if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk ) ) {
+		if ( $this->is_dedicated_source_key( $sk ) ) {
 			return false;
 		}
 		$type = isset( $link->link_type ) ? (string) $link->link_type : 'link';

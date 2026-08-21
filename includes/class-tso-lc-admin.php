@@ -416,6 +416,7 @@ class TSOLIIN_Admin {
 		echo '</div>';
 		echo '<hr class="wp-header-end">';
 
+		$this->render_scan_coverage_notices();
 		$this->render_onboarding_banner();
 
 		// Stats cards.
@@ -873,6 +874,36 @@ class TSOLIIN_Admin {
 	}
 
 	/**
+	 * Notices for coming-soon intercepts and unchecked builder post types.
+	 *
+	 * @return void
+	 */
+	private function render_scan_coverage_notices() {
+		$settings_url = admin_url( 'tools.php?page=tso-link-inspector-settings#tsoliin-post-types-row' );
+
+		$missing = $this->scanner->get_unchecked_builder_post_types();
+		if ( ! empty( $missing ) ) {
+			$labels = array();
+			foreach ( $missing as $row ) {
+				$slug     = isset( $row['slug'] ) ? (string) $row['slug'] : '';
+				$label    = isset( $row['label'] ) ? (string) $row['label'] : $slug;
+				$labels[] = $label . ' (' . $slug . ')';
+			}
+			echo '<div class="notice notice-warning"><p>';
+			echo esc_html__( 'Headers, footers, and popups in these builder types are not scanned because they are unchecked in Settings:', 'tso-link-inspector' );
+			echo ' <strong>' . esc_html( implode( ', ', $labels ) ) . '</strong>. ';
+			echo '<a href="' . esc_url( $settings_url ) . '">' . esc_html__( 'Open Settings → Content types', 'tso-link-inspector' ) . '</a>';
+			echo '</p></div>';
+		}
+
+		if ( $this->http->is_site_gated_cached() ) {
+			echo '<div class="notice notice-warning"><p>';
+			echo esc_html__( 'This site appears to be behind a coming-soon or maintenance page. Internal HTML links are not marked OK or broken (status: Unverifiable) until the site is publicly reachable. External URLs and media files are still checked.', 'tso-link-inspector' );
+			echo '</p></div>';
+		}
+	}
+
+	/**
 	 * Settings / Help tab navigation.
 	 *
 	 * @param string $active_tab Active tab slug.
@@ -962,9 +993,15 @@ class TSOLIIN_Admin {
 
 		echo '<dt>' . esc_html__( 'Custom fields (ACF / Meta)', 'tso-link-inspector' ) . '</dt>';
 		echo '<dd>';
-		echo esc_html__( 'Enable ACF / Meta custom fields in Settings to find URLs in fields added by plugins like ACF, PODS, or CPT UI. When ACF is active, Image / File / Gallery (attachment IDs), Page Link, Post Object, Relationship, and Taxonomy fields are resolved to real URLs, and ACF Options pages are scanned too. Plain-text URLs inside meta also require Extended sources (Phase 2). Internal SEO keys are excluded by default; add extra keys to exclude to speed up scans.', 'tso-link-inspector' );
+		echo esc_html__( 'Enable ACF / Meta custom fields in Settings to find URLs in fields added by plugins like ACF, PODS, or CPT UI. When ACF is active, Image / File / Gallery (attachment IDs), Page Link, Post Object, Relationship, and Taxonomy fields are resolved to real URLs, and ACF Options pages are scanned too. Elementor dynamic tags and [acf] shortcodes inside builder JSON (including __dynamic__ URL fields) are resolved to the real destination. Plain-text URLs inside meta also require Extended sources (Phase 2). Internal SEO keys are excluded by default; add extra keys to exclude to speed up scans.', 'tso-link-inspector' );
 		echo ' <a href="' . esc_url( $settings_url ) . '#tsoliin-meta-exclude-row">' . esc_html__( 'Open meta settings', 'tso-link-inspector' ) . '</a>';
 		echo '</dd>';
+
+		echo '<dt>' . esc_html__( 'Builder templates (Elementor / Porto)', 'tso-link-inspector' ) . '</dt>';
+		echo '<dd>' . esc_html__( 'Links in headers, footers, and popups are stored in builder post types (for example Elementor Library or Porto Builder). Enable those types under Settings → Content types, then run Scan now. They are never turned on automatically.', 'tso-link-inspector' ) . '</dd>';
+
+		echo '<dt>' . esc_html__( 'Coming soon / maintenance', 'tso-link-inspector' ) . '</dt>';
+		echo '<dd>' . esc_html__( 'If a coming-soon plugin serves the same HTML for every internal page, HTTP checks cannot tell working pages from missing ones. Internal HTML URLs are marked Unverifiable (coming soon / maintenance) until the site is live. External links and uploaded files are still tested.', 'tso-link-inspector' ) . '</dd>';
 
 		echo '<dt>' . esc_html__( 'Broken links email notifications', 'tso-link-inspector' ) . '</dt>';
 		echo '<dd>' . esc_html__( 'Choose immediate alerts, confirmed alerts (two consecutive failed checks), or periodic summaries every 7, 15, or 30 days. Only hard-broken links (no redirect destination) are included. Summary emails are skipped when there are none.', 'tso-link-inspector' ) . '</dd>';
@@ -1000,9 +1037,11 @@ class TSOLIIN_Admin {
 	private function post_type_checkbox_label( $post_type_object ) {
 		$slug = isset( $post_type_object->name ) ? (string) $post_type_object->name : '';
 		$known = array(
-			'post'       => __( 'Post', 'tso-link-inspector' ),
-			'page'       => __( 'Page', 'tso-link-inspector' ),
-			'attachment' => __( 'Media', 'tso-link-inspector' ),
+			'post'              => __( 'Post', 'tso-link-inspector' ),
+			'page'              => __( 'Page', 'tso-link-inspector' ),
+			'attachment'        => __( 'Media', 'tso-link-inspector' ),
+			'elementor_library' => __( 'Elementor Library', 'tso-link-inspector' ),
+			'porto_builder'     => __( 'Porto Builder', 'tso-link-inspector' ),
 		);
 		$label = isset( $known[ $slug ] ) ? $known[ $slug ] : (string) $post_type_object->labels->singular_name;
 		return $label . ' (' . $slug . ')';
@@ -1081,7 +1120,7 @@ class TSOLIIN_Admin {
 		$post_types  = isset( $s['post_types'] ) && is_array( $s['post_types'] )
 			? array_map( 'sanitize_key', $s['post_types'] )
 			: array( 'post', 'page' );
-		$all_pts     = get_post_types( array( 'public' => true ), 'objects' );
+		$all_pts     = $this->scanner->get_settings_post_type_objects();
 
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$settings_tab = isset( $_GET['tab'] ) ? sanitize_key( wp_unslash( $_GET['tab'] ) ) : 'settings';
@@ -1105,6 +1144,8 @@ class TSOLIIN_Admin {
 
 		$this->render_settings_nav_tabs( $settings_tab );
 
+		$this->render_scan_coverage_notices();
+
 		if ( 'help' === $settings_tab ) {
 			$this->render_settings_help_tab();
 			echo '</div>';
@@ -1116,7 +1157,7 @@ class TSOLIIN_Admin {
 		echo '<table class="form-table" role="presentation"><tbody>';
 
 		// Post types.
-		echo '<tr><th scope="row">' . esc_html__( 'Content types', 'tso-link-inspector' ) . '</th><td>';
+		echo '<tr id="tsoliin-post-types-row"><th scope="row">' . esc_html__( 'Content types', 'tso-link-inspector' ) . '</th><td>';
 		foreach ( $all_pts as $pt ) {
 			$checked = checked( in_array( $pt->name, $post_types, true ), true, false );
 			echo '<label style="display:block;margin-bottom:5px;">';
@@ -1125,6 +1166,7 @@ class TSOLIIN_Admin {
 			echo esc_html( $this->post_type_checkbox_label( $pt ) );
 			echo '</label>';
 		}
+		echo '<p class="description">' . esc_html__( 'Headers, footers, and popups often live in builder types such as Elementor Library or Porto Builder. Enable those types if you want links in templates scanned. They are not turned on automatically.', 'tso-link-inspector' ) . '</p>';
 		echo '</td></tr>';
 
 		// Scan images.
@@ -1189,7 +1231,7 @@ class TSOLIIN_Admin {
 		echo '<label><input type="checkbox" id="tsoliin_scan_meta" name="tsoliin_scan_meta" value="1" ' . checked( $scan_meta, true, false ) . ' /> ';
 		echo esc_html__( 'Scan custom fields (ACF, PODS, CPT UI...)', 'tso-link-inspector' );
 		echo '</label>';
-		echo '<p class="description">' . esc_html__( 'Find links in fields added by plugins like ACF. When ACF is active, this also resolves image/file/gallery IDs and page/post relationship fields to URLs, and scans ACF Options pages. It may slow down scanning.', 'tso-link-inspector' ) . '</p>';
+		echo '<p class="description">' . esc_html__( 'Find links in fields added by plugins like ACF. When ACF is active, this also resolves image/file/gallery IDs and page/post relationship fields to URLs, and scans ACF Options pages. Elementor dynamic tags and ACF tags inside builder JSON are resolved to real URLs. It may slow down scanning.', 'tso-link-inspector' ) . '</p>';
 		echo '<p class="description">' . esc_html__( 'Internal WordPress keys (e.g. Yoast, Rank Math) are always excluded. Add extra keys below, one per line.', 'tso-link-inspector' ) . '</p>';
 		echo '</td></tr>';
 
@@ -1525,6 +1567,10 @@ class TSOLIIN_Admin {
 			return '';
 		}
 		$type = ( $link && isset( $link->link_type ) ) ? (string) $link->link_type : 'link';
+		$sk   = ( $link && isset( $link->source_key ) ) ? (string) $link->source_key : '';
+		if ( class_exists( 'TSOLIIN_Elementor', false ) && TSOLIIN_Elementor::is_elementor_source_key( $sk ) ) {
+			return __( 'This URL comes from an Elementor or ACF dynamic tag. Use Go to edit to open the post or template and change the field there.', 'tso-link-inspector' );
+		}
 		if ( ! empty( $link->post_id ) && in_array( $type, array( 'link', 'image', 'iframe', 'template', 'wp_block' ), true ) ) {
 			return __( 'This URL is not stored in editable post content (it may already have been changed in the editor). Use Recheck or Scan to refresh the list, Delete to remove only this inspector record, or open the post and edit the link there.', 'tso-link-inspector' );
 		}

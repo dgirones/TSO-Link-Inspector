@@ -188,6 +188,9 @@ class TSOLIIN_Support {
 		if ( class_exists( 'TSOLIIN_Acf', false ) && ( TSOLIIN_Acf::is_acf_source_key( $sk ) || 'acf' === (string) $link->link_type ) ) {
 			return false;
 		}
+		if ( class_exists( 'TSOLIIN_Elementor', false ) && TSOLIIN_Elementor::is_elementor_source_key( $sk ) ) {
+			return false;
+		}
 		$cache_key = self::link_row_cache_key( $link );
 		if ( '' !== $cache_key && array_key_exists( $cache_key, self::$inline_edit_link_cache ) ) {
 			return self::$inline_edit_link_cache[ $cache_key ];
@@ -418,6 +421,9 @@ class TSOLIIN_Support {
 		}
 		$sk = isset( $link->source_key ) ? (string) $link->source_key : '';
 		if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk ) ) {
+			return false;
+		}
+		if ( class_exists( 'TSOLIIN_Elementor', false ) && TSOLIIN_Elementor::is_elementor_source_key( $sk ) ) {
 			return false;
 		}
 		$type = isset( $link->link_type ) ? (string) $link->link_type : 'link';
@@ -1114,6 +1120,8 @@ class TSOLIIN_Support {
 					: __( 'Open the editor and scroll to this link.', 'tso-link-inspector' );
 			} elseif ( class_exists( 'TSOLIIN_Acf', false ) && TSOLIIN_Acf::is_acf_source_key( $sk ) ) {
 				$title = __( 'Open the post editor. This URL comes from an ACF field stored as an ID (image, file, gallery, page link, or relationship).', 'tso-link-inspector' );
+			} elseif ( class_exists( 'TSOLIIN_Elementor', false ) && TSOLIIN_Elementor::is_elementor_source_key( $sk ) ) {
+				$title = __( 'Open the post or template editor. This URL comes from an Elementor or ACF dynamic tag — change the field there.', 'tso-link-inspector' );
 			} else {
 				$title = __( 'Open the post editor. This URL may be in a custom field or no longer in the content — use Edit link if available, or Delete + Scan if the row is stale.', 'tso-link-inspector' );
 			}
