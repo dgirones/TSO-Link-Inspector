@@ -34,7 +34,7 @@ class TSOLIIN_HTTP {
 	/** @var bool Curl DNS pinning active for the current check_request(). */
 	private static $dns_pinning = false;
 
-	/** @var array<int, array{host:string,port:int,ips:string[]}> Curl CURLOPT_RESOLVE pins for this check. */
+	/** @var array<string, array{host:string,port:int,ips:string[]}> Curl CURLOPT_RESOLVE pins keyed by host:port. */
 	private static $dns_pins = array();
 
 	public function __construct() {
@@ -894,6 +894,10 @@ class TSOLIIN_HTTP {
 	/**
 	 * Apply CURLOPT_RESOLVE for hosts stored by store_dns_pin_for_url().
 	 *
+	 * One entry per host:port with comma-separated addresses (IPv4 first). Separate
+	 * entries for the same host:port overwrite each other in curl, so listing AAAA last
+	 * pinned IPv6-only and failed with “Cannot connect” on IPv4-only hosting.
+	 *
 	 * @param mixed $handle Curl handle.
 	 * @return void
 	 */
@@ -915,16 +919,24 @@ class TSOLIIN_HTTP {
 			if ( '' === $host || $port <= 0 || empty( $ips ) ) {
 				continue;
 			}
+			$ipv4 = array();
+			$ipv6 = array();
 			foreach ( $ips as $ip ) {
-				$ip = (string) $ip;
+				$ip = trim( (string) $ip );
 				if ( '' === $ip ) {
 					continue;
 				}
 				if ( false !== strpos( $ip, ':' ) ) {
-					$ip = '[' . trim( $ip, '[]' ) . ']';
+					$ipv6[] = '[' . trim( $ip, '[]' ) . ']';
+				} else {
+					$ipv4[] = $ip;
 				}
-				$entries[] = $host . ':' . $port . ':' . $ip;
 			}
+			$ordered = array_values( array_unique( array_merge( $ipv4, $ipv6 ) ) );
+			if ( empty( $ordered ) ) {
+				continue;
+			}
+			$entries[] = $host . ':' . $port . ':' . implode( ',', $ordered );
 		}
 		if ( empty( $entries ) ) {
 			return;
@@ -960,7 +972,7 @@ class TSOLIIN_HTTP {
 		if ( empty( $ips ) ) {
 			return;
 		}
-		self::$dns_pins[] = array(
+		self::$dns_pins[ $host . ':' . $port ] = array(
 			'host' => $host,
 			'port' => $port,
 			'ips'  => array_values( $ips ),
@@ -2617,6 +2629,11 @@ class TSOLIIN_HTTP {
 			return true;
 		}
 
+		// 8b. Same extension ID with a Google slug/consent rewrite (volume-master-controlador/{id} → volume-master/{id}).
+		if ( $this->is_chrome_webstore_same_extension_redirect( $original, $final ) ) {
+			return true;
+		}
+
 		// 9. YouTube short/share links → watch URL for the same video (youtu.be/ID, /shorts/ID, etc.).
 		if ( $this->is_youtube_same_video_redirect( $original, $final ) ) {
 			return true;
@@ -3079,6 +3096,27 @@ class TSOLIIN_HTTP {
 			return false;
 		}
 		return $this->query_differs_only_by_noise_params( $o, $f );
+	}
+
+	/**
+	 * Same Chrome Web Store item after Google rewrites the human slug (or host) but keeps the extension ID.
+	 *
+	 * Removed items that land on empty-title /error stay broken via maybe_chrome_webstore_* helpers.
+	 *
+	 * @param string $original Original URL.
+	 * @param string $final    Final URL.
+	 * @return bool
+	 */
+	private function is_chrome_webstore_same_extension_redirect( $original, $final ) {
+		if ( ! self::is_chrome_webstore_host( $original ) || ! self::is_chrome_webstore_host( $final ) ) {
+			return false;
+		}
+		if ( self::is_chrome_webstore_unavailable_url( $final ) ) {
+			return false;
+		}
+		$orig_id  = self::extract_chrome_webstore_extension_id( $original );
+		$final_id = self::extract_chrome_webstore_extension_id( $final );
+		return '' !== $orig_id && $orig_id === $final_id;
 	}
 
 	/**
