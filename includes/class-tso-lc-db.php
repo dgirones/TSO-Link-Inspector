@@ -312,11 +312,11 @@ class TSOLIIN_DB {
 		$post_id    = absint( $post_id );
 		$link_url   = trim( str_replace( array( "\0", "\r", "\n" ), '', (string) $link_url ) );
 		$anchor     = sanitize_text_field( (string) $anchor );
-		$types      = array( 'link', 'image', 'iframe', 'plain', 'comment', 'menu', 'widget', 'term', 'template', 'wp_block' );
+		$types      = array( 'link', 'image', 'iframe', 'plain', 'comment', 'menu', 'widget', 'term', 'template', 'wp_block', 'acf' );
 		$link_type  = in_array( $link_type, $types, true ) ? $link_type : 'link';
 		$source_key = $this->sanitize_source_key( (string) $source_key );
 
-		$external_types = array( 'widget', 'term' );
+		$external_types = array( 'widget', 'term', 'acf' );
 		if ( ! $post_id ) {
 			if ( ! in_array( $link_type, $external_types, true ) || '' === $source_key ) {
 				return false;

@@ -185,6 +185,9 @@ class TSOLIIN_Support {
 		if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk ) ) {
 			return false;
 		}
+		if ( class_exists( 'TSOLIIN_Acf', false ) && ( TSOLIIN_Acf::is_acf_source_key( $sk ) || 'acf' === (string) $link->link_type ) ) {
+			return false;
+		}
 		$cache_key = self::link_row_cache_key( $link );
 		if ( '' !== $cache_key && array_key_exists( $cache_key, self::$inline_edit_link_cache ) ) {
 			return self::$inline_edit_link_cache[ $cache_key ];
@@ -225,7 +228,7 @@ class TSOLIIN_Support {
 			return false;
 		}
 		$type = (string) $link->link_type;
-		if ( in_array( $type, array( 'comment', 'widget', 'term' ), true ) ) {
+		if ( in_array( $type, array( 'comment', 'widget', 'term', 'acf' ), true ) ) {
 			return false;
 		}
 		if ( 'menu' === $type ) {
@@ -1072,6 +1075,18 @@ class TSOLIIN_Support {
 			);
 		}
 
+		if ( 'acf' === $type ) {
+			$url = self::get_acf_options_admin_edit_url( $sk );
+			if ( '' === $url ) {
+				return null;
+			}
+			return array(
+				'url'   => $url,
+				'title' => __( 'Open ACF Options to edit this field. The inspector does not change Options page values inline.', 'tso-link-inspector' ),
+				'label' => $label,
+			);
+		}
+
 		if ( 'term' === $type ) {
 			$url = self::get_link_source_edit_url( $link );
 			if ( '' === $url ) {
@@ -1097,6 +1112,8 @@ class TSOLIIN_Support {
 				$title = ( 'image' === $type || 'iframe' === $type )
 					? __( 'Open the editor and scroll to this image or embed.', 'tso-link-inspector' )
 					: __( 'Open the editor and scroll to this link.', 'tso-link-inspector' );
+			} elseif ( class_exists( 'TSOLIIN_Acf', false ) && TSOLIIN_Acf::is_acf_source_key( $sk ) ) {
+				$title = __( 'Open the post editor. This URL comes from an ACF field stored as an ID (image, file, gallery, page link, or relationship).', 'tso-link-inspector' );
 			} else {
 				$title = __( 'Open the post editor. This URL may be in a custom field or no longer in the content — use Edit link if available, or Delete + Scan if the row is stale.', 'tso-link-inspector' );
 			}
@@ -1133,6 +1150,19 @@ class TSOLIIN_Support {
 		}
 		$stored = get_post_meta( $item_id, '_menu_item_url', true );
 		return is_string( $stored ) && '' !== trim( $stored );
+	}
+
+	/**
+	 * Admin URL for ACF Options pages.
+	 *
+	 * @param string $source_key Optional row source_key.
+	 * @return string
+	 */
+	public static function get_acf_options_admin_edit_url( $source_key = '' ) {
+		if ( ! class_exists( 'TSOLIIN_Acf', false ) ) {
+			return '';
+		}
+		return TSOLIIN_Acf::get_options_admin_edit_url( (string) $source_key );
 	}
 
 	/**

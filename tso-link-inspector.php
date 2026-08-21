@@ -89,6 +89,7 @@ final class TSOLIIN_Link_Inspector {
 		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-scanner.php';
 		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-sources.php';
 		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-woocommerce.php';
+		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-acf.php';
 		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-schedule.php';
 		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-cron.php';
 		require_once TSOLIIN_PLUGIN_DIR . 'includes/class-tso-lc-support.php';

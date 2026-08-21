@@ -315,6 +315,7 @@ class TSOLIIN_List_Table extends WP_List_Table {
 					'term'     => array( 'dashicons-tag',            __( 'Term', 'tso-link-inspector' ) ),
 					'template' => array( 'dashicons-layout',         __( 'Template', 'tso-link-inspector' ) ),
 					'wp_block' => array( 'dashicons-block-default',  __( 'Reusable block', 'tso-link-inspector' ) ),
+					'acf'      => array( 'dashicons-index-card',     __( 'ACF Options', 'tso-link-inspector' ) ),
 				);
 				$icon  = isset( $icons[ $type ] ) ? $icons[ $type ][0] : 'dashicons-admin-links';
 				$label = isset( $icons[ $type ] ) ? $icons[ $type ][1] : esc_html( $type );
@@ -391,7 +392,7 @@ class TSOLIIN_List_Table extends WP_List_Table {
 		$can_inline = ( 'comment' === $type ) ? true : TSOLIIN_Support::can_inline_edit_link( $item );
 		// Custom menu URLs (_menu_item_url) can be edited/suggested here; post_type menu items cannot.
 		$can_edit   = $can_inline && (
-			! in_array( $type, array( 'comment', 'widget', 'menu', 'term' ), true )
+			! in_array( $type, array( 'comment', 'widget', 'menu', 'term', 'acf' ), true )
 			|| ( 'menu' === $type && TSOLIIN_Support::is_custom_menu_url_row( $item ) )
 		);
 		$can_unlink = TSOLIIN_Support::can_unlink_link( $item ) && (
@@ -523,6 +524,16 @@ class TSOLIIN_List_Table extends WP_List_Table {
 			$sk    = isset( $item->source_key ) ? (string) $item->source_key : '';
 			$edit  = TSOLIIN_Support::get_widgets_admin_edit_url( $sk );
 			return '<a href="' . esc_url( $edit ) . '">' . esc_html( $title ) . '</a>';
+		}
+
+		if ( 'acf' === $type ) {
+			$title = ! empty( $item->anchor_text ) ? (string) $item->anchor_text : __( 'ACF Options', 'tso-link-inspector' );
+			$sk    = isset( $item->source_key ) ? (string) $item->source_key : '';
+			$edit  = TSOLIIN_Support::get_acf_options_admin_edit_url( $sk );
+			if ( '' !== $edit ) {
+				return '<a href="' . esc_url( $edit ) . '">' . esc_html( $title ) . '</a>';
+			}
+			return esc_html( $title );
 		}
 
 		if ( 'term' === $type ) {
