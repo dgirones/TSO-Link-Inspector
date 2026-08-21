@@ -2826,3 +2826,38 @@ msgstr "Bloqueig manual"
 
 msgid "links skipped (HTTPS not verified or not editable)."
 msgstr "enllaços omesos (HTTPS no verificat o no editable)."
+
+msgid "Marking as OK…"
+msgstr "Marcant com a correcte…"
+
+msgid "marked as OK."
+msgstr "marcat com a correcte."
+
+msgid "Not checkable (non-HTTP URL)"
+msgstr "No comprovable (URL no HTTP)"
+
+msgid "Unknown bulk action."
+msgstr "Acció en massa desconeguda."
+
+msgid ""
+"HTTPS could not be verified from the server. Use bulk Upgrade to HTTPS only "
+"when confirmed, or mark the link as OK manually."
+msgstr ""
+"No s'ha pogut verificar HTTPS des del servidor. Usa l'actualització en massa "
+"a HTTPS només quan estigui confirmat, o marca l'enllaç com a correcte "
+"manualment."
+
+msgid "Marking as OK %1$d of %2$d..."
+msgstr "Marcant com a correcte %1$d de %2$d..."
+
+msgid "Deleting…"
+msgstr "Eliminant…"
+
+msgid "records deleted."
+msgstr "registres eliminats."
+
+msgid "Deleting %1$d of %2$d..."
+msgstr "Eliminant %1$d de %2$d..."
+
+msgid "Record not found."
+msgstr "Registre no trobat."

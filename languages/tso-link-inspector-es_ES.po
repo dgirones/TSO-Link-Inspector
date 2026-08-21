@@ -3013,3 +3013,38 @@ msgstr ""
 
 msgid "links skipped (HTTPS not verified or not editable)."
 msgstr "enlaces omitidos (HTTPS no verificado o no editable)."
+
+msgid "Marking as OK…"
+msgstr "Marcando como correcto…"
+
+msgid "marked as OK."
+msgstr "marcado como correcto."
+
+msgid "Not checkable (non-HTTP URL)"
+msgstr "No comprobable (URL no HTTP)"
+
+msgid "Unknown bulk action."
+msgstr "Acción masiva desconocida."
+
+msgid ""
+"HTTPS could not be verified from the server. Use bulk Upgrade to HTTPS only "
+"when confirmed, or mark the link as OK manually."
+msgstr ""
+"No se pudo verificar HTTPS desde el servidor. Usa la actualización masiva a "
+"HTTPS solo cuando esté confirmado, o marca el enlace como correcto "
+"manualmente."
+
+msgid "Marking as OK %1$d of %2$d..."
+msgstr "Marcando como correcto %1$d de %2$d..."
+
+msgid "Deleting…"
+msgstr "Eliminando…"
+
+msgid "records deleted."
+msgstr "registros eliminados."
+
+msgid "Deleting %1$d of %2$d..."
+msgstr "Eliminando %1$d de %2$d..."
+
+msgid "Record not found."
+msgstr "Registro no encontrado."

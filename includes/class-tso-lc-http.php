@@ -165,8 +165,17 @@ class TSOLIIN_HTTP {
 		$params = array();
 		foreach ( self::get_site_hosts() as $host ) {
 			foreach ( array( 'http://', 'https://', '//' ) as $scheme ) {
+				$prefix   = $scheme . $host;
+				$parts[]  = "{$column} = %s";
+				$params[] = $prefix;
 				$parts[]  = "{$column} LIKE %s";
-				$params[] = $scheme . $host . '%';
+				$params[] = $prefix . '/%';
+				$parts[]  = "{$column} LIKE %s";
+				$params[] = $prefix . '?%';
+				$parts[]  = "{$column} LIKE %s";
+				$params[] = $prefix . '#%';
+				$parts[]  = "{$column} LIKE %s";
+				$params[] = $prefix . ':%';
 			}
 		}
 
@@ -196,8 +205,17 @@ class TSOLIIN_HTTP {
 		$params = array();
 		foreach ( self::get_site_hosts() as $host ) {
 			foreach ( array( 'http://', 'https://', '//' ) as $scheme ) {
+				$prefix   = $scheme . $host;
+				$parts[]  = "{$column} != %s";
+				$params[] = $prefix;
 				$parts[]  = "{$column} NOT LIKE %s";
-				$params[] = $scheme . $host . '%';
+				$params[] = $prefix . '/%';
+				$parts[]  = "{$column} NOT LIKE %s";
+				$params[] = $prefix . '?%';
+				$parts[]  = "{$column} NOT LIKE %s";
+				$params[] = $prefix . '#%';
+				$parts[]  = "{$column} NOT LIKE %s";
+				$params[] = $prefix . ':%';
 			}
 		}
 
@@ -1905,6 +1923,7 @@ class TSOLIIN_HTTP {
 			-1   => __( 'Skipped (ignore list)', 'tso-link-inspector' ),
 			-6   => __( 'Action link (logout)', 'tso-link-inspector' ),
 			-7   => __( 'Blocked (cannot check from server)', 'tso-link-inspector' ),
+			-8   => __( 'Not checkable (non-HTTP URL)', 'tso-link-inspector' ),
 			0    => __( 'Cannot connect', 'tso-link-inspector' ),
 			-2   => __( 'Domain does not exist (DNS)', 'tso-link-inspector' ),
 			-3   => __( 'Timed out', 'tso-link-inspector' ),
@@ -1961,7 +1980,7 @@ class TSOLIIN_HTTP {
 		$is_broken = (int) $is_broken;
 		$link_url  = trim( (string) $link_url );
 
-		if ( in_array( $code, array( -1, -6, -7 ), true ) && ! $is_broken ) {
+		if ( in_array( $code, array( -1, -6, -7, -8 ), true ) && ! $is_broken ) {
 			return 'tsoliin-status--skipped';
 		}
 		if ( -5 === $code && ! $is_broken ) {

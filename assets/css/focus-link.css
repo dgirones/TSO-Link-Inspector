@@ -28,6 +28,18 @@ figure.tsoliin-link-focus {
 	scroll-margin-top: 5rem;
 }
 
+.gallery.tsoliin-link-focus,
+.gallery-item.tsoliin-link-focus,
+.wpview-wrap.tsoliin-link-focus {
+	outline: 3px solid #2271b1;
+	outline-offset: 4px;
+	box-shadow: 0 0 0 6px rgba(34, 113, 177, 0.25);
+	scroll-margin-top: 5rem;
+}
+
+.gallery.tsoliin-link-focus img,
+.gallery-item.tsoliin-link-focus img,
+.wpview-wrap.tsoliin-link-focus img,
 .tiled-gallery__item.tsoliin-link-focus img,
 .blocks-gallery-item.tsoliin-link-focus img,
 figure.tsoliin-link-focus img {

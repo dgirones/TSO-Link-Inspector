@@ -36,6 +36,9 @@ class TSOLIIN_DB {
 	/** @var array<int, string[]> Request cache for get_broken_link_urls_for_post(). */
 	private static $broken_urls_by_post_cache = array();
 
+	/** @var int|null Request guard for maybe_cleanup_transparent_redirects(); null = not tried yet. */
+	private static $transparent_rd_cleanup_attempted = null;
+
 	public function __construct() {
 		global $wpdb;
 		$this->table = $wpdb->prefix . 'tso_link_inspector';
@@ -522,14 +525,16 @@ class TSOLIIN_DB {
 
 		$play_id = TSOLIIN_HTTP::parse_play_store_app_id( $link_url );
 		if ( '' !== $play_id ) {
-			$like = '%' . $wpdb->esc_like( 'id=' . $play_id ) . '%';
+			$like    = '%' . $wpdb->esc_like( 'id=' . $play_id ) . '%';
+			$play_host_like = '%play.google.com%';
 			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 			$found = $wpdb->get_var(
 				$wpdb->prepare(
 					// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-					"SELECT id FROM {$this->table} WHERE post_id = %d AND source_key = %s AND link_url LIKE %s LIMIT 1",
+					"SELECT id FROM {$this->table} WHERE post_id = %d AND source_key = %s AND link_url LIKE %s AND link_url LIKE %s LIMIT 1",
 					$post_id,
 					$source_key,
+					$play_host_like,
 					$like
 				)
 			);
@@ -895,7 +900,7 @@ class TSOLIIN_DB {
 				'verify_baseline_redirect'   => '',
 			),
 			array( 'id' => absint( $link_id ) ),
-			array( '%s', '%d', '%s', '%d', '%s', '%d', '%s', '%s', '%d' ),
+			array( '%s', '%d', '%s', '%d', '%s', '%d', '%d', '%s', '%s' ),
 			array( '%d' )
 		);
 		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
@@ -952,12 +957,13 @@ class TSOLIIN_DB {
 				'last_checked'               => current_time( 'mysql', true ),
 				'redirect_url'               => '',
 				'redirect_chain'             => '',
+				'consecutive_failures'       => 0,
 				'user_verified'              => 1,
 				'verify_baseline_link'       => $baseline_link,
 				'verify_baseline_redirect'   => $baseline_redir,
 			),
 			array( 'id' => $link_id ),
-			array( '%d', '%d', '%s', '%s', '%s', '%d', '%s', '%s' ),
+			array( '%d', '%d', '%s', '%s', '%s', '%d', '%d', '%s', '%s' ),
 			array( '%d' )
 		);
 		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
@@ -967,12 +973,17 @@ class TSOLIIN_DB {
 
 	/**
 	 * Delete a single link row.
+	 *
+	 * @return bool True when a row was deleted.
 	 */
 	public function delete_link( $link_id ) {
 		global $wpdb;
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		$wpdb->delete( $this->table, array( 'id' => absint( $link_id ) ), array( '%d' ) );
-		self::clear_stats_cache();
+		$deleted = $wpdb->delete( $this->table, array( 'id' => absint( $link_id ) ), array( '%d' ) );
+		if ( $deleted ) {
+			self::clear_stats_cache();
+		}
+		return (bool) $deleted;
 	}
 
 	/**
@@ -1259,19 +1270,13 @@ class TSOLIIN_DB {
 	}
 
 	/**
-	 * Paginated links query (core SQL).
+	 * Shared WHERE/ORDER BY parts for admin link list queries.
 	 *
 	 * @param array $args Query arguments.
-	 * @return array { items: array, total: int }
+	 * @return array{where:string,params:array,orderby:string,order:string,posts_join:string}
 	 */
-	private function query_links_paginated( $args ) {
+	private function build_links_list_query_parts( array $args ) {
 		global $wpdb;
-
-		if ( 'redirect' === $args['filter'] ) {
-			$this->cleanup_transparent_redirects();
-		} else {
-			$this->maybe_cleanup_transparent_redirects();
-		}
 
 		$scope = $this->sanitize_link_scope( $args['scope'] );
 
@@ -1290,20 +1295,16 @@ class TSOLIIN_DB {
 				$where .= ' AND l.is_broken = 1 AND l.user_verified = 0';
 				break;
 			case 'redirect':
-				// HTTP insecure rows take priority; they move here after the post URL uses HTTPS.
 				$where .= ' AND ' . self::sql_redirect_match( 'l.' );
 				break;
 			case 'ok':
-				// "OK" means HTTPS (or non-http) success — plain http:// stays under HTTP insecure.
 				$where   .= ' AND l.status_code = 200 AND l.link_url NOT LIKE %s AND l.user_verified = 0';
 				$params[] = 'http://%';
 				break;
 			case 'unchecked':
-				// Exclude manual locks: same URL row must not appear in multiple tabs (Manual locks vs Unchecked).
 				$where .= ' AND l.last_checked IS NULL AND l.user_verified = 0';
 				break;
 			case 'http_insecure':
-				// Links using http:// that could potentially be https://.
 				$where   .= ' AND l.link_url LIKE %s AND l.is_broken = 0 AND l.user_verified = 0';
 				$params[] = 'http://%';
 				break;
@@ -1323,49 +1324,52 @@ class TSOLIIN_DB {
 				break;
 		}
 
-		// Internal/external scope is applied in PHP (same rules as link_matches_scope) — SQL LIKE scope was unreliable.
-		$use_php_scope = 'all' !== $scope;
+		$scope_sql = $this->build_link_scope_sql( $scope );
+		if ( '' !== $scope_sql['where'] ) {
+			$where .= $scope_sql['where'];
+			$params  = array_merge( $params, $scope_sql['params'] );
+		}
 
-		// Filter by specific post.
 		if ( ! empty( $args['post_id'] ) ) {
 			$where    .= ' AND l.post_id = %d';
 			$params[]  = absint( $args['post_id'] );
 		}
 
 		if ( '' !== $args['search'] ) {
-			$term   = '%' . $wpdb->esc_like( sanitize_text_field( $args['search'] ) ) . '%';
-			$where .= ' AND l.link_url LIKE %s';
+			$term     = '%' . $wpdb->esc_like( sanitize_text_field( $args['search'] ) ) . '%';
+			$where   .= ' AND l.link_url LIKE %s';
 			$params[] = $term;
 		}
 
+		return array(
+			'where'      => $where,
+			'params'     => $params,
+			'orderby'    => $orderby,
+			'order'      => $order,
+			'posts_join' => " LEFT JOIN {$wpdb->posts} p ON p.ID = l.post_id ",
+		);
+	}
+
+	/**
+	 * Paginated links query (core SQL).
+	 *
+	 * @param array $args Query arguments.
+	 * @return array { items: array, total: int }
+	 */
+	private function query_links_paginated( $args ) {
+		global $wpdb;
+
+		$this->maybe_cleanup_transparent_redirects();
+
+		$query_parts = $this->build_links_list_query_parts( $args );
+		$where       = $query_parts['where'];
+		$params      = $query_parts['params'];
+		$orderby     = $query_parts['orderby'];
+		$order       = $query_parts['order'];
+		$posts_join  = $query_parts['posts_join'];
+
 		$per_page = max( 1, absint( $args['per_page'] ) );
 		$offset   = ( max( 1, absint( $args['paged'] ) ) - 1 ) * $per_page;
-
-		$posts_join = " LEFT JOIN {$wpdb->posts} p ON p.ID = l.post_id ";
-
-		if ( $use_php_scope ) {
-			$items_sql = "SELECT l.*, p.post_title, p.post_status FROM {$this->table} l{$posts_join}{$where} ORDER BY l.$orderby $order";
-			if ( ! empty( $params ) ) {
-				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
-				$all_items = $wpdb->get_results( $wpdb->prepare( $items_sql, $params ) );
-			} else {
-				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
-				$all_items = $wpdb->get_results( $items_sql );
-			}
-
-			$filtered = array();
-			foreach ( $all_items ? $all_items : array() as $link ) {
-				if ( $this->link_matches_scope( $link, $scope ) ) {
-					$filtered[] = $link;
-				}
-			}
-
-			$total = count( $filtered );
-			return array(
-				'items' => array_slice( $filtered, $offset, $per_page ),
-				'total' => $total,
-			);
-		}
 
 		$count_sql = "SELECT COUNT(*) FROM {$this->table} l{$posts_join}{$where}";
 		if ( ! empty( $params ) ) {
@@ -1388,7 +1392,7 @@ class TSOLIIN_DB {
 	}
 
 	/**
-	 * Internal links pointing to draft/private/trash posts (PHP filter + pagination).
+	 * Internal links pointing to draft/private/trash posts (batched scan + pagination).
 	 *
 	 * @param array $args Query arguments.
 	 * @return array { items: array, total: int }
@@ -1401,49 +1405,110 @@ class TSOLIIN_DB {
 			);
 		}
 
-		$fetch_args               = $args;
-		$fetch_args['quality_filter'] = '';
-		$fetch_args['scope']      = 'internal';
-		$fetch_args['paged']      = 1;
-		$fetch_args['per_page']   = 99999;
-
-		$result   = $this->query_links_paginated( $fetch_args );
-		$filtered = array_values(
-			array_filter(
-				$result['items'],
-				function ( $link ) use ( $args ) {
-					if ( ! TSOLIIN_Quality::points_to_unpublished( $link ) ) {
-						return false;
-					}
-					return $this->link_matches_filter( $link, $args['filter'] );
-				}
-			)
-		);
-
-		$allowed_orderby = array( 'id', 'post_id', 'link_url', 'status_code', 'is_broken', 'last_checked', 'date_found', 'link_type' );
-		$orderby_key     = in_array( $args['orderby'], $allowed_orderby, true ) ? $args['orderby'] : 'date_found';
-		$order_dir       = 'ASC' === strtoupper( $args['order'] ) ? 1 : -1;
-
-		usort(
-			$filtered,
-			static function ( $a, $b ) use ( $orderby_key, $order_dir ) {
-				$va = isset( $a->$orderby_key ) ? $a->$orderby_key : '';
-				$vb = isset( $b->$orderby_key ) ? $b->$orderby_key : '';
-				if ( $va === $vb ) {
-					return 0;
-				}
-				return ( $va < $vb ? -1 : 1 ) * $order_dir;
-			}
-		);
+		$scan_args                    = $args;
+		$scan_args['quality_filter']  = '';
+		$scan_args['scope']           = 'internal';
 
 		$per_page = max( 1, absint( $args['per_page'] ) );
 		$paged    = max( 1, absint( $args['paged'] ) );
 		$offset   = ( $paged - 1 ) * $per_page;
 
+		return $this->scan_unpublished_target_matches( $scan_args, $offset, $per_page, false );
+	}
+
+	/**
+	 * Scan internal link candidates in batches; match unpublished targets in PHP.
+	 *
+	 * @param array $args         List query args (scope should be internal).
+	 * @param int   $list_offset  Match offset for pagination.
+	 * @param int   $list_per_page Matches to return (0 = count only).
+	 * @param bool  $count_only   When true, skip collecting row objects.
+	 * @return array{items:array,total:int}
+	 */
+	private function scan_unpublished_target_matches( array $args, $list_offset, $list_per_page, $count_only = false ) {
+		global $wpdb;
+
+		$query_parts = $this->build_links_list_query_parts( $args );
+		$where       = $query_parts['where'] . ' AND l.user_verified = 0';
+		$params      = $query_parts['params'];
+		$orderby     = $query_parts['orderby'];
+		$order       = $query_parts['order'];
+		$posts_join  = $query_parts['posts_join'];
+
+		$batch_size  = 250;
+		$cursor      = 0;
+		$match_index = 0;
+		$items       = array();
+		$list_offset = max( 0, (int) $list_offset );
+		$list_per_page = max( 0, (int) $list_per_page );
+
+		while ( true ) {
+			$items_sql = "SELECT l.*, p.post_title, p.post_status FROM {$this->table} l{$posts_join}{$where} ORDER BY l.{$orderby} {$order} LIMIT %d OFFSET %d";
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+			$batch = $wpdb->get_results( $wpdb->prepare( $items_sql, array_merge( $params, array( $batch_size, $cursor ) ) ) );
+			if ( empty( $batch ) ) {
+				break;
+			}
+
+			$cursor += count( $batch );
+			$this->prime_unpublished_target_posts( $batch );
+
+			foreach ( $batch as $link ) {
+				if ( ! TSOLIIN_Quality::points_to_unpublished( $link ) ) {
+					continue;
+				}
+				if ( ! $this->link_matches_filter( $link, $args['filter'] ) ) {
+					continue;
+				}
+
+				if ( ! $count_only && $match_index >= $list_offset && count( $items ) < $list_per_page ) {
+					$items[] = $link;
+				}
+				$match_index++;
+			}
+		}
+
+		if ( empty( $args['post_id'] ) && '' === (string) $args['search'] && 'all' === sanitize_key( (string) $args['filter'] ) ) {
+			set_transient( 'tsoliin_unpub_cnt_v3_all', $match_index, 15 * MINUTE_IN_SECONDS );
+		}
+
 		return array(
-			'items' => array_slice( $filtered, $offset, $per_page ),
-			'total' => count( $filtered ),
+			'items' => $count_only ? array() : $items,
+			'total' => $match_index,
 		);
+	}
+
+	/**
+	 * Prime wp_posts cache for attachment targets in a candidate batch.
+	 *
+	 * @param array $batch Link rows from SQL.
+	 * @return void
+	 */
+	private function prime_unpublished_target_posts( array $batch ) {
+		$post_ids = array();
+		foreach ( $batch as $link ) {
+			$link = (object) $link;
+			$url  = isset( $link->link_url ) ? (string) $link->link_url : '';
+			if ( '' === $url || false === strpos( $url, 'attachment_id=' ) ) {
+				continue;
+			}
+			$post_id = isset( $link->post_id ) ? (int) $link->post_id : 0;
+			$abs     = TSOLIIN_Scanner::resolve_to_absolute_url( $url, $post_id );
+			if ( '' === $abs ) {
+				continue;
+			}
+			$attachment_id = TSOLIIN_HTTP::parse_attachment_id_from_url( $abs );
+			if ( $attachment_id > 0 ) {
+				$post_ids[] = $attachment_id;
+			}
+		}
+
+		$post_ids = array_values( array_unique( array_filter( array_map( 'absint', $post_ids ) ) ) );
+		if ( empty( $post_ids ) ) {
+			return;
+		}
+
+		_prime_post_caches( $post_ids, false, false );
 	}
 
 	/**
@@ -1461,15 +1526,19 @@ class TSOLIIN_DB {
 			}
 		}
 
-		$result = $this->get_links(
+		$result = $this->scan_unpublished_target_matches(
 			array(
 				'filter'         => 'all',
-				'quality_filter' => 'unpublished_target',
+				'quality_filter' => '',
 				'scope'          => 'internal',
-				'per_page'       => 1,
-				'paged'          => 1,
+				'search'         => '',
+				'orderby'        => 'id',
+				'order'          => 'ASC',
 				'post_id'        => $post_id,
-			)
+			),
+			0,
+			0,
+			true
 		);
 		$count = (int) $result['total'];
 		if ( ! $post_id ) {
@@ -1948,11 +2017,11 @@ class TSOLIIN_DB {
 
 	/** @return array */
 	public function get_stats() {
-		$this->maybe_cleanup_transparent_redirects();
-
 		if ( isset( self::$stats_cache['all'] ) ) {
 			return self::$stats_cache['all'];
 		}
+
+		$this->maybe_cleanup_transparent_redirects();
 
 		global $wpdb;
 		$generic = TSOLIIN_Quality::build_generic_anchor_count_expr();
@@ -2108,12 +2177,13 @@ class TSOLIIN_DB {
 	 */
 	public function get_stats_for_post( $post_id ) {
 		$post_id = absint( $post_id );
-		$this->maybe_cleanup_transparent_redirects();
 
 		$cache_key = 'post_' . $post_id;
 		if ( isset( self::$stats_cache[ $cache_key ] ) ) {
 			return self::$stats_cache[ $cache_key ];
 		}
+
+		$this->maybe_cleanup_transparent_redirects();
 
 		global $wpdb;
 		$generic = TSOLIIN_Quality::build_generic_anchor_count_expr();
@@ -2166,17 +2236,84 @@ class TSOLIIN_DB {
 	}
 
 	/**
+	 * Try to acquire a short-lived transient lock (atomic INSERT on timeout row).
+	 *
+	 * @param string $key Lock key without _transient_ prefix.
+	 * @param int    $ttl Seconds until the lock expires.
+	 * @return bool True when acquired.
+	 */
+	public function acquire_transient_lock( $key, $ttl = 45 ) {
+		global $wpdb;
+
+		$key = sanitize_key( (string) $key );
+		if ( '' === $key || $ttl <= 0 ) {
+			return false;
+		}
+
+		$timeout_name   = '_transient_timeout_' . $key;
+		$transient_name = '_transient_' . $key;
+		$now            = time();
+		$expire         = $now + (int) $ttl;
+
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$wpdb->query(
+			$wpdb->prepare(
+				"DELETE FROM {$wpdb->options} WHERE option_name = %s AND CAST(option_value AS UNSIGNED) < %d",
+				$timeout_name,
+				$now
+			)
+		);
+		$inserted = $wpdb->query(
+			$wpdb->prepare(
+				"INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %d, 'no')",
+				$timeout_name,
+				$expire
+			)
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		// INSERT IGNORE: 1 = lock acquired, 0 = already held (not a DB error).
+		if ( ! $inserted ) {
+			return false;
+		}
+
+		update_option( $transient_name, '1', false );
+		wp_cache_delete( $key, 'transient' );
+		wp_cache_delete( 'timeout_' . $key, 'transient' );
+		return true;
+	}
+
+	/**
+	 * Release a transient lock acquired via acquire_transient_lock().
+	 *
+	 * @param string $key Lock key without _transient_ prefix.
+	 * @return void
+	 */
+	public function release_transient_lock( $key ) {
+		$key = sanitize_key( (string) $key );
+		if ( '' === $key ) {
+			return;
+		}
+		delete_transient( $key );
+	}
+
+	/**
 	 * Throttled pass: normalize transparent / false-positive redirect rows in the DB.
 	 *
 	 * @return int Rows updated (0 when skipped via transient).
 	 */
 	public function maybe_cleanup_transparent_redirects() {
-		if ( get_transient( 'tsoliin_transparent_rd_cleanup' ) ) {
+		if ( null !== self::$transparent_rd_cleanup_attempted ) {
+			return self::$transparent_rd_cleanup_attempted;
+		}
+
+		if ( ! $this->acquire_transient_lock( 'tsoliin_transparent_rd_cleanup', 30 ) ) {
+			self::$transparent_rd_cleanup_attempted = 0;
 			return 0;
 		}
-		$updated = $this->cleanup_transparent_redirects();
-		set_transient( 'tsoliin_transparent_rd_cleanup', 1, 30 );
-		return $updated;
+
+		self::$transparent_rd_cleanup_attempted = $this->cleanup_transparent_redirects();
+		return self::$transparent_rd_cleanup_attempted;
 	}
 
 	/**

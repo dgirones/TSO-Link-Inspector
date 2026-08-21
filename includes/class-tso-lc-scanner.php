@@ -15,6 +15,12 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class TSOLIIN_Scanner {
 
+	/** Return value when a source scan lock is held by another process. */
+	const SCAN_LOCK_BUSY = -1;
+
+	/** Batch processed with zero new links; cron should continue. */
+	const SCAN_BATCH_PROGRESS = -2;
+
 	/** @var TSOLIIN_DB */
 	private $db;
 
@@ -76,12 +82,7 @@ class TSOLIIN_Scanner {
 		if ( '' === $source ) {
 			return false;
 		}
-		$key = 'tsoliin_scan_lock_' . $source;
-		if ( get_transient( $key ) ) {
-			return false;
-		}
-		set_transient( $key, 1, 45 );
-		return true;
+		return $this->db->acquire_transient_lock( 'tsoliin_scan_lock_' . $source, 45 );
 	}
 
 	/**
@@ -93,7 +94,22 @@ class TSOLIIN_Scanner {
 		if ( '' === $source ) {
 			return;
 		}
-		delete_transient( 'tsoliin_scan_lock_' . $source );
+		$this->db->release_transient_lock( 'tsoliin_scan_lock_' . $source );
+	}
+
+	/**
+	 * Add batch scan result to a running total (ignore lock-busy and end-of-queue sentinels).
+	 *
+	 * @param int $found        Running total.
+	 * @param int $batch_result Return value from scan_*_batch().
+	 * @return int
+	 */
+	private function add_scan_batch_found( $found, $batch_result ) {
+		$batch_result = (int) $batch_result;
+		if ( self::SCAN_LOCK_BUSY === $batch_result || self::SCAN_BATCH_PROGRESS === $batch_result || $batch_result <= 0 ) {
+			return (int) $found;
+		}
+		return (int) $found + $batch_result;
 	}
 
 	// -------------------------------------------------------------------------
@@ -2183,16 +2199,16 @@ class TSOLIIN_Scanner {
 				$found += $this->scan_post( $id );
 			}
 			if ( $this->opt( 'scan_comments' ) ) {
-				$found += $this->scan_comments_batch( TSOLIIN_BATCH_SIZE * 5 );
+				$found = $this->add_scan_batch_found( $found, $this->scan_comments_batch( TSOLIIN_BATCH_SIZE * 5 ) );
 			}
 			if ( $this->opt( 'scan_menus', true ) ) {
-				$found += $this->scan_menus_batch( TSOLIIN_BATCH_SIZE * 5 );
+				$found = $this->add_scan_batch_found( $found, $this->scan_menus_batch( TSOLIIN_BATCH_SIZE * 5 ) );
 			}
 			if ( $this->opt( 'scan_terms', true ) ) {
-				$found += $this->scan_terms_batch( TSOLIIN_BATCH_SIZE * 5 );
+				$found = $this->add_scan_batch_found( $found, $this->scan_terms_batch( TSOLIIN_BATCH_SIZE * 5 ) );
 			}
 			if ( $this->opt( 'scan_fse', true ) ) {
-				$found += $this->scan_fse_batch( TSOLIIN_BATCH_SIZE * 2 );
+				$found = $this->add_scan_batch_found( $found, $this->scan_fse_batch( TSOLIIN_BATCH_SIZE * 2 ) );
 			}
 			if ( class_exists( 'TSOLIIN_Sources' ) ) {
 				$found += TSOLIIN_Sources::scan_registered_batch( $this, TSOLIIN_BATCH_SIZE * 2 );
@@ -2200,9 +2216,9 @@ class TSOLIIN_Scanner {
 		}
 
 		if ( $done && $this->is_scan_widgets_enabled() ) {
-			$found += $this->scan_all_widgets();
+			$found = $this->add_scan_batch_found( $found, $this->scan_all_widgets() );
 		} elseif ( ! empty( $ids ) && $this->is_scan_widgets_enabled() ) {
-			$found += $this->scan_widgets_batch( TSOLIIN_BATCH_SIZE * 3 );
+			$found = $this->add_scan_batch_found( $found, $this->scan_widgets_batch( TSOLIIN_BATCH_SIZE * 3 ) );
 		}
 		return array( 'scanned' => count( $ids ), 'found' => $found, 'done' => $done );
 	}
@@ -2464,7 +2480,7 @@ class TSOLIIN_Scanner {
 			return 0;
 		}
 		if ( ! $this->acquire_source_scan_lock( 'comments' ) ) {
-			return 0;
+			return self::SCAN_LOCK_BUSY;
 		}
 		global $wpdb;
 		$per_page = max( 1, absint( $per_page ) );
@@ -2501,7 +2517,7 @@ class TSOLIIN_Scanner {
 
 		update_option( 'tsoliin_comment_scan_after_id', $max_id, false );
 		$this->release_source_scan_lock( 'comments' );
-		return max( 1, $found );
+		return $found > 0 ? $found : self::SCAN_BATCH_PROGRESS;
 	}
 
 	// -------------------------------------------------------------------------
@@ -2519,7 +2535,7 @@ class TSOLIIN_Scanner {
 			return 0;
 		}
 		if ( ! $this->acquire_source_scan_lock( 'menus' ) ) {
-			return 0;
+			return self::SCAN_LOCK_BUSY;
 		}
 		global $wpdb;
 		$per_page = max( 1, absint( $per_page ) );
@@ -2555,7 +2571,7 @@ class TSOLIIN_Scanner {
 
 		update_option( 'tsoliin_menu_scan_after_id', $max_id, false );
 		$this->release_source_scan_lock( 'menus' );
-		return max( 1, $found );
+		return $found > 0 ? $found : self::SCAN_BATCH_PROGRESS;
 	}
 
 	/**
@@ -3473,31 +3489,125 @@ class TSOLIIN_Scanner {
 	 * @return string Full shortcode when the attachment is listed in ids/include.
 	 */
 	public function get_classic_gallery_focus_needle( $content, $attachment_id, $post_id = 0 ) {
+		$context = $this->get_classic_gallery_focus_context( $content, $attachment_id, $post_id );
+		return isset( $context['needle'] ) ? (string) $context['needle'] : '';
+	}
+
+	/**
+	 * Shortcode needle and attachment IDs for one Classic Editor gallery block.
+	 *
+	 * @param string $content       Raw post_content.
+	 * @param int    $attachment_id Attachment post ID.
+	 * @param int    $post_id       Parent post ID.
+	 * @return array{needle:string,ids:int[],index:int}
+	 */
+	public function get_classic_gallery_focus_context( $content, $attachment_id, $post_id = 0 ) {
 		$content       = (string) $content;
 		$attachment_id = absint( $attachment_id );
 		$post_id       = absint( $post_id );
-		if ( '' === $content || $attachment_id <= 0 || false === stripos( $content, '[gallery' ) ) {
-			return '';
+		$empty         = array(
+			'needle' => '',
+			'ids'    => array(),
+			'index'  => -1,
+		);
+		if ( '' === $content || $attachment_id <= 0 ) {
+			return $empty;
 		}
-		if ( ! preg_match_all( '/\[gallery\b[^\]]*\]/i', $content, $matches, PREG_OFFSET_CAPTURE ) ) {
-			return '';
+		if ( false !== stripos( $content, '[gallery' ) ) {
+			if ( preg_match_all( '/\[gallery\b[^\]]*\]/i', $content, $matches, PREG_OFFSET_CAPTURE ) ) {
+				$gallery_index = 0;
+				foreach ( $matches[0] as $match ) {
+					$shortcode = (string) $match[0];
+					$attr_string = '';
+					if ( preg_match( '/\[gallery\b([^\]]*)\]/i', $shortcode, $parts ) ) {
+						$attr_string = (string) $parts[1];
+					}
+					$atts = shortcode_parse_atts( 'gallery ' . trim( $attr_string ) );
+					if ( ! is_array( $atts ) ) {
+						$atts = array();
+					}
+					$ids = $this->get_gallery_shortcode_attachment_ids( $atts, $post_id );
+					if ( in_array( $attachment_id, $ids, true ) ) {
+						return array(
+							'needle' => $shortcode,
+							'ids'    => $ids,
+							'index'  => $gallery_index,
+						);
+					}
+					++$gallery_index;
+				}
+			}
 		}
-		foreach ( $matches[0] as $match ) {
-			$shortcode = (string) $match[0];
-			$attr_string = '';
-			if ( preg_match( '/\[gallery\b([^\]]*)\]/i', $shortcode, $parts ) ) {
-				$attr_string = (string) $parts[1];
-			}
-			$atts = shortcode_parse_atts( 'gallery ' . trim( $attr_string ) );
-			if ( ! is_array( $atts ) ) {
-				$atts = array();
-			}
-			$ids = $this->get_gallery_shortcode_attachment_ids( $atts, $post_id );
-			if ( in_array( $attachment_id, $ids, true ) ) {
-				return $shortcode;
-			}
+		$html_context = $this->get_classic_html_gallery_focus_context( $content, $attachment_id );
+		if ( ! empty( $html_context['needle'] ) ) {
+			return $html_context;
 		}
-		return '';
+		return $empty;
+	}
+
+	/**
+	 * Focus context for Classic Editor galleries saved as HTML (no [gallery] shortcode).
+	 *
+	 * @param string $content       Raw post_content.
+	 * @param int    $attachment_id Attachment post ID.
+	 * @return array{needle:string,ids:int[],index:int}
+	 */
+	private function get_classic_html_gallery_focus_context( $content, $attachment_id ) {
+		$empty = array(
+			'needle' => '',
+			'ids'    => array(),
+			'index'  => -1,
+		);
+		$content       = (string) $content;
+		$attachment_id = absint( $attachment_id );
+		if ( '' === $content || $attachment_id <= 0 || false === stripos( $content, 'gallery' ) ) {
+			return $empty;
+		}
+		$token = 'wp-image-' . $attachment_id;
+		if ( false === stripos( $content, $token ) ) {
+			return $empty;
+		}
+		if ( ! preg_match_all( '#<div[^>]*class="[^"]*\bgallery\b[^"]*"[^>]*>#i', $content, $divs, PREG_OFFSET_CAPTURE ) ) {
+			return $empty;
+		}
+		$gallery_index = 0;
+		foreach ( $divs[0] as $div_match ) {
+			$start = (int) $div_match[1];
+			$chunk = substr( $content, $start, 15000 );
+			if ( false === stripos( $chunk, $token ) ) {
+				++$gallery_index;
+				continue;
+			}
+			$ids = array();
+			if ( preg_match_all( '/\bwp-image-(\d+)\b/i', $chunk, $id_matches ) ) {
+				$ids = array_values( array_unique( array_map( 'absint', $id_matches[1] ) ) );
+			}
+			if ( empty( $ids ) ) {
+				$ids = array( $attachment_id );
+			}
+			$needle = $token;
+			if ( preg_match( '#<img[^>]*\bclass="[^"]*\b' . preg_quote( $token, '#' ) . '\b[^"]*"[^>]*>#i', $chunk, $img_match ) ) {
+				$needle = (string) $img_match[0];
+			}
+			return array(
+				'needle' => $needle,
+				'ids'    => $ids,
+				'index'  => $gallery_index,
+			);
+		}
+		return $empty;
+	}
+
+	/**
+	 * Focus needle for Classic Editor galleries saved as HTML (no [gallery] shortcode).
+	 *
+	 * @param string $content       Raw post_content.
+	 * @param int    $attachment_id Attachment post ID.
+	 * @return string
+	 */
+	private function get_classic_html_gallery_focus_needle( $content, $attachment_id ) {
+		$context = $this->get_classic_html_gallery_focus_context( $content, $attachment_id );
+		return isset( $context['needle'] ) ? (string) $context['needle'] : '';
 	}
 
 	/**
@@ -6146,12 +6256,16 @@ class TSOLIIN_Scanner {
 		if ( ! $this->is_scan_widgets_enabled() ) {
 			return 0;
 		}
+		if ( ! $this->acquire_source_scan_lock( 'widgets' ) ) {
+			return self::SCAN_LOCK_BUSY;
+		}
 		$found = 0;
 		foreach ( $this->get_registered_widget_instances() as $instance ) {
 			$found += $this->scan_widget_instance( $instance['sidebar_id'], $instance['widget_id'] );
 		}
 		$this->cleanup_stale_widget_links();
 		update_option( 'tsoliin_widget_scan_after_index', 0, false );
+		$this->release_source_scan_lock( 'widgets' );
 		return $found;
 	}
 
@@ -6345,11 +6459,15 @@ class TSOLIIN_Scanner {
 		if ( ! $this->is_scan_widgets_enabled() ) {
 			return 0;
 		}
+		if ( ! $this->acquire_source_scan_lock( 'widgets' ) ) {
+			return self::SCAN_LOCK_BUSY;
+		}
 
 		$flat = $this->get_registered_widget_instances();
 		if ( empty( $flat ) ) {
 			update_option( 'tsoliin_widget_scan_after_index', 0, false );
 			$this->cleanup_stale_widget_links();
+			$this->release_source_scan_lock( 'widgets' );
 			return 0;
 		}
 
@@ -6359,6 +6477,7 @@ class TSOLIIN_Scanner {
 		if ( empty( $slice ) ) {
 			update_option( 'tsoliin_widget_scan_after_index', 0, false );
 			$this->cleanup_stale_widget_links();
+			$this->release_source_scan_lock( 'widgets' );
 			return 0;
 		}
 
@@ -6368,13 +6487,18 @@ class TSOLIIN_Scanner {
 		}
 
 		$next_index = $after_index + count( $slice );
-		if ( $next_index >= count( $flat ) ) {
+		$cycle_done = ( $next_index >= count( $flat ) );
+		if ( $cycle_done ) {
 			update_option( 'tsoliin_widget_scan_after_index', 0, false );
 			$this->cleanup_stale_widget_links();
 		} else {
 			update_option( 'tsoliin_widget_scan_after_index', $next_index, false );
 		}
-		return $found;
+		$this->release_source_scan_lock( 'widgets' );
+		if ( $found > 0 ) {
+			return $found;
+		}
+		return $cycle_done ? 0 : self::SCAN_BATCH_PROGRESS;
 	}
 
 	/**
@@ -6800,7 +6924,7 @@ class TSOLIIN_Scanner {
 			return 0;
 		}
 		if ( ! $this->acquire_source_scan_lock( 'terms' ) ) {
-			return 0;
+			return self::SCAN_LOCK_BUSY;
 		}
 		global $wpdb;
 		$per_page = max( 1, absint( $per_page ) );
@@ -6841,7 +6965,7 @@ class TSOLIIN_Scanner {
 
 		update_option( 'tsoliin_term_scan_after_id', $max_id, false );
 		$this->release_source_scan_lock( 'terms' );
-		return max( 1, $found );
+		return $found > 0 ? $found : self::SCAN_BATCH_PROGRESS;
 	}
 
 	/**
@@ -6855,7 +6979,7 @@ class TSOLIIN_Scanner {
 			return 0;
 		}
 		if ( ! $this->acquire_source_scan_lock( 'fse' ) ) {
-			return 0;
+			return self::SCAN_LOCK_BUSY;
 		}
 		global $wpdb;
 		$per_page = max( 1, absint( $per_page ) );
@@ -6895,7 +7019,7 @@ class TSOLIIN_Scanner {
 
 		update_option( 'tsoliin_fse_scan_after_id', $max_id, false );
 		$this->release_source_scan_lock( 'fse' );
-		return max( 1, $found );
+		return $found > 0 ? $found : self::SCAN_BATCH_PROGRESS;
 	}
 
 }

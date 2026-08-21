@@ -78,7 +78,10 @@ class TSOLIIN_Cron {
 		if ( $this->scanner->is_scan_comments_enabled() ) {
 			while ( ( microtime( true ) - $start ) < 55 ) {
 				$n = $this->scanner->scan_comments_batch( self::BG_BATCH );
-				if ( $n <= 0 ) {
+				if ( TSOLIIN_Scanner::SCAN_LOCK_BUSY === $n ) {
+					break;
+				}
+				if ( 0 === $n ) {
 					break;
 				}
 			}
@@ -113,7 +116,10 @@ class TSOLIIN_Cron {
 		foreach ( $batches as $batch ) {
 			while ( ( microtime( true ) - $start ) < 55 ) {
 				$n = call_user_func( array( $this->scanner, $batch[0] ), $batch[1] );
-				if ( $n <= 0 ) {
+				if ( TSOLIIN_Scanner::SCAN_LOCK_BUSY === $n ) {
+					break;
+				}
+				if ( 0 === $n ) {
 					break;
 				}
 			}
@@ -186,12 +192,17 @@ class TSOLIIN_Cron {
 		$running = (int) get_option( 'tsoliin_bg_check_running', 0 );
 
 		if ( $running && $resume ) {
-			$ts = wp_next_scheduled( self::HOOK_BG_STEP );
-			if ( ! $ts ) {
-				wp_schedule_single_event( time(), self::HOOK_BG_STEP );
-				spawn_cron();
+			$current_post_id = absint( get_option( 'tsoliin_bg_check_post_id', 0 ) );
+			if ( $current_post_id === $post_id ) {
+				$ts = wp_next_scheduled( self::HOOK_BG_STEP );
+				if ( ! $ts ) {
+					wp_schedule_single_event( time(), self::HOOK_BG_STEP );
+					spawn_cron();
+				}
+				return;
 			}
-			return;
+			$this->stop_bg_check();
+			$running = 0;
 		}
 
 		if ( $running && ! $resume ) {
@@ -216,7 +227,7 @@ class TSOLIIN_Cron {
 		update_option( 'tsoliin_bg_check_total', (int) $total, false );
 		update_option( 'tsoliin_bg_check_checked', (int) $checked, false );
 		update_option( 'tsoliin_bg_check_started', current_time( 'mysql', true ), false );
-		update_option( self::OPT_IMMEDIATE_QUEUE, array(), false );
+		$this->flush_immediate_broken_queue();
 
 		$ts = wp_next_scheduled( self::HOOK_BG_STEP );
 		if ( $ts ) {
@@ -241,12 +252,7 @@ class TSOLIIN_Cron {
 		$post_id = absint( get_option( 'tsoliin_bg_check_post_id', 0 ) );
 		$links   = $this->db->get_links_batch_for_check( self::BG_BATCH, $post_id );
 		if ( empty( $links ) ) {
-			update_option( 'tsoliin_bg_check_running', 0, false );
-			update_option( 'tsoliin_last_check_batch', current_time( 'mysql', true ), false );
-			$this->db->cleanup_transparent_redirects();
-			$this->db->cleanup_action_url_rows();
-			$this->db->cleanup_mislabeled_skip_rows( true, 15 );
-			$this->maybe_send_digest_broken_email();
+			$this->finalize_bg_check_completion();
 			return;
 		}
 		foreach ( $links as $link ) {
@@ -275,18 +281,36 @@ class TSOLIIN_Cron {
 			wp_schedule_single_event( time() + 2, self::HOOK_BG_STEP );
 			spawn_cron();
 		} else {
-			$queued = get_option( self::OPT_IMMEDIATE_QUEUE, array() );
-			if ( is_array( $queued ) ) {
-				$this->send_immediate_broken_summary_email( $queued );
-			}
-			delete_option( self::OPT_IMMEDIATE_QUEUE );
-			update_option( 'tsoliin_bg_check_running', 0, false );
-			update_option( 'tsoliin_last_check_batch', current_time( 'mysql', true ), false );
-			$this->db->cleanup_transparent_redirects();
-			$this->db->cleanup_action_url_rows();
-			$this->db->cleanup_mislabeled_skip_rows( true, 15 );
-			$this->maybe_send_digest_broken_email();
+			$this->finalize_bg_check_completion();
 		}
+	}
+
+	/**
+	 * Send and clear the immediate broken-link email queue.
+	 *
+	 * @return void
+	 */
+	private function flush_immediate_broken_queue() {
+		$queued = get_option( self::OPT_IMMEDIATE_QUEUE, array() );
+		if ( is_array( $queued ) && ! empty( $queued ) ) {
+			$this->send_immediate_broken_summary_email( $queued );
+		}
+		delete_option( self::OPT_IMMEDIATE_QUEUE );
+	}
+
+	/**
+	 * Mark a background check run complete and run post-check maintenance.
+	 *
+	 * @return void
+	 */
+	private function finalize_bg_check_completion() {
+		$this->flush_immediate_broken_queue();
+		update_option( 'tsoliin_bg_check_running', 0, false );
+		update_option( 'tsoliin_last_check_batch', current_time( 'mysql', true ), false );
+		$this->db->maybe_cleanup_transparent_redirects();
+		$this->db->cleanup_action_url_rows();
+		$this->db->cleanup_mislabeled_skip_rows( true, 15 );
+		$this->maybe_send_digest_broken_email();
 	}
 
 	/**
@@ -305,8 +329,10 @@ class TSOLIIN_Cron {
 		if ( $running && '' !== $started ) {
 			if ( ( time() - (int) strtotime( $started ) ) > 1800 ) {
 				$running = false;
+				$this->flush_immediate_broken_queue();
 				update_option( 'tsoliin_bg_check_running', 0, false );
 				update_option( 'tsoliin_bg_check_post_id', 0, false );
+				wp_clear_scheduled_hook( self::HOOK_BG_STEP );
 			}
 		}
 
@@ -536,6 +562,18 @@ class TSOLIIN_Cron {
 	 * @return void
 	 */
 	private function queue_immediate_broken_item( array $item ) {
+		$lock_key = 'tsoliin_immediate_queue_lock';
+		$attempts = 0;
+		$locked   = false;
+		while ( $attempts < 8 && ! $this->db->acquire_transient_lock( $lock_key, 10 ) ) {
+			usleep( 25000 );
+			$attempts++;
+		}
+		$locked = ( $attempts < 8 );
+		if ( ! $locked ) {
+			return;
+		}
+
 		$queue = get_option( self::OPT_IMMEDIATE_QUEUE, array() );
 		if ( ! is_array( $queue ) ) {
 			$queue = array();
@@ -547,6 +585,7 @@ class TSOLIIN_Cron {
 			$queue = array_slice( $queue, -300, null, true );
 		}
 		update_option( self::OPT_IMMEDIATE_QUEUE, $queue, false );
+		$this->db->release_transient_lock( $lock_key );
 	}
 
 	/**

@@ -340,6 +340,8 @@ class TSOLIIN_Admin {
 				'upgradingHttps'    => __( 'Upgrading to HTTPS…', 'tso-link-inspector' ),
 				'markingNotBroken'  => __( 'Marking as OK…', 'tso-link-inspector' ),
 				'itemsMarkedOk'     => __( 'marked as OK.', 'tso-link-inspector' ),
+				'deleting'          => __( 'Deleting…', 'tso-link-inspector' ),
+				'itemsDeleted'      => __( 'records deleted.', 'tso-link-inspector' ),
 				'itemsConverted'    => __( 'links converted to /path.', 'tso-link-inspector' ),
 				'itemsUpgradedHttps'=> __( 'links upgraded to HTTPS.', 'tso-link-inspector' ),
 				'confirmDeleteBulk' => __( 'Delete the selected records from the list? The posts will not be changed.', 'tso-link-inspector' ),
@@ -2398,7 +2400,9 @@ class TSOLIIN_Admin {
 		if ( ! $link_id ) {
 			wp_send_json_error( array( 'message' => __( 'Invalid ID.', 'tso-link-inspector' ) ) );
 		}
-		$this->db->delete_link( $link_id );
+		if ( ! $this->db->delete_link( $link_id ) ) {
+			wp_send_json_error( array( 'message' => __( 'Record not found.', 'tso-link-inspector' ) ) );
+		}
 		wp_send_json_success( array( 'message' => __( 'Record deleted.', 'tso-link-inspector' ) ) );
 	}
 
@@ -2772,14 +2776,29 @@ class TSOLIIN_Admin {
 					'message'    => sprintf( __( 'Upgrading to HTTPS %1$d of %2$d...', 'tso-link-inspector' ), $index + 1, $total ),
 				)
 			);
-		} else {
-			$processed = 0;
-			foreach ( $link_ids as $lid ) {
-				$this->db->delete_link( $lid );
-				$processed++;
+		} elseif ( 'delete' === $action ) {
+			$index   = isset( $_POST['index'] ) ? absint( $_POST['index'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+			$total   = count( $link_ids );
+			$link_id = isset( $link_ids[ $index ] ) ? $link_ids[ $index ] : 0;
+			if ( ! $link_id ) {
+				wp_send_json_success( array( 'done' => true, 'processed' => $total ) );
 			}
-			/* translators: %d: count */
-			wp_send_json_success( array( 'done' => true, 'processed' => $processed, 'message' => sprintf( __( '%d deleted.', 'tso-link-inspector' ), $processed ) ) );
+			$deleted = $this->db->delete_link( $link_id );
+			wp_send_json_success(
+				array(
+					'done'       => ( $index + 1 ) >= $total,
+					'processed'  => $index + 1,
+					'total'      => $total,
+					'pct'        => (int) round( ( ( $index + 1 ) / $total ) * 100 ),
+					'next_index' => $index + 1,
+					'link_id'    => $link_id,
+					'deleted'    => $deleted,
+					/* translators: 1: current, 2: total */
+					'message'    => sprintf( __( 'Deleting %1$d of %2$d...', 'tso-link-inspector' ), $index + 1, $total ),
+				)
+			);
+		} else {
+			wp_send_json_error( array( 'message' => __( 'Unknown bulk action.', 'tso-link-inspector' ) ) );
 		}
 	}
 

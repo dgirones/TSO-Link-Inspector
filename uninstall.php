@@ -56,6 +56,12 @@ $tsoliin_transients = array(
 	'tsoliin_unpub_cnt_v2_all',
 	'tsoliin_unpub_cnt_v3_all',
 	'tsoliin_transparent_rd_cleanup',
+	'tsoliin_scan_lock_comments',
+	'tsoliin_scan_lock_menus',
+	'tsoliin_scan_lock_terms',
+	'tsoliin_scan_lock_fse',
+	'tsoliin_scan_lock_widgets',
+	'tsoliin_immediate_queue_lock',
 );
 foreach ( $tsoliin_transients as $tsoliin_transient_name ) {
 	delete_transient( $tsoliin_transient_name );

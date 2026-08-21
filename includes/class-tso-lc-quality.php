@@ -289,16 +289,30 @@ class TSOLIIN_Quality {
 	 * @return int
 	 */
 	public static function resolve_internal_target_post_id( $url ) {
+		static $cache = array();
+
+		$url = trim( (string) $url );
+		if ( '' === $url ) {
+			return 0;
+		}
+
+		$cache_key = md5( $url );
+		if ( array_key_exists( $cache_key, $cache ) ) {
+			return (int) $cache[ $cache_key ];
+		}
+
 		$attachment_id = TSOLIIN_HTTP::parse_attachment_id_from_url( $url );
 		if ( $attachment_id > 0 ) {
 			$post = get_post( $attachment_id );
 			if ( $post && 'attachment' === $post->post_type ) {
+				$cache[ $cache_key ] = $attachment_id;
 				return $attachment_id;
 			}
 		}
 
 		$post_id = url_to_postid( $url );
-		return $post_id ? (int) $post_id : 0;
+		$cache[ $cache_key ] = $post_id ? (int) $post_id : 0;
+		return (int) $cache[ $cache_key ];
 	}
 
 	/**

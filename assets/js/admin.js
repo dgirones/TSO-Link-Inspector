@@ -518,7 +518,11 @@
 					if ( ! r.success || self.completed ) {
 						self.stopPolling();
 						if ( ! r.success ) {
+							tsoliinData.bgRunning = 0;
+							self.$stopBtn.hide();
+							self.resetCheckButton();
 							self.$checkBtn.prop( 'disabled', false );
+							self.$startBtn.prop( 'disabled', false );
 							self.showNotice( tsoliinData.i18n.error, 'error' );
 						}
 						return;
@@ -1241,7 +1245,7 @@
 				return;
 			}
 
-			if ( 'recheck' === action || 'unlink' === action || 'make_relative' === action || 'upgrade_https' === action || 'not_broken' === action ) {
+			if ( 'recheck' === action || 'unlink' === action || 'make_relative' === action || 'upgrade_https' === action || 'not_broken' === action || 'delete' === action ) {
 				if ( 'make_relative' === action && ! window.confirm( tsoliinData.i18n.confirmMakeRelativeBulk ) ) {
 					return;
 				}
@@ -1279,7 +1283,7 @@
 
 			// Show progress notice on first call.
 			if ( 0 === index ) {
-				self._bulkStats = { unlinked: 0, skipped: 0, failed: 0, converted: 0, marked: 0 };
+				self._bulkStats = { unlinked: 0, skipped: 0, failed: 0, converted: 0, marked: 0, deleted: 0 };
 				self._bulkFilterRemoved = 0;
 				var initMsg = tsoliinData.i18n.checking;
 				if ( 'unlink' === act ) {
@@ -1290,6 +1294,8 @@
 					initMsg = tsoliinData.i18n.upgradingHttps || 'Upgrading to HTTPS…';
 				} else if ( 'not_broken' === act ) {
 					initMsg = tsoliinData.i18n.markingNotBroken || 'Marking as OK…';
+				} else if ( 'delete' === act ) {
+					initMsg = tsoliinData.i18n.deleting || 'Deleting…';
 				}
 				self.$bulkProgress = $( '<div class="notice notice-info tsoliin-notice"><p><strong id="tsoliin-bulk-msg">' + initMsg + '</strong> <progress id="tsoliin-bulk-bar" max="100" value="0" style="width:200px;vertical-align:middle;"></progress></p></div>' );
 				$( '.tsoliin-toolbar' ).after( self.$bulkProgress );
@@ -1342,12 +1348,21 @@
 						okParts.push( '❌ ' + self._bulkStats.failed + ' ' + tsoliinData.i18n.itemsFailed );
 					}
 					doneMsg = okParts.length ? okParts.join( ' ' ) : ( '✅ 0 ' + ( tsoliinData.i18n.itemsMarkedOk || 'marked as OK.' ) );
+				} else if ( 'delete' === act ) {
+					var delParts = [];
+					if ( self._bulkStats.deleted > 0 ) {
+						delParts.push( '✅ ' + self._bulkStats.deleted + ' ' + ( tsoliinData.i18n.itemsDeleted || 'records deleted.' ) );
+					}
+					if ( self._bulkStats.failed > 0 ) {
+						delParts.push( '❌ ' + self._bulkStats.failed + ' ' + tsoliinData.i18n.itemsFailed );
+					}
+					doneMsg = delParts.length ? delParts.join( ' ' ) : ( '✅ 0 ' + ( tsoliinData.i18n.itemsDeleted || 'records deleted.' ) );
 				} else {
 					doneMsg = '✅ ' + total + ' ' + tsoliinData.i18n.itemsChecked;
 				}
 				$( '#tsoliin-bulk-msg' ).text( doneMsg );
 				$( '#tsoliin-bulk-bar' ).val( 100 );
-				if ( 'unlink' === act || 'make_relative' === act || 'upgrade_https' === act ) {
+				if ( 'unlink' === act || 'make_relative' === act || 'upgrade_https' === act || 'delete' === act ) {
 					self.scheduleListReload( 1500 );
 				} else if ( ( 'recheck' === act || 'not_broken' === act ) && 'all' !== ( tsoliinData.listFilter || 'all' ) && self._bulkFilterRemoved > 0 ) {
 					self.scheduleListReload( 1500 );
@@ -1372,6 +1387,8 @@
 				progressLabel = tsoliinData.i18n.upgradingHttps || 'Upgrading to HTTPS…';
 			} else if ( 'not_broken' === act ) {
 				progressLabel = tsoliinData.i18n.markingNotBroken || 'Marking as OK…';
+			} else if ( 'delete' === act ) {
+				progressLabel = tsoliinData.i18n.deleting || 'Deleting…';
 			}
 			var pct = Math.round( ( ( index + 1 ) / total ) * 100 );
 			$( '#tsoliin-bulk-msg' ).text( progressLabel + ' ' + ( index + 1 ) + '/' + total );
@@ -1390,9 +1407,7 @@
 				}, self.listFilterParam() ),
 				success: function ( r ) {
 					if ( ! r.success ) {
-						if ( 'unlink' === act || 'make_relative' === act || 'upgrade_https' === act ) {
-							self._bulkStats.failed++;
-						}
+						self._bulkStats.failed++;
 						alert( r.data ? r.data.message : tsoliinData.i18n.error );
 						self.bulkRecheckStep( linkIds, index + 1, act );
 						return;
@@ -1486,13 +1501,24 @@
 							} else {
 								self._bulkStats.failed++;
 							}
+						} else if ( 'delete' === act && r.data.link_id ) {
+							if ( r.data.deleted ) {
+								self._bulkStats.deleted++;
+								var $trDel = $( 'tr' ).filter( function () {
+									return $( this ).find( 'input[value="' + r.data.link_id + '"]' ).length > 0;
+								} );
+								if ( $trDel.length ) {
+									self.removeSuggestPanelsForRow( $trDel );
+									$trDel.fadeOut( 200, function () { $( this ).remove(); } );
+								}
+							} else {
+								self._bulkStats.failed++;
+							}
 						}
 					self.bulkRecheckStep( linkIds, index + 1, act );
 				},
 				error: function () {
-					if ( 'unlink' === act || 'make_relative' === act || 'upgrade_https' === act || 'not_broken' === act ) {
-						self._bulkStats.failed++;
-					}
+					self._bulkStats.failed++;
 					alert( tsoliinData.i18n.error );
 					self.bulkRecheckStep( linkIds, index + 1, act );
 				}

@@ -538,24 +538,46 @@ class TSOLIIN_Support {
 			}
 		}
 
+		$youtube_id = self::extract_youtube_video_id( $url );
+		if ( '' !== $youtube_id ) {
+			foreach (
+				array(
+					$youtube_id,
+					'youtube.com/embed/' . $youtube_id,
+					'youtube-nocookie.com/embed/' . $youtube_id,
+					'youtube.com/watch?v=' . $youtube_id,
+				) as $yt_variant
+			) {
+				$variants[] = $yt_variant;
+			}
+		}
+
 		$content_needle = '';
 		if ( $post instanceof WP_Post ) {
 			$content_needle = self::find_url_needle_in_post_content( $post->post_content, $variants );
+			if ( '' === $content_needle ) {
+				$content_needle = self::find_wp_embed_needle_in_post_content( $post->post_content, $variants );
+			}
 		}
 
 		$attachment_id = self::resolve_attachment_id_from_url( $url );
 
 		$classic_gallery = false;
+		$gallery_ids       = array();
+		$gallery_index     = -1;
 		if ( $post instanceof WP_Post && 'image' === $link_type && $attachment_id > 0 ) {
 			$scanner = function_exists( 'tsoliin_link_inspector' ) ? tsoliin_link_inspector()->scanner : null;
-			if ( $scanner && method_exists( $scanner, 'get_classic_gallery_focus_needle' ) ) {
-				$gallery_needle = $scanner->get_classic_gallery_focus_needle( $post->post_content, $attachment_id, $post_id );
+			if ( $scanner && method_exists( $scanner, 'get_classic_gallery_focus_context' ) ) {
+				$gallery_context = $scanner->get_classic_gallery_focus_context( $post->post_content, $attachment_id, $post_id );
+				$gallery_needle  = isset( $gallery_context['needle'] ) ? (string) $gallery_context['needle'] : '';
+				$gallery_ids     = isset( $gallery_context['ids'] ) && is_array( $gallery_context['ids'] )
+					? array_values( array_map( 'absint', $gallery_context['ids'] ) )
+					: array();
+				$gallery_index   = isset( $gallery_context['index'] ) ? (int) $gallery_context['index'] : -1;
 				if ( '' !== $gallery_needle ) {
 					$classic_gallery = true;
 					$in_post_content = true;
-					if ( '' === $content_needle ) {
-						$content_needle = $gallery_needle;
-					}
+					$content_needle  = $gallery_needle;
 				}
 			}
 		}
@@ -568,6 +590,11 @@ class TSOLIIN_Support {
 			if ( $scanner && method_exists( $scanner, 'url_is_visible_plain_text_in_post_content' ) ) {
 				// Text tab only when the URL is not visible plain text (e.g. shortcode attribute only).
 				$prefer_text_mode = ! $scanner->url_is_visible_plain_text_in_post_content( $post->post_content, $url, $post_id );
+			}
+		} elseif ( 'link' === $link_type && $post instanceof WP_Post && $in_post_content && '' !== $youtube_id ) {
+			// youtu.be on its own line / [embed] — Visual shows an iframe, not the stored href.
+			if ( ! self::url_in_html_href_attribute( $post->post_content, $variants ) ) {
+				$prefer_text_mode = true;
 			}
 		}
 
@@ -582,7 +609,10 @@ class TSOLIIN_Support {
 			'fileName'        => self::file_name_from_url( $url ),
 			'isBlockEditor'   => $is_block_editor ? 1 : 0,
 			'classicGallery'  => $classic_gallery ? 1 : 0,
+			'galleryIds'      => $gallery_ids,
+			'galleryIndex'    => $gallery_index,
 			'preferTextMode'  => $prefer_text_mode ? 1 : 0,
+			'youtubeVideoId'  => $youtube_id,
 		);
 	}
 
@@ -612,6 +642,13 @@ class TSOLIIN_Support {
 			} else {
 				$id = (int) attachment_url_to_postid( $full );
 				self::$attachment_id_by_url[ $full_key ] = $id;
+			}
+		}
+		// Jetpack galleries often link to the attachment page (/slug/) instead of the file URL.
+		if ( $id <= 0 && function_exists( 'url_to_postid' ) ) {
+			$page_id = (int) url_to_postid( $url );
+			if ( $page_id > 0 && 'attachment' === get_post_type( $page_id ) ) {
+				$id = $page_id;
 			}
 		}
 
@@ -696,6 +733,105 @@ class TSOLIIN_Support {
 			$pos = stripos( $content, $variant );
 			if ( false !== $pos ) {
 				return substr( $content, $pos, strlen( $variant ) );
+			}
+		}
+		return '';
+	}
+
+	/**
+	 * Eleven-character YouTube video ID from youtu.be / watch / embed / shorts URLs.
+	 *
+	 * @param string $url URL.
+	 * @return string
+	 */
+	public static function extract_youtube_video_id( $url ) {
+		$parts = wp_parse_url( (string) $url );
+		if ( empty( $parts['host'] ) ) {
+			return '';
+		}
+		$host = strtolower( (string) $parts['host'] );
+		$path = isset( $parts['path'] ) ? trim( (string) $parts['path'], '/' ) : '';
+
+		if ( preg_match( '/(^|\.)youtu\.be$/', $host ) && '' !== $path ) {
+			$slug = strtok( $path, '/' );
+			return self::sanitize_youtube_video_id( $slug );
+		}
+
+		if ( ! preg_match( '/(^|\.)(youtube\.com|youtube-nocookie\.com|m\.youtube\.com)$/', $host ) ) {
+			return '';
+		}
+
+		if ( ! empty( $parts['query'] ) ) {
+			parse_str( (string) $parts['query'], $query );
+			if ( ! empty( $query['v'] ) ) {
+				return self::sanitize_youtube_video_id( (string) $query['v'] );
+			}
+		}
+
+		if ( preg_match( '#^(?:embed|shorts|v|live)/([^/?]+)#', $path, $matches ) ) {
+			return self::sanitize_youtube_video_id( $matches[1] );
+		}
+
+		return '';
+	}
+
+	/**
+	 * @param string $id Raw candidate ID.
+	 * @return string
+	 */
+	private static function sanitize_youtube_video_id( $id ) {
+		$id = trim( (string) $id );
+		return preg_match( '/^[a-zA-Z0-9_-]{11}$/', $id ) ? $id : '';
+	}
+
+	/**
+	 * Whether a URL appears in an HTML anchor href (not bare text or [embed]).
+	 *
+	 * @param string   $content  Raw post_content.
+	 * @param string[] $variants URL variants.
+	 * @return bool
+	 */
+	public static function url_in_html_href_attribute( $content, $variants ) {
+		$content = (string) $content;
+		foreach ( (array) $variants as $variant ) {
+			$variant = (string) $variant;
+			if ( '' === $variant ) {
+				continue;
+			}
+			$quoted = preg_quote( $variant, '#' );
+			if ( preg_match( '#<a\b[^>]*\bhref=(["\'])' . $quoted . '\1#i', $content ) ) {
+				return true;
+			}
+			$encoded = htmlspecialchars( $variant, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8' );
+			if ( $encoded !== $variant && preg_match( '#<a\b[^>]*\bhref=(["\'])' . preg_quote( $encoded, '#' ) . '\1#i', $content ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Classic Editor [embed]…[/embed] shortcode containing one of the URL variants.
+	 *
+	 * @param string   $content  Raw post_content.
+	 * @param string[] $variants URL variants.
+	 * @return string Full shortcode or empty string.
+	 */
+	public static function find_wp_embed_needle_in_post_content( $content, $variants ) {
+		$content = (string) $content;
+		if ( '' === $content || false === stripos( $content, '[embed' ) ) {
+			return '';
+		}
+		if ( ! preg_match_all( '/\[embed\b[^\]]*\].*?\[\/embed\]/is', $content, $matches ) ) {
+			return '';
+		}
+		foreach ( $matches[0] as $shortcode ) {
+			$shortcode = (string) $shortcode;
+			foreach ( (array) $variants as $variant ) {
+				$variant = (string) $variant;
+				if ( '' !== $variant && false !== stripos( $shortcode, $variant ) ) {
+					return $shortcode;
+				}
 			}
 		}
 		return '';

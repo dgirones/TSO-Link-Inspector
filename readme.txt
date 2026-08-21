@@ -5,7 +5,7 @@ Tags: broken links, link checker, seo, maintenance, links
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 2.3.4
+Stable tag: 2.3.5
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -101,17 +101,10 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 
 == Changelog ==
 
-= 2.3.4 =
-* Fix: Uncheckable links (status -8) no longer stay in the “Check now” queue forever.
-* Fix: Daily cron scan now advances menu, term, and FSE cursors (same coverage as UI scan batches).
-* Fix: Concurrent UI/cron extended scans use a short lock to avoid corrupting scan cursors.
-* Fix: Play Store URL alias merge resets HTTP status when the stored URL changes.
-* Fix: Smart Suggest no longer shows Apply for unverified HTTPS; server blocks unverified http→https saves.
-* Fix: Bulk Mark as OK updates each row like the single-row action (status HTML, filter tabs).
-* Fix: Bulk unlink removes stale orphan post rows (same as single unlink).
-* Fix: Recheck removes DB rows when the URL is gone from the source.
-* Fix: Starting Check now while a background check is already running no longer resets progress.
-* Improvement: Tested up to WordPress 7.1.
+= 2.3.5 =
+* Fix: Check queue, bulk Mark as OK/unlink, Recheck sync, cron scan coverage, and verified HTTPS Suggest.
+* Fix: **Go to edit** for multi-gallery classic posts, YouTube embeds, and Jetpack galleries.
+* Improvement: Admin transient lock performance; tested up to WordPress 7.1.
 
 = 2.3.3 =
 * New: Bulk action **Upgrade selected to HTTPS** — only when the server confirms a working HTTPS URL (same rules as Suggestion → Apply; unverified bot-wall suggestions are skipped).
@@ -411,8 +404,8 @@ It sets the link status to 200 OK manually without making an HTTP request. The p
 
 == Upgrade Notice ==
 
-= 2.3.4 =
-Recommended. Fixes check-queue stalls, cron scan coverage, bulk Mark as OK UX, unverified HTTPS Apply, and related consistency bugs.
+= 2.3.5 =
+Recommended. Check/bulk/cron fixes, classic multi-gallery editor focus, and admin performance.
 
 = 2.3.3 =
 Recommended. Adds verified bulk HTTP→HTTPS upgrade and Links per page screen option, plus translation and legacy-table cleanups.
