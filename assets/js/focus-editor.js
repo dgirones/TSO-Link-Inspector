@@ -9,6 +9,7 @@
 	var visualTried       = false;
 	var blockFocusPending = false;
 	var visualModeEnsured = false;
+	var visualAttempts    = 0;
 
 	function isClassicEditorDom() {
 		if ( document.body.classList.contains( 'block-editor-page' ) ) {
@@ -70,7 +71,50 @@
 		return /^(?:https?:|\/\/|\/|\.\/|\.\.\/|#)/i.test( v )
 			|| /^\[gallery\b/i.test( v )
 			|| /\.(?:jpe?g|png|gif|webp|avif|svg|bmp|ico)(?:\?|$)/i.test( v )
+			|| /youtu\.be\//i.test( v )
+			|| /youtube(?:-nocookie)?\.com\//i.test( v )
 			|| v.indexOf( '/' ) !== -1;
+	}
+
+	function stripUrlQueryForMatch( value ) {
+		var v = String( value || '' );
+		var hash = v.indexOf( '#' );
+		if ( hash !== -1 ) {
+			v = v.substring( 0, hash );
+		}
+		var q = v.indexOf( '?' );
+		return q === -1 ? v : v.substring( 0, q );
+	}
+
+	function canonicalizeUrlForMatch( url ) {
+		var value = String( url || '' ).trim();
+		if ( ! value ) {
+			return '';
+		}
+		try {
+			var parsed = new URL( value, window.location.href );
+			[ 'si', 'feature', 'fbclid', 'gclid', 'igshid', 'pp', 'ref' ].forEach( function ( key ) {
+				parsed.searchParams.delete( key );
+			} );
+			var utm = [];
+			parsed.searchParams.forEach( function ( _val, key ) {
+				if ( 0 === key.indexOf( 'utm_' ) ) {
+					utm.push( key );
+				}
+			} );
+			utm.forEach( function ( key ) {
+				parsed.searchParams.delete( key );
+			} );
+			parsed.hash = '';
+			var out = parsed.protocol + '//' + parsed.host.toLowerCase() + parsed.pathname;
+			var query = parsed.searchParams.toString();
+			if ( query ) {
+				out += '?' + query;
+			}
+			return out.replace( /\/$/, '' );
+		} catch ( err ) {
+			return stripUrlQueryForMatch( value ).replace( /\/$/, '' );
+		}
 	}
 
 	function buildSearchVariants( data ) {
@@ -104,6 +148,27 @@
 				}
 			} );
 		}
+		if ( data.youtubeVideoId ) {
+			var ytId = String( data.youtubeVideoId );
+			[
+				'youtu.be/' + ytId,
+				'youtube.com/embed/' + ytId,
+				'youtube-nocookie.com/embed/' + ytId,
+				'youtube.com/watch?v=' + ytId,
+			].forEach( function ( value ) {
+				if ( value && ! seen[ value ] ) {
+					seen[ value ] = true;
+					out.push( value );
+				}
+			} );
+		}
+		out.slice().forEach( function ( value ) {
+			var stripped = stripUrlQueryForMatch( value );
+			if ( stripped && stripped !== value && ! seen[ stripped ] ) {
+				seen[ stripped ] = true;
+				out.push( stripped );
+			}
+		} );
 		return out;
 	}
 
@@ -597,6 +662,7 @@
 	 * Scroll so `el` is visible in the admin window.
 	 * TinyMCE Visual mode puts content in an iframe: element.scrollIntoView only
 	 * moves the iframe document (often with no scrollbar) and leaves the WP page at the top.
+	 * Gutenberg scrolls `.interface-interface-skeleton__content`, not the window.
 	 *
 	 * @param {Element} el Target node (may live inside TinyMCE iframe).
 	 */
@@ -634,9 +700,20 @@
 			}
 		}
 
-		var absoluteTop = topInParent + window.pageYOffset;
+		scrollViewportToY( topInParent + window.pageYOffset, el );
+	}
+
+	/**
+	 * Scroll window and overflow ancestors (Gutenberg canvas) so `pageY` is near the top.
+	 *
+	 * @param {number}  pageY      Document Y of the caret/element.
+	 * @param {Element} nearEl     Optional node whose scroll parents should move.
+	 * @param {number}  offsetInEl Optional Y inside nearEl (textarea caret).
+	 */
+	function scrollViewportToY( pageY, nearEl, offsetInEl ) {
 		var pad = Math.max( 96, Math.floor( window.innerHeight / 4 ) );
-		var target = Math.max( 0, absoluteTop - pad );
+		var inner = offsetInEl || 0;
+		var target = Math.max( 0, pageY - pad );
 
 		window.scrollTo( 0, target );
 		if ( document.documentElement ) {
@@ -646,16 +723,44 @@
 			document.body.scrollTop = target;
 		}
 
-		// Keep the editor chrome on screen too.
-		try {
-			var box = document.getElementById( 'postdivrich' ) || document.getElementById( 'wp-content-editor-container' );
-			if ( box ) {
-				var boxRect = box.getBoundingClientRect();
-				if ( boxRect.top > window.innerHeight - 80 || boxRect.bottom < 80 ) {
-					// Element scroll already set; nothing else.
-				}
+		var node = nearEl && nearEl.parentElement ? nearEl.parentElement : null;
+		var known = document.querySelector(
+			'.interface-interface-skeleton__content, .edit-post-layout__content, .block-editor-editor-skeleton__content'
+		);
+		var seen = [];
+		var caretViewportY = function () {
+			if ( nearEl && nearEl.getBoundingClientRect ) {
+				return nearEl.getBoundingClientRect().top + inner;
 			}
-		} catch ( err4 ) {}
+			return pageY - window.pageYOffset;
+		};
+		var adjust = function ( parent ) {
+			if ( ! parent || seen.indexOf( parent ) !== -1 ) {
+				return;
+			}
+			seen.push( parent );
+			var style;
+			try {
+				style = window.getComputedStyle( parent );
+			} catch ( errStyle ) {
+				return;
+			}
+			if ( ! style || ! /(auto|scroll|overlay)/.test( style.overflowY ) ) {
+				return;
+			}
+			if ( parent.scrollHeight <= parent.clientHeight + 4 ) {
+				return;
+			}
+			var pRect = parent.getBoundingClientRect();
+			parent.scrollTop += ( caretViewportY() - pRect.top - pad );
+		};
+		if ( known ) {
+			adjust( known );
+		}
+		while ( node && node !== document.documentElement ) {
+			adjust( node );
+			node = node.parentElement;
+		}
 	}
 
 	function highlightElement( el ) {
@@ -755,25 +860,15 @@
 			textarea.scrollTop = Math.max( 0, contentHeight - pad );
 		}
 
-		// Caret Y in document coordinates.
 		var rect = textarea.getBoundingClientRect();
 		var caretFromTextareaTop = canScrollInner
 			? ( contentHeight - textarea.scrollTop )
 			: contentHeight;
-		// Clamp to visible box when inner-scrolled (caret should sit near pad).
 		if ( canScrollInner ) {
 			caretFromTextareaTop = Math.min( Math.max( caretFromTextareaTop, 0 ), textarea.clientHeight );
 		}
 		var caretPageY = rect.top + window.pageYOffset + caretFromTextareaTop;
-		var target = Math.max( 0, caretPageY - pad );
-
-		window.scrollTo( 0, target );
-		if ( document.documentElement ) {
-			document.documentElement.scrollTop = target;
-		}
-		if ( document.body ) {
-			document.body.scrollTop = target;
-		}
+		scrollViewportToY( caretPageY, textarea, caretFromTextareaTop );
 
 		return true;
 	}
@@ -1206,6 +1301,11 @@
 		if ( normalizeUrlForMatch( attrValue ) === normalizeUrlForMatch( variant ) ) {
 			return true;
 		}
+		var left  = canonicalizeUrlForMatch( attrValue );
+		var right = canonicalizeUrlForMatch( variant );
+		if ( left && right && left.toLowerCase() === right.toLowerCase() ) {
+			return true;
+		}
 		try {
 			return decodeURIComponent( attrValue ) === decodeURIComponent( variant );
 		} catch ( e ) {
@@ -1296,6 +1396,39 @@
 			return wrapper || iframe;
 		}
 		return null;
+	}
+
+	/**
+	 * Classic Visual: bare youtu.be text or TinyMCE autolink (not an iframe embed).
+	 *
+	 * @param {Element} root    TinyMCE body or block root.
+	 * @param {string}  videoId Eleven-character YouTube ID.
+	 * @return {Element|null}
+	 */
+	function findYouTubePlainOrLinkInRoot( root, videoId ) {
+		if ( ! root || ! videoId || ! root.querySelectorAll ) {
+			return null;
+		}
+		var id = String( videoId );
+		var idLower = id.toLowerCase();
+		var links = root.querySelectorAll( 'a[href]' );
+		var i;
+		for ( i = 0; i < links.length; i++ ) {
+			var href = String( links[ i ].getAttribute( 'href' ) || '' );
+			if ( href.toLowerCase().indexOf( idLower ) === -1 ) {
+				continue;
+			}
+			if ( /youtu\.be\//i.test( href ) || /youtube(?:-nocookie)?\.com\//i.test( href ) ) {
+				return links[ i ];
+			}
+		}
+		var needles = [
+			'youtu.be/' + id,
+			'youtube.com/watch?v=' + id,
+			'youtube.com/embed/' + id,
+			'youtube-nocookie.com/embed/' + id,
+		];
+		return highlightPlainTextInRoot( root, needles );
 	}
 
 	function findImageInBlockElement( blockEl, data, searchVariants ) {
@@ -1413,6 +1546,10 @@
 			var ytBlock = findYouTubeEmbedElement( blockEl, data.youtubeVideoId );
 			if ( ytBlock ) {
 				return highlightElement( ytBlock );
+			}
+			var ytPlain = findYouTubePlainOrLinkInRoot( blockEl, data.youtubeVideoId );
+			if ( ytPlain ) {
+				return highlightElement( ytPlain );
 			}
 		}
 		var byAttr = findElementByUrlAttrs( blockEl, data, searchVariants );
@@ -1574,6 +1711,10 @@
 			if ( ytEmbed ) {
 				return focusTiny( ytEmbed );
 			}
+			var ytPlain = findYouTubePlainOrLinkInRoot( doc.body, youtubeVideoId );
+			if ( ytPlain ) {
+				return focusTiny( ytPlain );
+			}
 		}
 
 		// Prefer the real <a href> / src node — never the first body word matching a path segment.
@@ -1595,7 +1736,7 @@
 			return highlightElement( byAttr );
 		}
 
-		if ( linkType === 'plain' || ( data && data.attrs && ! data.attrs.length ) ) {
+		if ( linkType === 'plain' || youtubeVideoId || ( data && data.attrs && ! data.attrs.length ) ) {
 			var el = highlightPlainTextInRoot( doc.body, searchVariants );
 			if ( el ) {
 				try {
@@ -1764,6 +1905,7 @@
 		}
 		var searchVariants = buildSearchVariants( data );
 		var blockEditor    = isBlockEditorScreen( data );
+		var preferText     = data.preferTextMode === 1 || data.preferTextMode === true;
 
 		if ( ! blockEditor ) {
 			return tryClassicEditorFocus( data, searchVariants );
@@ -1781,6 +1923,13 @@
 			if ( blockFocusPending ) {
 				return false;
 			}
+			if ( focused ) {
+				return true;
+			}
+			visualAttempts++;
+			if ( visualAttempts < 4 && ! preferText ) {
+				return false;
+			}
 			if ( shouldAllowCodeMode( data ) && focusInCodeEditor( data, searchVariants ) ) {
 				return true;
 			}
@@ -1790,6 +1939,7 @@
 			return shouldAllowCodeMode( data ) && selectInTextarea( findCodeTextarea(), searchVariants );
 		}
 
+		visualAttempts++;
 		if ( focusInBlockEditor( data, searchVariants ) ) {
 			if ( focused ) {
 				return true;
@@ -1797,6 +1947,10 @@
 			if ( blockFocusPending || ! shouldAllowCodeMode( data ) ) {
 				return false;
 			}
+		}
+
+		if ( ! preferText && visualAttempts < 4 ) {
+			return false;
 		}
 
 		if ( shouldAllowCodeMode( data ) && focusInCodeEditor( data, searchVariants ) ) {

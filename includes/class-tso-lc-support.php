@@ -603,6 +603,7 @@ class TSOLIIN_Support {
 			foreach (
 				array(
 					$youtube_id,
+					'youtu.be/' . $youtube_id,
 					'youtube.com/embed/' . $youtube_id,
 					'youtube-nocookie.com/embed/' . $youtube_id,
 					'youtube.com/watch?v=' . $youtube_id,
@@ -610,6 +611,13 @@ class TSOLIIN_Support {
 			) {
 				$variants[] = $yt_variant;
 			}
+		}
+
+		$parsed_focus = wp_parse_url( $url );
+		if ( is_array( $parsed_focus ) && ! empty( $parsed_focus['query'] ) && ! empty( $parsed_focus['host'] ) ) {
+			$scheme = isset( $parsed_focus['scheme'] ) ? (string) $parsed_focus['scheme'] : 'https';
+			$path   = isset( $parsed_focus['path'] ) ? (string) $parsed_focus['path'] : '';
+			$variants[] = $scheme . '://' . $parsed_focus['host'] . $path;
 		}
 
 		$content_needle = '';
@@ -652,8 +660,9 @@ class TSOLIIN_Support {
 				$prefer_text_mode = ! $scanner->url_is_visible_plain_text_in_post_content( $post->post_content, $url, $post_id );
 			}
 		} elseif ( 'link' === $link_type && $post instanceof WP_Post && $in_post_content && '' !== $youtube_id ) {
-			// youtu.be on its own line / [embed] — Visual shows an iframe, not the stored href.
-			if ( ! self::url_in_html_href_attribute( $post->post_content, $variants ) ) {
+			// Classic: youtu.be on its own line / [embed] — Visual shows an iframe, not the stored href.
+			// Gutenberg embed blocks stay in Visual (core/embed); Text mode is a fallback in JS.
+			if ( ! $is_block_editor && ! self::url_in_html_href_attribute( $post->post_content, $variants ) ) {
 				$prefer_text_mode = true;
 			}
 		}
