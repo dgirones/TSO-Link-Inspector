@@ -124,6 +124,7 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 * Fix: Scoped dashboard/PDF stats, stale reset counts, cron incomplete-scan timestamp, blocked-redirect reporting, ACF Options Go to edit, and front-end focus needle.
 * Fix: Dashboard totals and filter tabs no longer show 0 when links exist (Dailymotion `dai.ly` LIKE clause broke `$wpdb->prepare()`).
 * Fix: Recheck no longer reports working Chrome Web Store (and other AAAA) URLs as “Cannot connect” — DNS pin keeps IPv4 when IPv6 is unreachable.
+* Fix: **Go to edit** selects/scrolls to Classic Visual plain `youtu.be` URLs, and scrolls Gutenberg code view to the selected embed URL.
 
 = 2.3.3 =
 * New: Bulk action **Upgrade selected to HTTPS** — only when the server confirms a working HTTPS URL (same rules as Suggestion → Apply; unverified bot-wall suggestions are skipped).
