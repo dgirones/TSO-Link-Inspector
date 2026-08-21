@@ -2154,6 +2154,12 @@ class TSOLIIN_Scanner {
 			}
 		}
 
+		if ( ( $force_all || $this->opt( 'scan_meta' ) ) && class_exists( 'TSOLIIN_Acf', false ) ) {
+			foreach ( TSOLIIN_Acf::collect_post_id_items( $post_id ) as $item ) {
+				$this->push_scan_item( $items, $seen, $item, $post_id );
+			}
+		}
+
 		$items = $this->enrich_scan_item_anchors( $items, $post->post_content, $post_id, $html );
 		$items = $this->finalize_scan_items( $items, $post_id );
 		$items = $this->reclassify_hyperlink_items( $items, $post->post_content, $post_id, $html );
@@ -2169,6 +2175,10 @@ class TSOLIIN_Scanner {
 			$type = isset( $item['type'] ) ? (string) $item['type'] : 'link';
 			$sk   = isset( $item['source_key'] ) ? (string) $item['source_key'] : '';
 			if ( '' !== $sk && class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk ) ) {
+				$this->db->upsert_link( $post_id, $item['url'], $item['anchor'], $type, $sk );
+				continue;
+			}
+			if ( '' !== $sk && class_exists( 'TSOLIIN_Acf', false ) && TSOLIIN_Acf::is_acf_source_key( $sk ) ) {
 				$this->db->upsert_link( $post_id, $item['url'], $item['anchor'], $type, $sk );
 				continue;
 			}
@@ -2220,6 +2230,9 @@ class TSOLIIN_Scanner {
 		} elseif ( ! empty( $ids ) && $this->is_scan_widgets_enabled() ) {
 			$found = $this->add_scan_batch_found( $found, $this->scan_widgets_batch( TSOLIIN_BATCH_SIZE * 3 ) );
 		}
+		if ( $done && $this->opt( 'scan_meta' ) && class_exists( 'TSOLIIN_Acf', false ) && TSOLIIN_Acf::is_plugin_active() ) {
+			$found = $this->add_scan_batch_found( $found, $this->scan_acf_options() );
+		}
 		return array( 'scanned' => count( $ids ), 'found' => $found, 'done' => $done );
 	}
 
@@ -2253,6 +2266,11 @@ class TSOLIIN_Scanner {
 				$active[ $this->scan_url_key( $url, $post_id ) ] = true;
 				continue;
 			}
+			if ( '' !== $sk && class_exists( 'TSOLIIN_Acf', false ) && TSOLIIN_Acf::is_acf_source_key( $sk ) ) {
+				$active_keys[ $sk ] = true;
+				$active[ $this->scan_url_key( $url, $post_id ) ] = true;
+				continue;
+			}
 			if ( in_array( $type, array( 'link', 'image', 'iframe' ), true )
 				&& ! $this->is_url_editable_in_post( $post_id, $url, $type ) ) {
 				continue;
@@ -2281,6 +2299,13 @@ class TSOLIIN_Scanner {
 			}
 			$sk = isset( $row->source_key ) ? (string) $row->source_key : '';
 			if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk ) ) {
+				if ( isset( $active_keys[ $sk ] ) ) {
+					continue;
+				}
+				$this->db->delete_link( (int) $row->id );
+				continue;
+			}
+			if ( class_exists( 'TSOLIIN_Acf', false ) && TSOLIIN_Acf::is_acf_source_key( $sk ) ) {
 				if ( isset( $active_keys[ $sk ] ) ) {
 					continue;
 				}
@@ -2861,6 +2886,17 @@ class TSOLIIN_Scanner {
 			}
 		}
 
+		if ( '' !== $sk && class_exists( 'TSOLIIN_Acf', false ) && TSOLIIN_Acf::is_acf_source_key( $sk ) ) {
+			$row = $this->db->get_link_by_source_key( $sk, $type, $post_id );
+			if ( $row ) {
+				return $row;
+			}
+			$row = $this->db->get_link_by_source_key( $sk, 'acf', 0 );
+			if ( $row ) {
+				return $row;
+			}
+		}
+
 		if ( preg_match( '/^(c-\d+-)/', $sk, $matches ) ) {
 			return $this->resolve_row_after_prefix_rescan( 'comment', $matches[1], $post_id, $old_url, $original );
 		}
@@ -2936,6 +2972,9 @@ class TSOLIIN_Scanner {
 				break;
 			case in_array( $link_type, array( 'template', 'wp_block' ), true ):
 				$hint = $this->resync_storage_post_link( $link );
+				break;
+			case 'acf' === $link_type:
+				$this->scan_acf_options();
 				break;
 		}
 
@@ -3742,6 +3781,11 @@ class TSOLIIN_Scanner {
 		}
 		if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk ) && ! empty( $link->post_id ) ) {
 			$result = TSOLIIN_WooCommerce::product_has_url( (int) $link->post_id, $url );
+			$this->editable_source_cache[ $cache_key ] = $result;
+			return $result;
+		}
+		if ( class_exists( 'TSOLIIN_Acf', false ) && TSOLIIN_Acf::is_acf_source_key( $sk ) ) {
+			$result = TSOLIIN_Acf::source_has_url( $link );
 			$this->editable_source_cache[ $cache_key ] = $result;
 			return $result;
 		}
@@ -5444,6 +5488,13 @@ class TSOLIIN_Scanner {
 		if ( ! $link || empty( $link->post_id ) || empty( $link->link_url ) ) {
 			return false;
 		}
+		$sk = isset( $link->source_key ) ? (string) $link->source_key : '';
+		if ( class_exists( 'TSOLIIN_Acf', false ) && TSOLIIN_Acf::is_acf_source_key( $sk ) ) {
+			return false;
+		}
+		if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_woocommerce_source_key( $sk ) ) {
+			return false;
+		}
 		$type = isset( $link->link_type ) ? (string) $link->link_type : 'link';
 		if ( ! in_array( $type, array( 'link', 'image', 'iframe', 'plain' ), true ) ) {
 			return false;
@@ -6245,6 +6296,78 @@ class TSOLIIN_Scanner {
 
 		$this->db->delete_sources_not_in( $link_type, $prefix, $allowed_keys, $post_id );
 		return $found;
+	}
+
+	/**
+	 * Scan ACF Options pages into link_type=acf rows (post_id 0).
+	 *
+	 * @return int Links found (0 = none or end; SCAN_LOCK_BUSY when locked).
+	 */
+	public function scan_acf_options() {
+		if ( ! $this->opt( 'scan_meta' ) || ! class_exists( 'TSOLIIN_Acf', false ) || ! TSOLIIN_Acf::is_plugin_active() ) {
+			return 0;
+		}
+		if ( ! $this->acquire_source_scan_lock( 'acfopt' ) ) {
+			return self::SCAN_LOCK_BUSY;
+		}
+
+		$allowed = array();
+		$found   = 0;
+		foreach ( TSOLIIN_Acf::collect_options_items() as $item ) {
+			$url = isset( $item['url'] ) ? (string) $item['url'] : '';
+			if ( '' === $url || $this->skip_url( $url ) || $this->is_ignored( $url ) ) {
+				continue;
+			}
+			$sk = isset( $item['source_key'] ) ? (string) $item['source_key'] : '';
+			if ( '' === $sk ) {
+				continue;
+			}
+			$sk        = $this->db->sanitize_source_key( $sk );
+			$allowed[] = $sk;
+			$anchor    = ! empty( $item['anchor'] ) ? (string) $item['anchor'] : __( 'ACF Options', 'tso-link-inspector' );
+			$this->db->upsert_link( 0, $url, $anchor, 'acf', $sk );
+			$found++;
+		}
+
+		$this->cleanup_stale_acf_option_links( $allowed );
+		$this->release_source_scan_lock( 'acfopt' );
+		return $found > 0 ? $found : 0;
+	}
+
+	/**
+	 * Drop Options-page rows whose source_key was not in the latest scan.
+	 *
+	 * @param string[] $allowed_keys Valid source keys.
+	 * @return void
+	 */
+	private function cleanup_stale_acf_option_links( array $allowed_keys ) {
+		global $wpdb;
+		$table = $this->db->get_table();
+		$keep  = array();
+		foreach ( $allowed_keys as $key ) {
+			$key = $this->db->sanitize_source_key( (string) $key );
+			if ( '' !== $key ) {
+				$keep[ $key ] = true;
+			}
+		}
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT id, source_key FROM {$table} WHERE link_type = %s AND post_id = 0",
+				'acf'
+			)
+		);
+		// phpcs:enable
+		if ( empty( $rows ) ) {
+			return;
+		}
+		foreach ( $rows as $row ) {
+			$sk = isset( $row->source_key ) ? (string) $row->source_key : '';
+			if ( isset( $keep[ $sk ] ) ) {
+				continue;
+			}
+			$this->db->delete_link( (int) $row->id );
+		}
 	}
 
 	/**

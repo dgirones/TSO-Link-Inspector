@@ -962,7 +962,7 @@ class TSOLIIN_Admin {
 
 		echo '<dt>' . esc_html__( 'Custom fields (ACF / Meta)', 'tso-link-inspector' ) . '</dt>';
 		echo '<dd>';
-		echo esc_html__( 'Enable ACF / Meta custom fields in Settings to find URLs in fields added by plugins like ACF, PODS, or CPT UI. Plain-text URLs inside meta also require Extended sources (Phase 2). Internal SEO keys are excluded by default; add extra keys to exclude to speed up scans.', 'tso-link-inspector' );
+		echo esc_html__( 'Enable ACF / Meta custom fields in Settings to find URLs in fields added by plugins like ACF, PODS, or CPT UI. When ACF is active, Image / File / Gallery (attachment IDs), Page Link, Post Object, Relationship, and Taxonomy fields are resolved to real URLs, and ACF Options pages are scanned too. Plain-text URLs inside meta also require Extended sources (Phase 2). Internal SEO keys are excluded by default; add extra keys to exclude to speed up scans.', 'tso-link-inspector' );
 		echo ' <a href="' . esc_url( $settings_url ) . '#tsoliin-meta-exclude-row">' . esc_html__( 'Open meta settings', 'tso-link-inspector' ) . '</a>';
 		echo '</dd>';
 
@@ -1189,7 +1189,7 @@ class TSOLIIN_Admin {
 		echo '<label><input type="checkbox" id="tsoliin_scan_meta" name="tsoliin_scan_meta" value="1" ' . checked( $scan_meta, true, false ) . ' /> ';
 		echo esc_html__( 'Scan custom fields (ACF, PODS, CPT UI...)', 'tso-link-inspector' );
 		echo '</label>';
-		echo '<p class="description">' . esc_html__( 'Find links in fields added by plugins like ACF. Useful when you have URL, HTML, or editor fields in your posts. It may slow down scanning.', 'tso-link-inspector' ) . '</p>';
+		echo '<p class="description">' . esc_html__( 'Find links in fields added by plugins like ACF. When ACF is active, this also resolves image/file/gallery IDs and page/post relationship fields to URLs, and scans ACF Options pages. It may slow down scanning.', 'tso-link-inspector' ) . '</p>';
 		echo '<p class="description">' . esc_html__( 'Internal WordPress keys (e.g. Yoast, Rank Math) are always excluded. Add extra keys below, one per line.', 'tso-link-inspector' ) . '</p>';
 		echo '</td></tr>';
 
@@ -1535,6 +1535,8 @@ class TSOLIIN_Admin {
 				return __( 'This menu link could not be located. On block themes use Edit link for custom URLs, or Site Editor → Navigation for block menus.', 'tso-link-inspector' );
 			case 'widget':
 				return __( 'This widget link could not be located. Edit it under Appearance > Widgets or the Site Editor.', 'tso-link-inspector' );
+			case 'acf':
+				return __( 'This ACF Options URL cannot be edited inline. Use Go to edit to open the Options page.', 'tso-link-inspector' );
 			case 'term':
 				return __( 'This term description link could not be located. Edit it in the taxonomy editor.', 'tso-link-inspector' );
 			default:

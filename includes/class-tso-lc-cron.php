@@ -91,6 +91,10 @@ class TSOLIIN_Cron {
 			$this->scanner->scan_all_widgets();
 		}
 
+		if ( $this->is_scan_setting_enabled( 'scan_meta', false ) ) {
+			$this->scanner->scan_acf_options();
+		}
+
 		$this->drain_extended_scan_batches( $start );
 
 		update_option( 'tsoliin_last_full_scan', current_time( 'mysql', true ), false );

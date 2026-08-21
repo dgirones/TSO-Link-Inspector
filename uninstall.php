@@ -61,6 +61,7 @@ $tsoliin_transients = array(
 	'tsoliin_scan_lock_terms',
 	'tsoliin_scan_lock_fse',
 	'tsoliin_scan_lock_widgets',
+	'tsoliin_scan_lock_acfopt',
 	'tsoliin_immediate_queue_lock',
 );
 foreach ( $tsoliin_transients as $tsoliin_transient_name ) {
