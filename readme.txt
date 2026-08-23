@@ -80,7 +80,7 @@ Yes. Use **Edit URL** to replace a URL, **Unlink** to remove the anchor tag whil
 Yes. The plugin processes `post_content` using WordPress standard filters and works with the Block Editor, Classic Editor, and most page builders.
 
 = Will it scan custom fields (ACF)? =
-Yes. Enable **Custom fields (ACF / Meta)** in Settings. The plugin scans URL, HTML and text fields. You can add keys to the exclusion list to skip specific fields.
+Yes. Enable **Custom fields (ACF / Meta)** in Settings. The plugin scans URL, HTML and text fields, plus ACF fields stored as IDs (image, file, gallery, page link, relationship) and ACF Options pages. You can add keys to the exclusion list to skip specific fields.
 
 = What does the HTTP Insecure filter show? =
 Links that are working (not broken) but still use `http://` instead of `https://`. Use the Suggestion button to upgrade them with one click.
@@ -119,6 +119,7 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 * Improvement: Edit link and Suggested URL can save a URL when this server cannot verify it (geo-block, bot wall, or timeout), with an option to ignore that domain.
 * Fix: Delete and other row actions no longer error when the list row was already removed after editing the post.
 * Fix: Dashboard totals no longer show 0 (`dai.ly` LIKE); Chrome Web Store IPv6 “Cannot connect”; **Go to edit** scroll for Classic `youtu.be` and Gutenberg code view.
+* Fix: Scan ACF ID fields (image, file, gallery, page link, relationship) and Options pages; resolve Elementor/ACF dynamic tags via **Go to edit**.
 
 = 2.3.5 =
 * Fix: Check queue, bulk Mark as OK/unlink, Recheck sync, cron scan coverage, and verified HTTPS Suggest.
@@ -427,7 +428,7 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 == Upgrade Notice ==
 
 = 2.3.6 =
-Recommended. Save unverified URLs (geo-block), stale-row delete, dashboard totals, Chrome Web Store IPv6, and Go to edit scroll.
+Recommended. Save unverified URLs (geo-block), stale-row delete, ACF IDs/Options and Elementor tags, dashboard totals, and Go to edit scroll.
 
 = 2.3.5 =
 Recommended. Check/bulk/cron fixes, classic multi-gallery editor focus, and admin performance.
