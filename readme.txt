@@ -5,7 +5,7 @@ Tags: broken links, link checker, seo, maintenance, links
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 2.3.6
+Stable tag: 2.3.7
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -115,11 +115,20 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 
 == Changelog ==
 
+= 2.3.7 =
+* New: History tab (Settings) lists recent URL changes from Edit, Suggest, relative, and HTTPS actions (max 500 rows; oldest auto-pruned; Delete all button).
+* New: Continue check / Restart from zero when unchecked links remain after a stopped run.
+* Fix: Edit link modal — checkbox labels aligned with the box on multi-line text.
+* Improvement: Clearer wording for “save unverified URL” and “ignore domain” checkboxes.
+* Fix: Admin dashboard reuses pending-check and cron-queue counts (fewer duplicate SQL queries on page load).
+* Dev: CLI unit smoke tests via `php scripts/run-unit-tests.php`.
+
 = 2.3.6 =
 * Improvement: Edit link and Suggested URL can save a URL when this server cannot verify it (geo-block, bot wall, or timeout), with an option to ignore that domain.
 * Fix: Delete and other row actions no longer error when the list row was already removed after editing the post.
 * Fix: Dashboard totals no longer show 0 (`dai.ly` LIKE); Chrome Web Store IPv6 “Cannot connect”; **Go to edit** scroll for Classic `youtu.be` and Gutenberg code view.
 * Fix: Scan ACF ID fields (image, file, gallery, page link, relationship) and Options pages; resolve Elementor/ACF dynamic tags via **Go to edit**.
+* Fix: **Check now** resumes partial progress; dashboard Broken/OK/Redirect/HTTP counts only use checked links (no stale totals during a run).
 
 = 2.3.5 =
 * Fix: Check queue, bulk Mark as OK/unlink, Recheck sync, cron scan coverage, and verified HTTPS Suggest.
@@ -427,8 +436,11 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 
 == Upgrade Notice ==
 
+= 2.3.7 =
+Recommended. History of URL edits, Continue/Restart check controls, clearer Edit link checkboxes, and fewer duplicate admin SQL queries.
+
 = 2.3.6 =
-Recommended. Save unverified URLs (geo-block), stale-row delete, ACF IDs/Options and Elementor tags, dashboard totals, and Go to edit scroll.
+Recommended. Save unverified URLs, ACF/Elementor Go to edit, resume Check now, and consistent dashboard counters.
 
 = 2.3.5 =
 Recommended. Check/bulk/cron fixes, classic multi-gallery editor focus, and admin performance.

@@ -24,14 +24,29 @@ class TSOLIIN_DB {
 	/** @var string Full table name. */
 	private $table;
 
+	/** @var string Full history table name. */
+	private $history_table;
+
+	/** Max URL-change history rows kept (oldest pruned automatically). */
+	const HISTORY_MAX_ROWS = 500;
+
 	/** @var bool|null Cached result of table_exists() for this request. */
 	private $table_exists_cache = null;
 
 	/** @var bool Whether upgrade_schema() already ran this request. */
 	private $schema_upgraded = false;
 
+	/** @var bool Whether create_history_table() already ran this request. */
+	private $history_table_ensured = false;
+
 	/** @var array<string, array<string, int>> Request cache for get_stats() / get_stats_for_post(). */
 	private static $stats_cache = array();
+
+	/** @var array<int, int> Request cache for get_pending_check_count() keyed by post_id (0 = all). */
+	private static $pending_check_count_cache = array();
+
+	/** @var array<string, array<string, int>> Request cache for get_cron_queue_counts(). */
+	private static $cron_queue_counts_cache = array();
 
 	/** @var array<int, string[]> Request cache for get_broken_link_urls_for_post(). */
 	private static $broken_urls_by_post_cache = array();
@@ -41,12 +56,18 @@ class TSOLIIN_DB {
 
 	public function __construct() {
 		global $wpdb;
-		$this->table = $wpdb->prefix . 'tso_link_inspector';
+		$this->table         = $wpdb->prefix . 'tso_link_inspector';
+		$this->history_table = $wpdb->prefix . 'tso_link_inspector_history';
 	}
 
 	/** @return string */
 	public function get_table() {
 		return $this->table;
+	}
+
+	/** @return string */
+	public function get_history_table() {
+		return $this->history_table;
 	}
 
 	// -------------------------------------------------------------------------
@@ -90,6 +111,33 @@ class TSOLIIN_DB {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange -- dbDelta is the WP standard for schema changes.
 		dbDelta( $sql );
 		$this->upgrade_schema();
+		$this->create_history_table();
+	}
+
+	/**
+	 * Create the URL-change history table (capped log for the History settings tab).
+	 *
+	 * @return void
+	 */
+	public function create_history_table() {
+		global $wpdb;
+		$charset = $wpdb->get_charset_collate();
+		$sql     = "CREATE TABLE {$this->history_table} (
+			id bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+			link_id bigint(20) UNSIGNED NOT NULL DEFAULT 0,
+			post_id bigint(20) UNSIGNED NOT NULL DEFAULT 0,
+			old_url varchar(2083) NOT NULL DEFAULT '',
+			new_url varchar(2083) NOT NULL DEFAULT '',
+			change_type varchar(32) NOT NULL DEFAULT 'edit',
+			user_id bigint(20) UNSIGNED NOT NULL DEFAULT 0,
+			created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY  (id),
+			KEY created_at (created_at),
+			KEY link_id (link_id)
+		) $charset;";
+		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange -- dbDelta is the WP standard for schema changes.
+		dbDelta( $sql );
 	}
 
 	/**
@@ -259,10 +307,24 @@ class TSOLIIN_DB {
 		$this->maybe_migrate_legacy_table();
 		if ( $this->table_exists() ) {
 			$this->upgrade_schema();
+			$this->ensure_history_table();
 			return;
 		}
 		$this->create_table();
 		$this->table_exists_cache = true;
+	}
+
+	/**
+	 * Ensure the URL-change history table exists (dbDelta at most once per request).
+	 *
+	 * @return void
+	 */
+	private function ensure_history_table() {
+		if ( $this->history_table_ensured ) {
+			return;
+		}
+		$this->create_history_table();
+		$this->history_table_ensured = true;
 	}
 
 	/**
@@ -881,11 +943,28 @@ class TSOLIIN_DB {
 
 	/**
 	 * Update the link_url for a row and reset its check state.
+	 *
+	 * @param int    $link_id     Link row ID.
+	 * @param string $new_url     New URL.
+	 * @param string $change_type History label: edit|suggest|relative|https|bulk_relative|bulk_https.
 	 */
-	public function update_link_url( $link_id, $new_url ) {
+	public function update_link_url( $link_id, $new_url, $change_type = 'edit' ) {
 		global $wpdb;
-		$new_url = trim( str_replace( array( "\0", "\r", "\n" ), '', (string) $new_url ) );
+		$link_id     = absint( $link_id );
+		$new_url     = trim( str_replace( array( "\0", "\r", "\n" ), '', (string) $new_url ) );
+		$change_type = sanitize_key( (string) $change_type );
+		if ( '' === $change_type ) {
+			$change_type = 'edit';
+		}
+
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$old_row = $wpdb->get_row(
+			$wpdb->prepare(
+				// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				"SELECT link_url, post_id FROM {$this->table} WHERE id = %d",
+				$link_id
+			)
+		);
 		$wpdb->update(
 			$this->table,
 			array(
@@ -899,12 +978,137 @@ class TSOLIIN_DB {
 				'verify_baseline_link'       => '',
 				'verify_baseline_redirect'   => '',
 			),
-			array( 'id' => absint( $link_id ) ),
+			array( 'id' => $link_id ),
 			array( '%s', '%d', '%s', '%d', '%s', '%d', '%d', '%s', '%s' ),
 			array( '%d' )
 		);
 		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		self::clear_stats_cache();
+
+		if ( $old_row && (string) $old_row->link_url !== $new_url ) {
+			$this->log_url_change(
+				$link_id,
+				(int) $old_row->post_id,
+				(string) $old_row->link_url,
+				$new_url,
+				$change_type
+			);
+		}
+	}
+
+	/**
+	 * How many history rows to delete when over the cap.
+	 *
+	 * @param int $count Current row count.
+	 * @param int $limit Max rows to keep.
+	 * @return int
+	 */
+	public static function history_overflow_count( $count, $limit = self::HISTORY_MAX_ROWS ) {
+		$count = max( 0, (int) $count );
+		$limit = max( 1, (int) $limit );
+		return max( 0, $count - $limit );
+	}
+
+	/**
+	 * Record a URL change and prune oldest rows past HISTORY_MAX_ROWS.
+	 *
+	 * @param int    $link_id     Link ID.
+	 * @param int    $post_id     Post ID.
+	 * @param string $old_url     Previous URL.
+	 * @param string $new_url     New URL.
+	 * @param string $change_type Change type key.
+	 * @return void
+	 */
+	public function log_url_change( $link_id, $post_id, $old_url, $new_url, $change_type = 'edit' ) {
+		global $wpdb;
+		$this->ensure_history_table();
+		$change_type = sanitize_key( (string) $change_type );
+		if ( '' === $change_type ) {
+			$change_type = 'edit';
+		}
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$wpdb->insert(
+			$this->history_table,
+			array(
+				'link_id'     => absint( $link_id ),
+				'post_id'     => absint( $post_id ),
+				'old_url'     => (string) $old_url,
+				'new_url'     => (string) $new_url,
+				'change_type' => $change_type,
+				'user_id'     => get_current_user_id(),
+				'created_at'  => current_time( 'mysql', true ),
+			),
+			array( '%d', '%d', '%s', '%s', '%s', '%d', '%s' )
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$this->prune_url_change_history();
+	}
+
+	/**
+	 * Delete oldest history rows when over the configured maximum.
+	 *
+	 * @param int $limit Max rows to keep.
+	 * @return int Number of rows deleted.
+	 */
+	public function prune_url_change_history( $limit = self::HISTORY_MAX_ROWS ) {
+		global $wpdb;
+		$this->ensure_history_table();
+		$limit = max( 1, (int) $limit );
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$count = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$this->history_table}" );
+		$extra = self::history_overflow_count( $count, $limit );
+		if ( $extra < 1 ) {
+			// phpcs:enable
+			return 0;
+		}
+		$deleted = (int) $wpdb->query(
+			$wpdb->prepare(
+				"DELETE FROM {$this->history_table} ORDER BY created_at ASC, id ASC LIMIT %d",
+				$extra
+			)
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		return max( 0, $deleted );
+	}
+
+	/**
+	 * @return int
+	 */
+	public function count_url_change_history() {
+		global $wpdb;
+		$this->ensure_history_table();
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		return (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$this->history_table}" );
+	}
+
+	/**
+	 * @param int $limit Max rows.
+	 * @return array<int, object>
+	 */
+	public function get_url_change_history( $limit = 100 ) {
+		global $wpdb;
+		$this->ensure_history_table();
+		$limit = max( 1, min( self::HISTORY_MAX_ROWS, absint( $limit ) ) );
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT * FROM {$this->history_table} ORDER BY created_at DESC, id DESC LIMIT %d",
+				$limit
+			)
+		);
+		return is_array( $rows ) ? $rows : array();
+	}
+
+	/**
+	 * @return int Rows deleted.
+	 */
+	public function clear_url_change_history() {
+		global $wpdb;
+		$this->ensure_history_table();
+		// Prefer DELETE over TRUNCATE so shared hosts without DROP privilege still work.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$wpdb->query( "DELETE FROM {$this->history_table}" );
+		return 1;
 	}
 
 	/**
@@ -1292,20 +1496,22 @@ class TSOLIIN_DB {
 
 		switch ( $args['filter'] ) {
 			case 'broken':
-				$where .= ' AND l.is_broken = 1 AND l.user_verified = 0';
+				// Only after a completed HTTP check (not stale codes while queued for recheck).
+				$where .= ' AND l.last_checked IS NOT NULL AND l.is_broken = 1 AND l.user_verified = 0';
 				break;
 			case 'redirect':
 				$where .= ' AND ' . self::sql_redirect_match( 'l.' );
 				break;
 			case 'ok':
-				$where   .= ' AND l.status_code = 200 AND l.link_url NOT LIKE %s AND l.user_verified = 0';
+				$where   .= ' AND l.last_checked IS NOT NULL AND l.is_broken = 0 AND l.status_code = 200 AND l.link_url NOT LIKE %s AND l.user_verified = 0';
 				$params[] = 'http://%';
 				break;
 			case 'unchecked':
 				$where .= ' AND l.last_checked IS NULL AND l.user_verified = 0';
 				break;
 			case 'http_insecure':
-				$where   .= ' AND l.link_url LIKE %s AND l.is_broken = 0 AND l.user_verified = 0';
+				// Confirmed working (or at least checked) HTTP URLs — not the pending recheck queue.
+				$where   .= ' AND l.last_checked IS NOT NULL AND l.link_url LIKE %s AND l.is_broken = 0 AND l.user_verified = 0';
 				$params[] = 'http://%';
 				break;
 			case 'manual_locked':
@@ -1654,7 +1860,7 @@ class TSOLIIN_DB {
 		$base_from = "FROM {$this->table} l INNER JOIN {$wpdb->posts} p ON p.ID = l.post_id WHERE l.post_id > 0 AND p.post_status != 'trash'{$type_sql} GROUP BY l.post_id, p.post_title";
 		$select_agg = "SELECT l.post_id, p.post_title,
 			COUNT(*) AS total_links,
-			SUM(CASE WHEN l.is_broken = 1 AND l.user_verified = 0 THEN 1 ELSE 0 END) AS broken,
+			SUM(CASE WHEN l.last_checked IS NOT NULL AND l.is_broken = 1 AND l.user_verified = 0 THEN 1 ELSE 0 END) AS broken,
 			SUM(CASE WHEN " . self::sql_redirect_match( 'l.' ) . " THEN 1 ELSE 0 END) AS redirect_count,
 			SUM(CASE WHEN l.last_checked IS NULL AND l.user_verified = 0 THEN 1 ELSE 0 END) AS unchecked_count";
 
@@ -1772,14 +1978,17 @@ class TSOLIIN_DB {
 		global $wpdb;
 		$ok_stale_days     = max( 1, absint( $ok_stale_days ) );
 		$broken_stale_days = max( 1, absint( $broken_stale_days ) );
-		$ok_threshold      = gmdate( 'Y-m-d H:i:s', strtotime( '-' . $ok_stale_days . ' days' ) );
-		$broken_threshold  = gmdate( 'Y-m-d H:i:s', strtotime( '-' . $broken_stale_days . ' days' ) );
+		$cache_key         = $ok_stale_days . ':' . $broken_stale_days;
+		if ( isset( self::$cron_queue_counts_cache[ $cache_key ] ) ) {
+			return self::$cron_queue_counts_cache[ $cache_key ];
+		}
+		$ok_threshold     = gmdate( 'Y-m-d H:i:s', strtotime( '-' . $ok_stale_days . ' days' ) );
+		$broken_threshold = gmdate( 'Y-m-d H:i:s', strtotime( '-' . $broken_stale_days . ' days' ) );
+
+		// Reuse pending-check cache (same COUNT as unchecked).
+		$unchecked = $this->get_pending_check_count( 0 );
 
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		$unchecked = (int) $wpdb->get_var(
-			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-			"SELECT COUNT(*) FROM {$this->table} WHERE last_checked IS NULL"
-		);
 		$broken_stale = (int) $wpdb->get_var(
 			$wpdb->prepare(
 				// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
@@ -1794,43 +2003,44 @@ class TSOLIIN_DB {
 				$ok_threshold
 			)
 		);
-		$total = (int) $wpdb->get_var(
-			$wpdb->prepare(
-				// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-				"SELECT COUNT(*) FROM {$this->table} WHERE last_checked IS NULL
-					OR ( is_broken = 1 AND user_verified = 0 AND last_checked < %s )
-					OR ( ( is_broken = 0 OR user_verified = 1 ) AND last_checked IS NOT NULL AND last_checked < %s )",
-				$broken_threshold,
-				$ok_threshold
-			)
-		);
 		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
-		return array(
+		// Buckets are mutually exclusive (NULL vs stale broken vs stale OK).
+		$total = $unchecked + $broken_stale + $ok_stale;
+
+		$result = array(
 			'unchecked'     => $unchecked,
 			'broken_stale'  => $broken_stale,
 			'ok_stale'      => $ok_stale,
 			'total'         => $total,
 		);
+		self::$cron_queue_counts_cache[ $cache_key ] = $result;
+		return $result;
 	}
 
 	/** @return int Rows with last_checked IS NULL (includes manually verified). */
 	public function get_pending_check_count( $post_id = 0 ) {
 		global $wpdb;
 		$post_id = absint( $post_id );
+		if ( isset( self::$pending_check_count_cache[ $post_id ] ) ) {
+			return self::$pending_check_count_cache[ $post_id ];
+		}
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		if ( $post_id > 0 ) {
-			return (int) $wpdb->get_var(
+			$count = (int) $wpdb->get_var(
 				$wpdb->prepare(
 					// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 					"SELECT COUNT(*) FROM {$this->table} WHERE last_checked IS NULL AND post_id = %d",
 					$post_id
 				)
 			);
+		} else {
+			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+			$count = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$this->table} WHERE last_checked IS NULL" );
 		}
-		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-		return (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$this->table} WHERE last_checked IS NULL" );
 		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		self::$pending_check_count_cache[ $post_id ] = $count;
+		return $count;
 	}
 
 	/** @return int */
@@ -1855,7 +2065,10 @@ class TSOLIIN_DB {
 	}
 
 	/**
-	 * SQL predicate for redirect list/stats (excludes active HTTP insecure rows).
+	 * SQL predicate for the Redirect tab/stats.
+	 *
+	 * Mutually exclusive with Broken, OK, Unchecked, HTTP insecure, and Manual locks:
+	 * checked HTTPS (or non-http) redirects that are not broken.
 	 *
 	 * @param string $col_prefix Optional column prefix, e.g. `l.`.
 	 * @return string
@@ -1866,7 +2079,11 @@ class TSOLIIN_DB {
 			$prefix = (string) $col_prefix;
 		}
 
-		return "( {$prefix}status_code IN (301,302,303,307,308) OR ( {$prefix}redirect_url IS NOT NULL AND {$prefix}redirect_url != '' ) ) AND {$prefix}user_verified = 0 AND NOT ( {$prefix}link_url LIKE 'http://%' AND {$prefix}is_broken = 0 )";
+		return "( {$prefix}status_code IN (301,302,303,307,308) OR ( {$prefix}redirect_url IS NOT NULL AND {$prefix}redirect_url != '' ) )"
+			. " AND {$prefix}last_checked IS NOT NULL"
+			. " AND {$prefix}is_broken = 0"
+			. " AND {$prefix}user_verified = 0"
+			. " AND {$prefix}link_url NOT LIKE 'http://%'";
 	}
 
 	/**
@@ -1882,8 +2099,15 @@ class TSOLIIN_DB {
 		$user_verified = isset( $link->user_verified ) ? (int) $link->user_verified : 0;
 		$link_url      = isset( $link->link_url ) ? (string) $link->link_url : '';
 		$redirect_url  = isset( $link->redirect_url ) ? (string) $link->redirect_url : '';
+		$last_checked  = isset( $link->last_checked ) ? $link->last_checked : null;
 
-		if ( 0 !== $user_verified || self::row_is_http_insecure( $link_url, $is_broken, $user_verified ) ) {
+		if ( null === $last_checked || '' === $last_checked ) {
+			return false;
+		}
+		if ( 0 !== $user_verified || 1 === $is_broken ) {
+			return false;
+		}
+		if ( self::row_is_http_insecure( $link_url, $is_broken, $user_verified ) ) {
 			return false;
 		}
 
@@ -1931,17 +2155,22 @@ class TSOLIIN_DB {
 
 		switch ( $filter ) {
 			case 'broken':
-				return 1 === $is_broken && 0 === $user_verified;
+				return null !== $last_checked && '' !== (string) $last_checked && 1 === $is_broken && 0 === $user_verified;
 			case 'redirect':
 				return $this->row_counts_as_redirect_tab( $link );
 			case 'ok':
-				return 200 === $status_code
+				return null !== $last_checked
+					&& '' !== (string) $last_checked
+					&& 0 === $is_broken
+					&& 200 === $status_code
 					&& 0 === $user_verified
 					&& 0 !== strpos( $link_url, 'http://' );
 			case 'unchecked':
-				return null === $last_checked && 0 === $user_verified;
+				return ( null === $last_checked || '' === (string) $last_checked ) && 0 === $user_verified;
 			case 'http_insecure':
-				return 0 === strpos( $link_url, 'http://' )
+				return null !== $last_checked
+					&& '' !== (string) $last_checked
+					&& 0 === strpos( $link_url, 'http://' )
 					&& 0 === $is_broken
 					&& 0 === $user_verified;
 			case 'manual_locked':
@@ -1986,6 +2215,8 @@ class TSOLIIN_DB {
 	 */
 	public static function clear_stats_cache() {
 		self::$stats_cache                 = array();
+		self::$pending_check_count_cache   = array();
+		self::$cron_queue_counts_cache     = array();
 		self::$broken_urls_by_post_cache = array();
 		delete_transient( 'tsoliin_unpub_cnt_all' );
 		delete_transient( 'tsoliin_unpub_cnt_v2_all' );
@@ -2010,7 +2241,11 @@ class TSOLIIN_DB {
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		$urls = $wpdb->get_col(
 			$wpdb->prepare(
-				"SELECT link_url FROM {$this->table} WHERE post_id = %d AND is_broken = 1",
+				"SELECT link_url FROM {$this->table}
+				WHERE post_id = %d
+				  AND last_checked IS NOT NULL
+				  AND is_broken = 1
+				  AND user_verified = 0",
 				$post_id
 			)
 		);
@@ -2021,6 +2256,15 @@ class TSOLIIN_DB {
 
 	/**
 	 * Aggregate dashboard counts, optionally scoped to internal/external and one post.
+	 *
+	 * Status buckets are mutually exclusive (except quality filters, which are orthogonal):
+	 * - unchecked:      last_checked IS NULL, not manual lock
+	 * - broken:         checked + is_broken, not lock
+	 * - redirect:       checked + redirect, not broken, not http://, not lock
+	 * - http_insecure:  checked + http:// + not broken, not lock (includes HTTP redirects)
+	 * - ok:             checked + HTTP 200 + not http:// + not broken, not lock
+	 * - manual_locked:  user_verified = 1
+	 * Sum of those ≈ total (residual = other checked codes, e.g. 403 without is_broken).
 	 *
 	 * @param string $scope   all|internal|external.
 	 * @param int    $post_id 0 = whole site.
@@ -2053,7 +2297,16 @@ class TSOLIIN_DB {
 		}
 
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Static SQL fragments; values passed via $wpdb->prepare().
-		$sql = "SELECT COUNT(*) AS total, SUM(CASE WHEN is_broken=1 AND user_verified=0 THEN 1 ELSE 0 END) AS broken, SUM(CASE WHEN " . self::sql_redirect_match() . " THEN 1 ELSE 0 END) AS redirect, SUM(CASE WHEN status_code=200 AND link_url NOT LIKE %s AND user_verified=0 THEN 1 ELSE 0 END) AS ok, SUM(CASE WHEN last_checked IS NULL AND user_verified=0 THEN 1 ELSE 0 END) AS unchecked, SUM(CASE WHEN link_url LIKE %s AND is_broken=0 AND user_verified=0 THEN 1 ELSE 0 END) AS http_insecure, SUM(CASE WHEN user_verified=1 THEN 1 ELSE 0 END) AS manual_locked, " . TSOLIIN_Quality::build_empty_anchor_count_expr() . " AS empty_anchor, {$generic['expr']} AS generic_anchor FROM {$this->table}{$where}";
+		$sql = "SELECT COUNT(*) AS total,"
+			. " SUM(CASE WHEN last_checked IS NOT NULL AND is_broken=1 AND user_verified=0 THEN 1 ELSE 0 END) AS broken,"
+			. " SUM(CASE WHEN " . self::sql_redirect_match() . " THEN 1 ELSE 0 END) AS redirect,"
+			. " SUM(CASE WHEN last_checked IS NOT NULL AND is_broken=0 AND status_code=200 AND link_url NOT LIKE %s AND user_verified=0 THEN 1 ELSE 0 END) AS ok,"
+			. " SUM(CASE WHEN last_checked IS NULL AND user_verified=0 THEN 1 ELSE 0 END) AS unchecked,"
+			. " SUM(CASE WHEN last_checked IS NOT NULL AND link_url LIKE %s AND is_broken=0 AND user_verified=0 THEN 1 ELSE 0 END) AS http_insecure,"
+			. " SUM(CASE WHEN user_verified=1 THEN 1 ELSE 0 END) AS manual_locked,"
+			. " " . TSOLIIN_Quality::build_empty_anchor_count_expr() . " AS empty_anchor,"
+			. " {$generic['expr']} AS generic_anchor"
+			. " FROM {$this->table}{$where}";
 		$row = $wpdb->get_row(
 			$wpdb->prepare(
 				// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
@@ -2561,7 +2814,12 @@ class TSOLIIN_DB {
 		global $wpdb;
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		return (int) $wpdb->get_var(
-			"SELECT COUNT(*) FROM {$this->table} WHERE is_broken = 1 AND (redirect_url = '' OR redirect_url IS NULL) AND status_code NOT BETWEEN 300 AND 399"
+			"SELECT COUNT(*) FROM {$this->table}
+			WHERE last_checked IS NOT NULL
+			  AND is_broken = 1
+			  AND user_verified = 0
+			  AND (redirect_url = '' OR redirect_url IS NULL)
+			  AND status_code NOT BETWEEN 300 AND 399"
 		);
 		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 	}
@@ -2581,7 +2839,9 @@ class TSOLIIN_DB {
 				"SELECT l.id, l.post_id, l.link_url, l.anchor_text, l.status_code, l.last_checked, p.post_title
 				FROM {$this->table} l
 				LEFT JOIN {$wpdb->posts} p ON p.ID = l.post_id
-				WHERE l.is_broken = 1
+				WHERE l.last_checked IS NOT NULL
+				  AND l.is_broken = 1
+				  AND l.user_verified = 0
 				  AND (l.redirect_url = '' OR l.redirect_url IS NULL)
 				  AND l.status_code NOT BETWEEN 300 AND 399
 				ORDER BY l.last_checked DESC, l.id DESC

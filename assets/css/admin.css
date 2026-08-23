@@ -1399,21 +1399,39 @@
 	max-width: 36em;
 }
 
-.tsoliin-apply-anyway-wrap label,
-.tsoliin-ignore-domain-wrap label {
+.tsoliin-modal__content .tsoliin-apply-anyway-wrap label,
+.tsoliin-modal__content .tsoliin-ignore-domain-wrap label {
 	display: flex;
 	align-items: flex-start;
-	gap: 6px;
+	gap: 8px;
 	font-weight: 400;
+	margin-bottom: 0;
+	line-height: 1.45;
+	color: #1d2327;
 }
 
-.tsoliin-apply-anyway-wrap input,
-.tsoliin-ignore-domain-wrap input {
-	margin-top: 3px;
+/* Override WP admin checkbox negative margin so the box sits on the first text line. */
+.tsoliin-modal__content .tsoliin-apply-anyway-wrap input[type="checkbox"],
+.tsoliin-modal__content .tsoliin-ignore-domain-wrap input[type="checkbox"] {
+	flex: 0 0 auto;
+	width: 1rem;
+	height: 1rem;
+	margin: 0.15em 0 0;
+	padding: 0;
+	vertical-align: top;
 }
 
 @media screen and (max-width: 782px) {
 	.tsoliin-preview-grid {
 		grid-template-columns: 1fr;
 	}
+}
+
+
+/* ── History table ─────────────────────────────────────────────── */
+.tsoliin-history-table code {
+	display: inline-block;
+	max-width: 28em;
+	white-space: pre-wrap;
+	word-break: break-all;
 }

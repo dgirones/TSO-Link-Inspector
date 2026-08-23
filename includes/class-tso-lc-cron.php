@@ -224,8 +224,9 @@ class TSOLIIN_Cron {
 			$total = (int) $this->db->get_stats()['total'];
 		}
 
-		if ( $resume && $this->db->get_pending_check_count( $post_id ) > 0 ) {
-			$checked = max( 0, $total - $this->db->get_pending_check_count( $post_id ) );
+		$pending = $this->db->get_pending_check_count( $post_id );
+		if ( $resume && $pending > 0 ) {
+			$checked = max( 0, $total - $pending );
 		} else {
 			$this->db->reset_for_recheck( $post_id );
 			$checked = 0;
@@ -246,10 +247,14 @@ class TSOLIIN_Cron {
 		spawn_cron();
 	}
 
-	/** Stop a running background check. */
+	/**
+	 * Stop a running background check.
+	 *
+	 * Keeps post_id / total / checked so the resume UI can show accurate
+	 * pending counts and progress after a manual stop.
+	 */
 	public function stop_bg_check() {
 		update_option( 'tsoliin_bg_check_running', 0, false );
-		update_option( 'tsoliin_bg_check_post_id', 0, false );
 		wp_clear_scheduled_hook( self::HOOK_BG_STEP );
 	}
 
@@ -329,7 +334,7 @@ class TSOLIIN_Cron {
 	/**
 	 * Get current background check progress.
 	 *
-	 * @return array { running: bool, checked: int, total: int, pct: int, post_id: int }
+	 * @return array{ running: bool, checked: int, total: int, pct: int, post_id: int, pending: int }
 	 */
 	public function get_bg_progress() {
 		$running = (bool) get_option( 'tsoliin_bg_check_running', 0 );
@@ -349,7 +354,9 @@ class TSOLIIN_Cron {
 			}
 		}
 
-		if ( $running && $total > 0 ) {
+		// Keep progress in sync with the real queue even when the run is stopped (resume UI).
+		$pending = 0;
+		if ( $total > 0 ) {
 			$pending = $this->db->get_pending_check_count( $post_id );
 			if ( $post_id > 0 ) {
 				$live_total = (int) $this->db->get_stats_for_post( $post_id )['total'];
@@ -368,6 +375,7 @@ class TSOLIIN_Cron {
 			'total'   => $total,
 			'pct'     => $pct,
 			'post_id' => $post_id,
+			'pending' => $pending,
 		);
 	}
 

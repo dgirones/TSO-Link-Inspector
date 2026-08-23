@@ -18,6 +18,7 @@ global $wpdb;
 // ── Drop custom database tables (canonical + legacy name) ────────────────
 $tsoliin_tables = array(
 	$wpdb->prefix . 'tso_link_inspector',
+	$wpdb->prefix . 'tso_link_inspector_history',
 	$wpdb->prefix . 'pc_tso_link_inspector', // legacy table name
 );
 foreach ( $tsoliin_tables as $tsoliin_table ) {

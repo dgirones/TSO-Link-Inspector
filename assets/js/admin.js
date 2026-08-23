@@ -144,6 +144,7 @@
 			this.$startBtn     = $( '#tsoliin-start-scan' );
 			this.$stopScanBtn  = $( '#tsoliin-stop-scan' );
 			this.$checkBtn     = $( '#tsoliin-start-check' );
+			this.$restartBtn   = $( '#tsoliin-restart-check' );
 			this.$stopBtn      = $( '#tsoliin-stop-check' );
 			this.$progress     = $( '#tsoliin-scan-progress' );
 			this.$progressBar  = this.$progress.find( '.tsoliin-progress__bar' );
@@ -176,6 +177,7 @@
 			if ( parseInt( tsoliinData.bgRunning, 10 ) === 1 ) {
 				this.$checkProg.show();
 				this.$checkBtn.prop( 'disabled', true );
+				this.$restartBtn.hide();
 				this.$startBtn.prop( 'disabled', true );
 				this.$stopBtn.show();
 				this.startPolling();
@@ -222,6 +224,18 @@
 				self.startBgCheck();
 			} );
 
+			this.$restartBtn.on( 'click', function () {
+				if ( $( this ).prop( 'disabled' ) || $( this ).is( ':hidden' ) ) { return; }
+				if ( self.scanning && ! window.confirm( tsoliinData.i18n.confirmCheckWhileScan ) ) {
+					return;
+				}
+				if ( ! window.confirm( tsoliinData.i18n.confirmRestartCheck ) ) {
+					return;
+				}
+				self.startBgCheck( true, false );
+			} );
+
+
 			this.$stopBtn.on( 'click', function () {
 				self.stopBgCheck();
 			} );
@@ -233,8 +247,8 @@
 				}
 			} );
 
-			$( document ).on( 'submit', '.tsoliin-reset-form', function ( e ) {
-				var msg = $( this ).find( '#tsoliin-reset-all' ).attr( 'data-tsoliin-confirm' );
+			$( document ).on( 'submit', '.tsoliin-reset-form, .tsoliin-clear-history-form', function ( e ) {
+				var msg = $( this ).attr( 'data-tsoliin-confirm' ) || $( this ).find( '[data-tsoliin-confirm]' ).first().attr( 'data-tsoliin-confirm' );
 				if ( msg && ! window.confirm( msg ) ) {
 					e.preventDefault();
 				}
@@ -391,9 +405,24 @@
 		},
 
 		resetCheckButton: function () {
-			var label = parseInt( tsoliinData.viewPostId, 10 ) > 0
-				? tsoliinData.i18n.checkThisPost
-				: tsoliinData.i18n.checkNow;
+			var postId = parseInt( tsoliinData.viewPostId, 10 ) || 0;
+			var pending = parseInt( tsoliinData.pendingCheck, 10 ) || 0;
+			var label;
+			if ( pending > 0 ) {
+				label = postId > 0
+					? ( tsoliinData.i18n.continueThisPost || tsoliinData.i18n.checkThisPost )
+					: ( tsoliinData.i18n.continueCheck || tsoliinData.i18n.checkNow );
+				if ( this.$restartBtn && this.$restartBtn.length ) {
+					this.$restartBtn.show().prop( 'disabled', false );
+				}
+			} else {
+				label = postId > 0
+					? tsoliinData.i18n.checkThisPost
+					: tsoliinData.i18n.checkNow;
+				if ( this.$restartBtn && this.$restartBtn.length ) {
+					this.$restartBtn.hide();
+				}
+			}
 			this.$checkBtn.prop( 'disabled', false ).html(
 				'<span class="dashicons dashicons-yes-alt"></span> ' + label
 			);
@@ -493,7 +522,7 @@
 				self.$checkProg.hide();
 				self.$checkBar.css( 'width', '0%' );
 				self.$checkLbl.text( '' );
-				self.startBgCheck( true );
+				self.startBgCheck( true, true );
 			}, 800 );
 		},
 
@@ -512,12 +541,16 @@
 		// ---------------------------------------------------------------
 		// Background check – server does the work, browser just polls
 		// ---------------------------------------------------------------
-		startBgCheck: function ( skipConfirm ) {
+		startBgCheck: function ( skipConfirm, resume ) {
 			var self = this;
 			var postId = parseInt( tsoliinData.viewPostId, 10 ) || 0;
+			var pending = parseInt( tsoliinData.pendingCheck, 10 ) || 0;
+			var willResume = ( typeof resume === 'undefined' ) ? ( pending > 0 ) : !! resume;
 
-			if ( ! skipConfirm ) {
-				if ( postId <= 0 && ! window.confirm( tsoliinData.i18n.confirmFullCheck ) ) {
+			// Resume ("Continue check") starts immediately — the button label already states intent.
+			// Only ask before a full site-wide recheck from zero.
+			if ( ! skipConfirm && ! willResume && postId <= 0 && tsoliinData.i18n.confirmFullCheck ) {
+				if ( ! window.confirm( tsoliinData.i18n.confirmFullCheck ) ) {
 					return;
 				}
 			}
@@ -525,10 +558,15 @@
 			this.completed = false;
 
 			this.$checkBtn.prop( 'disabled', true );
+			if ( this.$restartBtn && this.$restartBtn.length ) {
+				this.$restartBtn.hide();
+			}
 			this.$startBtn.prop( 'disabled', true );
 			this.$stopBtn.show();
 			this.$checkProg.show();
-			this.updateCheckProgress( 0, tsoliinData.i18n.checking );
+			// Keep last known % while the server decides resume vs full reset.
+			var startPct = willResume ? ( parseInt( tsoliinData.bgPct, 10 ) || 0 ) : 0;
+			this.updateCheckProgress( startPct, tsoliinData.i18n.checking );
 
 			$.ajax( {
 				url   : tsoliinData.ajaxUrl,
@@ -536,12 +574,20 @@
 				data  : {
 					action   : 'tsoliin_start_bg_check',
 					nonce    : tsoliinData.nonce,
-					resume   : '0',
+					// Resume partial progress (pending last_checked IS NULL). Only resets when the queue is empty.
+					resume   : willResume ? '1' : '0',
 					post_id  : postId
 				},
 				success: function ( r ) {
 					if ( r.success ) {
 						tsoliinData.bgRunning = 1;
+						if ( typeof r.data.pct !== 'undefined' ) {
+							tsoliinData.bgPct = r.data.pct;
+							self.updateCheckProgress( r.data.pct, tsoliinData.i18n.checking );
+						}
+						if ( typeof r.data.pending !== 'undefined' ) {
+							tsoliinData.pendingCheck = r.data.pending;
+						}
 						self.showNotice(
 							'✅ ' + ( r.data.message || tsoliinData.i18n.checkStarted ),
 							'success'
@@ -567,18 +613,34 @@
 			var self = this;
 			this.stopPolling();
 			tsoliinData.bgRunning = 0;
-			this.resetCheckButton();
+			if ( this.$restartBtn && this.$restartBtn.length ) {
+				this.$restartBtn.hide();
+			}
 			this.$startBtn.prop( 'disabled', false );
 			this.$stopBtn.hide();
 			$.ajax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
-				data  : { action: 'tsoliin_stop_bg_check', nonce: tsoliinData.nonce },
-				success: function () {
-					self.updateCheckProgress( 0, tsoliinData.i18n.stopped );
+				data  : {
+					action : 'tsoliin_stop_bg_check',
+					nonce  : tsoliinData.nonce,
+					post_id: parseInt( tsoliinData.viewPostId, 10 ) || 0
+				},
+				success: function ( r ) {
+					if ( r && r.success && r.data && typeof r.data.pending !== 'undefined' ) {
+						tsoliinData.pendingCheck = r.data.pending;
+					}
+					if ( r && r.success && r.data && typeof r.data.pct !== 'undefined' ) {
+						tsoliinData.bgPct = r.data.pct;
+					}
+					self.resetCheckButton();
+					self.updateCheckProgress( parseInt( tsoliinData.bgPct, 10 ) || 0, tsoliinData.i18n.stopped );
 					setTimeout( function () {
 						self.$checkProg.fadeOut( 400 );
 					}, 2500 );
+				},
+				error: function () {
+					self.resetCheckButton();
 				}
 			} );
 		},
@@ -604,7 +666,11 @@
 			$.ajax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
-				data  : { action: 'tsoliin_check_progress', nonce: tsoliinData.nonce },
+				data  : {
+					action : 'tsoliin_check_progress',
+					nonce  : tsoliinData.nonce,
+					post_id: parseInt( tsoliinData.viewPostId, 10 ) || 0
+				},
 				success: function ( r ) {
 					if ( ! r.success || self.completed ) {
 						self.stopPolling();
@@ -621,6 +687,12 @@
 					var d = r.data;
 
 					self.updateCheckProgress( d.pct, d.message );
+					if ( typeof d.pending !== 'undefined' ) {
+						tsoliinData.pendingCheck = d.pending;
+					}
+					if ( typeof d.pct !== 'undefined' ) {
+						tsoliinData.bgPct = d.pct;
+					}
 
 					if ( d.done ) {
 						// Set completed flag BEFORE stopping — prevents any race condition.
@@ -2013,6 +2085,7 @@
 					nonce         : tsoliinData.nonce,
 					link_id       : linkId,
 					new_url       : newUrl,
+					change_type   : 'suggest',
 					apply_anyway  : opts.applyAnyway ? 1 : 0,
 					ignore_domain : opts.ignoreDomain ? 1 : 0
 				}, self.listFilterParam() ),

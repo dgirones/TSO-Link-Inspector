@@ -33,6 +33,9 @@ class TSOLIIN_Admin {
 	/** @var string */
 	private $settings_page_hook = '';
 
+	/** @var array<string,mixed>|null Request-cached background check progress. */
+	private $bg_progress_cache = null;
+
 	public function __construct( TSOLIIN_DB $db, TSOLIIN_Scanner $scanner, TSOLIIN_HTTP $http, TSOLIIN_Cron $cron ) {
 		$this->db      = $db;
 		$this->scanner = $scanner;
@@ -67,6 +70,18 @@ class TSOLIIN_Admin {
 		add_action( 'wp_ajax_tsoliin_upgrade_https',     array( $this, 'ajax_upgrade_https' ) );
 		add_action( 'wp_ajax_tsoliin_link_preview',      array( $this, 'ajax_link_preview' ) );
 		add_action( 'wp_ajax_tsoliin_search_list',       array( $this, 'ajax_search_list' ) );
+	}
+
+	/**
+	 * Background check progress for this admin request (single read).
+	 *
+	 * @return array{ running: bool, checked: int, total: int, pct: int, post_id: int, pending?: int }
+	 */
+	private function get_cached_bg_progress() {
+		if ( null === $this->bg_progress_cache ) {
+			$this->bg_progress_cache = $this->cron->get_bg_progress();
+		}
+		return $this->bg_progress_cache;
 	}
 
 	// =========================================================================
@@ -198,7 +213,7 @@ class TSOLIIN_Admin {
 		wp_enqueue_style( 'tsoliin-admin', TSOLIIN_PLUGIN_URL . 'assets/css/admin.css', array(), TSOLIIN_VERSION );
 		wp_enqueue_script( 'tsoliin-admin', TSOLIIN_PLUGIN_URL . 'assets/js/admin.js', array( 'jquery' ), TSOLIIN_VERSION, true );
 
-		$bg = $this->cron->get_bg_progress();
+		$bg = $this->get_cached_bg_progress();
 
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$view_post_id = isset( $_GET['post_id'] ) ? absint( $_GET['post_id'] ) : 0;
@@ -226,6 +241,7 @@ class TSOLIIN_Admin {
 			'listOrder'   => isset( $_GET['order'] ) ? strtoupper( sanitize_key( wp_unslash( $_GET['order'] ) ) ) : 'DESC', // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 			'settingsUrl' => admin_url( 'tools.php?page=tso-link-inspector-settings' ),
 			'helpUrl'     => admin_url( 'tools.php?page=tso-link-inspector-settings&tab=help' ),
+			'historyUrl'  => admin_url( 'tools.php?page=tso-link-inspector-settings&tab=history' ),
 			'onboardingDismissed' => (int) (bool) get_user_meta( $user_id, 'tsoliin_onboarding_dismissed', true ),
 			'relativeUrlTool'     => TSOLIIN_Support::is_relative_url_tool_enabled() ? 1 : 0,
 			'createRevision'      => TSOLIIN_Support::is_create_revision_enabled() ? 1 : 0,
@@ -260,6 +276,8 @@ class TSOLIIN_Admin {
 			'bgChecked'  => $bg['checked'],
 			'bgTotal'    => $bg['total'],
 			'bgPct'      => $bg['pct'],
+			// Request-cached COUNT; same key as get_bg_progress() when not filtering by post.
+			'pendingCheck' => (int) $this->db->get_pending_check_count( absint( $view_post_id ) ),
 			'refreshInterval' => 8000, // ms between stat card auto-refreshes
 			'i18n' => array(
 				'scanning'      => __( 'Scanning...', 'tso-link-inspector' ),
@@ -268,15 +286,21 @@ class TSOLIIN_Admin {
 				'checkDone'     => __( 'Check completed!', 'tso-link-inspector' ),
 				'checkCompleteWaiting' => __( 'Check completed. Waiting for other actions to finish…', 'tso-link-inspector' ),
 				'checkStarted'  => __( 'Check started. You can continue browsing.', 'tso-link-inspector' ),
+				'checkResumed'  => __( 'Resuming check from where it left off. You can continue browsing.', 'tso-link-inspector' ),
 				'stopped'       => __( 'Stopped', 'tso-link-inspector' ),
 				'scanNow'       => __( 'Scan now', 'tso-link-inspector' ),
 				'checkNow'      => __( 'Check now', 'tso-link-inspector' ),
 				'checkThisPost' => __( 'Check this post', 'tso-link-inspector' ),
+				'continueCheck' => __( 'Continue check', 'tso-link-inspector' ),
+				'continueThisPost' => __( 'Continue this post', 'tso-link-inspector' ),
+				'restartCheck'  => __( 'Restart from zero', 'tso-link-inspector' ),
 				'stop'          => __( 'Stop', 'tso-link-inspector' ),
 				'stopScan'      => __( 'Stop scan', 'tso-link-inspector' ),
 				'scanStopped'   => __( 'Scan stopped.', 'tso-link-inspector' ),
 				'scanThenCheck' => __( 'Scan complete. Starting HTTP check…', 'tso-link-inspector' ),
 				'confirmFullCheck' => __( 'Check now will send an HTTP request to every link saved in the database. On large sites this can take a long time. Continue?', 'tso-link-inspector' ),
+				'confirmResumeCheck' => __( 'There are unchecked links left. Continue from where the last check stopped?', 'tso-link-inspector' ),
+				'confirmRestartCheck' => __( 'Restart from zero? Every link will be rechecked from scratch, including ones already checked in this run.', 'tso-link-inspector' ),
 				'confirmScanWhileCheck' => __( 'A background check is still running. Start a new scan anyway?', 'tso-link-inspector' ),
 				'confirmCheckWhileScan' => __( 'A scan is still running. Start checking anyway?', 'tso-link-inspector' ),
 				'recheck'       => __( 'Recheck', 'tso-link-inspector' ),
@@ -302,7 +326,7 @@ class TSOLIIN_Admin {
 				'applyUrl'      => __( 'Apply', 'tso-link-inspector' ),
 				'applyAnyway'   => __( 'Apply anyway', 'tso-link-inspector' ),
 				'applyAnywayIgnore' => __( 'Apply and ignore domain', 'tso-link-inspector' ),
-				'confirmApplyAnyway' => __( 'This server cannot verify the URL (geo-block, bot wall, or timeout). Save it anyway?', 'tso-link-inspector' ),
+				'confirmApplyAnyway' => __( 'This server cannot confirm the URL (geo-block, bot wall, or timeout). Save it anyway?', 'tso-link-inspector' ),
 				'confirmApplyAnywayIgnore' => __( 'Save this URL and add its domain to the ignore list? Future scans will skip this host.', 'tso-link-inspector' ),
 				'staleRowGone'  => __( 'This list row is already gone (the link was updated or removed from the content).', 'tso-link-inspector' ),
 				'itemsChecked'  => __( 'links rechecked.', 'tso-link-inspector' ),
@@ -396,7 +420,7 @@ class TSOLIIN_Admin {
 		$stats      = $view_post_id
 			? $this->db->get_stats_for_post( $view_post_id, $list_scope )
 			: $this->db->get_stats( $list_scope );
-		$bg       = $this->cron->get_bg_progress();
+		$bg       = $this->get_cached_bg_progress();
 		$last_scan  = (string) get_option( 'tsoliin_last_full_scan', '' );
 		$last_check = (string) get_option( 'tsoliin_last_check_batch', '' );
 		$total_posts    = $this->scanner->get_total_posts();
@@ -532,15 +556,24 @@ class TSOLIIN_Admin {
 		echo '</p>';
 
 		// Toolbar.
+		$pending_check      = (int) $this->db->get_pending_check_count( absint( $view_post_id ) );
 		$btn_check_disabled = $bg['running'] ? ' disabled' : '';
-		if ( $view_post_id ) {
-			$btn_check_label = $bg['running'] ? __( 'Checking...', 'tso-link-inspector' ) : __( 'Check this post', 'tso-link-inspector' );
+		$show_restart       = ( ! $bg['running'] && $pending_check > 0 );
+		if ( $bg['running'] ) {
+			$btn_check_label = __( 'Checking...', 'tso-link-inspector' );
+		} elseif ( $pending_check > 0 ) {
+			$btn_check_label = $view_post_id
+				? __( 'Continue this post', 'tso-link-inspector' )
+				: __( 'Continue check', 'tso-link-inspector' );
+		} elseif ( $view_post_id ) {
+			$btn_check_label = __( 'Check this post', 'tso-link-inspector' );
 		} else {
-			$btn_check_label = $bg['running'] ? __( 'Checking...', 'tso-link-inspector' ) : __( 'Check now', 'tso-link-inspector' );
+			$btn_check_label = __( 'Check now', 'tso-link-inspector' );
 		}
 		$check_prog_display = $bg['running'] ? 'block' : 'none';
 		$check_prog_pct     = $bg['pct'];
 		$stop_check_style   = $bg['running'] ? '' : ' style="display:none;"';
+		$restart_style      = $show_restart ? '' : ' style="display:none;"';
 
 		echo '<div class="tsoliin-toolbar">';
 		echo '<button type="button" id="tsoliin-start-scan" class="button button-primary">';
@@ -554,6 +587,10 @@ class TSOLIIN_Admin {
 		echo '<button type="button" id="tsoliin-start-check" class="button tsoliin-btn-check"' . $btn_check_disabled . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		echo '<span class="dashicons dashicons-yes-alt"></span> ';
 		echo esc_html( $btn_check_label );
+		echo '</button>';
+		echo '<button type="button" id="tsoliin-restart-check" class="button button-secondary"' . $restart_style . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+		echo '<span class="dashicons dashicons-update"></span> ';
+		echo esc_html__( 'Restart from zero', 'tso-link-inspector' );
 		echo '</button>';
 		echo '<button type="button" id="tsoliin-stop-check" class="button button-secondary"' . $stop_check_style . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		echo '<span class="dashicons dashicons-no-alt"></span> ';
@@ -626,6 +663,7 @@ class TSOLIIN_Admin {
 		echo '<div class="tsoliin-action-bar">';
 		echo '<div class="tsoliin-action-bar__left">';
 		echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector-settings' ) ) . '" class="button button-secondary">' . esc_html__( 'Settings', 'tso-link-inspector' ) . '</a> ';
+		echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector-settings&tab=history' ) ) . '" class="button button-secondary">' . esc_html__( 'History', 'tso-link-inspector' ) . '</a> ';
 		echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector-settings&tab=help' ) ) . '" class="button button-secondary">' . esc_html__( 'Help', 'tso-link-inspector' ) . '</a> ';
 		if ( ! $view_post ) {
 			if ( $summary_view ) {
@@ -710,11 +748,11 @@ class TSOLIIN_Admin {
 		echo '<span id="tsoliin-modal-anchor-note" class="description tsoliin-modal-anchor-note" style="display:none;"></span></p>';
 		echo '<p class="tsoliin-apply-anyway-wrap"><label for="tsoliin-apply-anyway">';
 		echo '<input type="checkbox" id="tsoliin-apply-anyway" value="1" /> ';
-		echo esc_html__( 'Save even if this server cannot verify the URL (geo-block, bot wall, or timeout).', 'tso-link-inspector' );
+		echo esc_html__( 'Save even if this server cannot confirm the URL (geo-block, bot wall, or timeout — often HTTPS).', 'tso-link-inspector' );
 		echo '</label></p>';
 		echo '<p class="tsoliin-ignore-domain-wrap"><label for="tsoliin-ignore-domain">';
 		echo '<input type="checkbox" id="tsoliin-ignore-domain" value="1" /> ';
-		echo esc_html__( 'Also add this domain to the ignore list (skip future scans and HTTP checks).', 'tso-link-inspector' );
+		echo esc_html__( 'Also add the domain of the URL you are saving to the ignore list (skip future scans and HTTP checks).', 'tso-link-inspector' );
 		echo '</label></p>';
 		echo '<div class="tsoliin-modal__actions">';
 		echo '<button type="button" id="tsoliin-modal-save" class="button button-primary">' . esc_html__( 'Save URL', 'tso-link-inspector' ) . '</button>';
@@ -860,8 +898,9 @@ class TSOLIIN_Admin {
 			return;
 		}
 
-		$help_url    = admin_url( 'tools.php?page=tso-link-inspector-settings&tab=help' );
-		$broken_url  = admin_url( 'tools.php?page=tso-link-inspector&filter=broken' );
+		$help_url     = admin_url( 'tools.php?page=tso-link-inspector-settings&tab=help' );
+		$history_url  = admin_url( 'tools.php?page=tso-link-inspector-settings&tab=history' );
+		$broken_url   = admin_url( 'tools.php?page=tso-link-inspector&filter=broken' );
 		$settings_url = admin_url( 'tools.php?page=tso-link-inspector-settings' );
 
 		echo '<div id="tsoliin-onboarding" class="notice notice-info tsoliin-onboarding">';
@@ -877,6 +916,7 @@ class TSOLIIN_Admin {
 		echo '<p class="tsoliin-onboarding__links">';
 		echo '<a href="' . esc_url( $broken_url ) . '" class="button button-secondary">' . esc_html__( 'Open Broken links', 'tso-link-inspector' ) . '</a> ';
 		echo '<a href="' . esc_url( $help_url ) . '" class="button button-secondary">' . esc_html__( 'Read help', 'tso-link-inspector' ) . '</a> ';
+		echo '<a href="' . esc_url( $history_url ) . '" class="button button-secondary">' . esc_html__( 'History', 'tso-link-inspector' ) . '</a> ';
 		echo '<a href="' . esc_url( $settings_url ) . '" class="button button-secondary">' . esc_html__( 'Settings', 'tso-link-inspector' ) . '</a>';
 		echo '</p>';
 		echo '<button type="button" class="notice-dismiss tsoliin-onboarding-dismiss" aria-label="' . esc_attr__( 'Dismiss', 'tso-link-inspector' ) . '"></button>';
@@ -914,23 +954,139 @@ class TSOLIIN_Admin {
 	}
 
 	/**
-	 * Settings / Help tab navigation.
+	 * Settings / History / Help tab navigation.
 	 *
 	 * @param string $active_tab Active tab slug.
 	 */
 	private function render_settings_nav_tabs( $active_tab ) {
-		$base   = admin_url( 'tools.php?page=tso-link-inspector-settings' );
-		$tabs   = array(
+		$base = admin_url( 'tools.php?page=tso-link-inspector-settings' );
+		$tabs = array(
 			'settings' => __( 'Settings', 'tso-link-inspector' ),
+			'history'  => __( 'History', 'tso-link-inspector' ),
 			'help'     => __( 'Help', 'tso-link-inspector' ),
 		);
 		echo '<nav class="nav-tab-wrapper tsoliin-settings-tabs" aria-label="' . esc_attr__( 'Settings sections', 'tso-link-inspector' ) . '">';
 		foreach ( $tabs as $slug => $label ) {
-			$url    = 'help' === $slug ? add_query_arg( 'tab', 'help', $base ) : $base;
+			$url    = ( 'settings' === $slug ) ? $base : add_query_arg( 'tab', $slug, $base );
 			$active = $active_tab === $slug ? ' nav-tab-active' : '';
 			echo '<a href="' . esc_url( $url ) . '" class="nav-tab' . esc_attr( $active ) . '">' . esc_html( $label ) . '</a>';
 		}
 		echo '</nav>';
+	}
+
+	/**
+	 * Labels for URL change_type history keys.
+	 *
+	 * @return array<string, string>
+	 */
+	private function get_history_change_type_labels() {
+		return array(
+			'edit'           => __( 'Edit', 'tso-link-inspector' ),
+			'suggest'        => __( 'Suggest', 'tso-link-inspector' ),
+			'relative'       => __( 'Relative', 'tso-link-inspector' ),
+			'https'          => __( 'HTTPS', 'tso-link-inspector' ),
+			'bulk_relative'  => __( 'Bulk relative', 'tso-link-inspector' ),
+			'bulk_https'     => __( 'Bulk HTTPS', 'tso-link-inspector' ),
+		);
+	}
+
+	/**
+	 * History tab: recent URL changes from Edit / Suggest / relative / HTTPS.
+	 */
+	private function render_settings_history_tab() {
+		$max_rows = (int) TSOLIIN_DB::HISTORY_MAX_ROWS;
+		$count    = (int) $this->db->count_url_change_history();
+		$rows     = $this->db->get_url_change_history( $max_rows );
+		$labels   = $this->get_history_change_type_labels();
+		$date_fmt = get_option( 'date_format' ) . ' ' . get_option( 'time_format' );
+
+		echo '<div class="tsoliin-history-panel">';
+		echo '<p>' . esc_html__( 'This list stores recent URL changes from Edit link, Suggest apply, Convert to /path, and Upgrade to HTTPS (including bulk actions).', 'tso-link-inspector' ) . '</p>';
+		echo '<p>' . esc_html(
+			sprintf(
+				/* translators: %d: maximum number of history rows kept */
+				__( 'Up to %d records are kept. When the limit is reached, the oldest entries are removed automatically.', 'tso-link-inspector' ),
+				$max_rows
+			)
+		) . '</p>';
+		echo '<p><strong>' . esc_html(
+			sprintf(
+				/* translators: 1: current history row count, 2: maximum rows */
+				__( 'Records: %1$d / %2$d', 'tso-link-inspector' ),
+				$count,
+				$max_rows
+			)
+		) . '</strong></p>';
+
+		$clear_confirm = __( 'Delete all history records?', 'tso-link-inspector' ) . "\n\n"
+			. __( 'This only clears the URL change log. Your posts and the link list are not changed.', 'tso-link-inspector' );
+		echo '<form method="post" action="" class="tsoliin-clear-history-form" data-tsoliin-confirm="' . esc_attr( $clear_confirm ) . '">';
+		wp_nonce_field( 'tsoliin_clear_history', 'tsoliin_clear_history' );
+		echo '<p><button type="submit" name="tsoliin_clear_history_submit" value="1" class="button button-secondary"' . ( $count < 1 ? ' disabled' : '' ) . '>' . esc_html__( 'Delete all history records', 'tso-link-inspector' ) . '</button></p>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- disabled attr is static.
+		echo '</form>';
+
+		if ( empty( $rows ) ) {
+			echo '<p><em>' . esc_html__( 'No URL changes recorded yet.', 'tso-link-inspector' ) . '</em></p>';
+			echo '</div>';
+			return;
+		}
+
+		echo '<table class="widefat striped tsoliin-history-table">';
+		echo '<thead><tr>';
+		echo '<th scope="col">' . esc_html__( 'Date', 'tso-link-inspector' ) . '</th>';
+		echo '<th scope="col">' . esc_html__( 'Old URL', 'tso-link-inspector' ) . '</th>';
+		echo '<th scope="col">' . esc_html__( 'New URL', 'tso-link-inspector' ) . '</th>';
+		echo '<th scope="col">' . esc_html__( 'Type', 'tso-link-inspector' ) . '</th>';
+		echo '<th scope="col">' . esc_html__( 'User', 'tso-link-inspector' ) . '</th>';
+		echo '<th scope="col">' . esc_html__( 'Post', 'tso-link-inspector' ) . '</th>';
+		echo '</tr></thead><tbody>';
+
+		foreach ( $rows as $row ) {
+			$created_raw = isset( $row->created_at ) ? (string) $row->created_at : '';
+			$created_ts  = $created_raw ? strtotime( $created_raw . ' UTC' ) : false;
+			$date_label  = ( false !== $created_ts ) ? wp_date( $date_fmt, $created_ts ) : $created_raw;
+			$old_url     = isset( $row->old_url ) ? (string) $row->old_url : '';
+			$new_url     = isset( $row->new_url ) ? (string) $row->new_url : '';
+			$type_key    = isset( $row->change_type ) ? sanitize_key( (string) $row->change_type ) : 'edit';
+			$type_label  = isset( $labels[ $type_key ] ) ? $labels[ $type_key ] : $type_key;
+			$user_id     = isset( $row->user_id ) ? absint( $row->user_id ) : 0;
+			$post_id     = isset( $row->post_id ) ? absint( $row->post_id ) : 0;
+
+			$user_label = '—';
+			if ( $user_id > 0 ) {
+				$user = get_userdata( $user_id );
+				if ( $user ) {
+					$user_label = $user->display_name;
+				}
+			}
+
+			$post_label = '—';
+			if ( $post_id > 0 ) {
+				$title = get_the_title( $post_id );
+				if ( '' === $title ) {
+					/* translators: %d: post ID */
+					$title = sprintf( __( 'Post #%d', 'tso-link-inspector' ), $post_id );
+				}
+				$edit_link = get_edit_post_link( $post_id );
+				if ( $edit_link ) {
+					$post_label = '<a href="' . esc_url( $edit_link ) . '">' . esc_html( $title ) . '</a>';
+				} else {
+					$post_label = esc_html( $title );
+				}
+			}
+
+			echo '<tr>';
+			echo '<td>' . esc_html( $date_label ) . '</td>';
+			echo '<td><code>' . esc_html( $old_url ) . '</code></td>';
+			echo '<td><code>' . esc_html( $new_url ) . '</code></td>';
+			echo '<td>' . esc_html( $type_label ) . '</td>';
+			echo '<td>' . esc_html( $user_label ) . '</td>';
+			echo '<td>' . $post_label . '</td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above.
+			echo '</tr>';
+		}
+
+		echo '</tbody></table>';
+		echo '</div>';
 	}
 
 	/**
@@ -1086,6 +1242,15 @@ class TSOLIIN_Admin {
 			echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Records deleted.', 'tso-link-inspector' ) . '</p></div>';
 		}
 
+		if ( isset( $_POST['tsoliin_clear_history_submit'] ) && current_user_can( 'manage_options' ) ) {
+			$clear_nonce = isset( $_POST['tsoliin_clear_history'] ) ? sanitize_text_field( wp_unslash( $_POST['tsoliin_clear_history'] ) ) : '';
+			if ( wp_verify_nonce( $clear_nonce, 'tsoliin_clear_history' ) ) {
+				$this->db->clear_url_change_history();
+				echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'History records deleted.', 'tso-link-inspector' ) . '</p></div>';
+			}
+		}
+
+
 		$s           = get_option( 'tsoliin_settings', array() );
 		$timeout     = isset( $s['timeout'] ) ? absint( $s['timeout'] ) : 15;
 		$scan_meta   = ! empty( $s['scan_meta'] );
@@ -1121,7 +1286,7 @@ class TSOLIIN_Admin {
 
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$settings_tab = isset( $_GET['tab'] ) ? sanitize_key( wp_unslash( $_GET['tab'] ) ) : 'settings';
-		if ( ! in_array( $settings_tab, array( 'settings', 'help' ), true ) ) {
+		if ( ! in_array( $settings_tab, array( 'settings', 'history', 'help' ), true ) ) {
 			$settings_tab = 'settings';
 		}
 
@@ -1142,6 +1307,13 @@ class TSOLIIN_Admin {
 		$this->render_settings_nav_tabs( $settings_tab );
 
 		$this->render_scan_coverage_notices();
+
+
+		if ( 'history' === $settings_tab ) {
+			$this->render_settings_history_tab();
+			echo '</div>';
+			return;
+		}
 
 		if ( 'help' === $settings_tab ) {
 			$this->render_settings_help_tab();
@@ -2097,7 +2269,7 @@ class TSOLIIN_Admin {
 			wp_send_json_error(
 				array(
 					'unverified' => true,
-					'message'    => __( 'HTTPS could not be verified from the server. Tick “Save even if this server cannot verify the URL” to apply it anyway, or mark the link as OK manually.', 'tso-link-inspector' ),
+					'message'    => __( 'HTTPS could not be verified from the server. Tick “Save even if this server cannot confirm the URL” to apply it anyway, or mark the link as OK manually.', 'tso-link-inspector' ),
 				)
 			);
 		}
@@ -2179,7 +2351,11 @@ class TSOLIIN_Admin {
 
 		$response = array();
 		if ( $url_changed && $url_done ) {
-			$this->db->update_link_url( $link_id, $new_url );
+			$change_type = isset( $_POST['change_type'] ) ? sanitize_key( wp_unslash( $_POST['change_type'] ) ) : 'edit'; // phpcs:ignore WordPress.Security.NonceVerification.Missing -- verified in check_ajax_referer above.
+			if ( ! in_array( $change_type, array( 'edit', 'suggest' ), true ) ) {
+				$change_type = 'edit';
+			}
+			$this->db->update_link_url( $link_id, $new_url, $change_type );
 			$r = $this->http->check( $new_url, (int) $link->post_id );
 			$this->db->update_check_result( $link_id, $r['status_code'], $r['redirect_url'], $r['is_broken'], isset( $r['redirect_chain'] ) ? $r['redirect_chain'] : '' );
 			$response = array( 'new_url' => $new_url );
@@ -2593,7 +2769,7 @@ class TSOLIIN_Admin {
 			wp_send_json_error( array( 'message' => __( 'Original URL not found in the source. Check whether the link was edited manually.', 'tso-link-inspector' ) ) );
 		}
 
-		$this->db->update_link_url( $link_id, $relative );
+		$this->db->update_link_url( $link_id, $relative, 'relative' );
 		$r = $this->http->check( $relative, (int) $link->post_id );
 		$this->db->update_check_result( $link_id, $r['status_code'], $r['redirect_url'], $r['is_broken'], isset( $r['redirect_chain'] ) ? $r['redirect_chain'] : '' );
 		$updated = $this->db->get_link( $link_id );
@@ -2632,7 +2808,7 @@ class TSOLIIN_Admin {
 			wp_send_json_error( array( 'message' => __( 'Original URL not found in the source. Check whether the link was edited manually.', 'tso-link-inspector' ) ) );
 		}
 
-		$this->db->update_link_url( $link_id, $https_url );
+		$this->db->update_link_url( $link_id, $https_url, 'https' );
 		$r = $this->http->check( $https_url, (int) $link->post_id );
 		$this->db->update_check_result( $link_id, $r['status_code'], $r['redirect_url'], $r['is_broken'], isset( $r['redirect_chain'] ) ? $r['redirect_chain'] : '' );
 		$updated = $this->db->get_link( $link_id );
@@ -2856,7 +3032,7 @@ class TSOLIIN_Admin {
 					if ( false === $relative || $relative === (string) $link->link_url ) {
 						$skipped = true;
 					} elseif ( $this->replace_link_url_in_source( $link, $relative ) ) {
-						$this->db->update_link_url( $link_id, $relative );
+						$this->db->update_link_url( $link_id, $relative, 'bulk_relative' );
 						$r = $this->http->check( $relative, (int) $link->post_id );
 						$this->db->update_check_result( $link_id, $r['status_code'], $r['redirect_url'], $r['is_broken'], isset( $r['redirect_chain'] ) ? $r['redirect_chain'] : '' );
 						$updated   = $this->db->get_link( $link_id );
@@ -2904,7 +3080,7 @@ class TSOLIIN_Admin {
 					if ( '' === $https_url ) {
 						$skipped = true;
 					} elseif ( $this->replace_link_url_in_source( $link, $https_url ) ) {
-						$this->db->update_link_url( $link_id, $https_url );
+						$this->db->update_link_url( $link_id, $https_url, 'bulk_https' );
 						$r = $this->http->check( $https_url, (int) $link->post_id );
 						$this->db->update_check_result( $link_id, $r['status_code'], $r['redirect_url'], $r['is_broken'], isset( $r['redirect_chain'] ) ? $r['redirect_chain'] : '' );
 						$updated   = $this->db->get_link( $link_id );
@@ -2970,30 +3146,50 @@ class TSOLIIN_Admin {
 		$this->check_nonce_and_cap();
 		$resume  = ! isset( $_POST['resume'] ) || '0' !== sanitize_text_field( wp_unslash( $_POST['resume'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$post_id = isset( $_POST['post_id'] ) ? absint( $_POST['post_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		$pending_before = $this->db->get_pending_check_count( $post_id );
 		$this->cron->start_bg_check( $resume, $post_id );
 		$bg = $this->cron->get_bg_progress();
+		$resumed = $resume && $pending_before > 0;
+		if ( $post_id > 0 ) {
+			$message = __( 'Checking links in this post. You can continue browsing.', 'tso-link-inspector' );
+		} elseif ( $resumed ) {
+			$message = __( 'Resuming check from where it left off. You can continue browsing.', 'tso-link-inspector' );
+		} else {
+			$message = __( 'Check started. You can continue browsing.', 'tso-link-inspector' );
+		}
 		wp_send_json_success( array(
 			'running' => true,
 			'checked' => $bg['checked'],
 			'total'   => $bg['total'],
 			'pct'     => $bg['pct'],
 			'post_id' => $bg['post_id'],
-			'message' => $post_id > 0
-				? __( 'Checking links in this post. You can continue browsing.', 'tso-link-inspector' )
-				: __( 'Check started. You can continue browsing.', 'tso-link-inspector' ),
+			'pending' => isset( $bg['pending'] ) ? (int) $bg['pending'] : $this->db->get_pending_check_count( $post_id ),
+			'resumed' => $resumed ? 1 : 0,
+			'message' => $message,
 		) );
 	}
 
 	public function ajax_stop_bg_check() {
 		$this->check_nonce_and_cap();
 		$this->cron->stop_bg_check();
-		wp_send_json_success( array( 'running' => false ) );
+		// Scope pending to the list view the admin is looking at (may differ from bg post_id).
+		$view_post_id = isset( $_POST['post_id'] ) ? absint( $_POST['post_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		$bg           = $this->cron->get_bg_progress();
+		wp_send_json_success(
+			array(
+				'running' => false,
+				'pending' => $this->db->get_pending_check_count( $view_post_id ),
+				'pct'     => isset( $bg['pct'] ) ? (int) $bg['pct'] : 0,
+			)
+		);
 	}
 
 	public function ajax_check_progress() {
 		$this->check_nonce_and_cap();
 		$bg      = $this->cron->get_bg_progress();
 		$post_id = isset( $bg['post_id'] ) ? absint( $bg['post_id'] ) : 0;
+		// Pending for Continue/Restart labels follows the current list view, not only the bg scope.
+		$view_post_id = isset( $_POST['post_id'] ) ? absint( $_POST['post_id'] ) : $post_id; // phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$stats   = $post_id ? $this->db->get_stats_for_post( $post_id ) : $this->db->get_stats();
 		$done    = ! $bg['running'] && $bg['total'] > 0 && empty( $this->db->get_links_batch_for_check( 1, $post_id ) );
 		if ( $bg['running'] ) {
@@ -3010,6 +3206,7 @@ class TSOLIIN_Admin {
 			'total'   => $bg['total'],
 			'pct'     => $bg['pct'],
 			'post_id' => $post_id,
+			'pending' => $this->db->get_pending_check_count( $view_post_id ),
 			'broken'  => $stats['broken'],
 			'done'    => $done,
 			'message' => $message,
@@ -3235,7 +3432,7 @@ class TSOLIIN_Admin {
 		$note = '';
 		if ( empty( $safe_suggestions ) ) {
 			if ( $bot_blocked || $unverified_remote ) {
-				$note = __( 'This server cannot confirm the destination (geo-block, bot wall, or timeout). It may work in a browser. Use Edit link and tick “Save even if this server cannot verify the URL”, or mark the link as OK.', 'tso-link-inspector' );
+				$note = __( 'This server cannot confirm the destination (geo-block, bot wall, or timeout). It may work in a browser. Use Edit link and tick “Save even if this server cannot confirm the URL”, or mark the link as OK.', 'tso-link-inspector' );
 			} elseif ( $link_broken ) {
 				$note = __( 'No alternative URL could fix this broken link. The destination may be permanently gone — update or remove the link manually.', 'tso-link-inspector' );
 			} elseif ( TSOLIIN_HTTP::is_plain_http_url( $orig_abs ) ) {

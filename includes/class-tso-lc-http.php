@@ -941,6 +941,7 @@ class TSOLIIN_HTTP {
 		if ( empty( $entries ) ) {
 			return;
 		}
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.curl_curl_setopt -- CURLOPT_RESOLVE on the handle passed by http_api_curl / Requests; outbound checks already use wp_remote_*.
 		curl_setopt( $handle, CURLOPT_RESOLVE, $entries );
 	}
 
