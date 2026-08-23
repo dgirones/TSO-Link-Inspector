@@ -125,6 +125,8 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 * Fix: Dashboard totals and filter tabs no longer show 0 when links exist (Dailymotion `dai.ly` LIKE clause broke `$wpdb->prepare()`).
 * Fix: Recheck no longer reports working Chrome Web Store (and other AAAA) URLs as “Cannot connect” — DNS pin keeps IPv4 when IPv6 is unreachable.
 * Fix: **Go to edit** selects/scrolls to Classic Visual plain `youtu.be` URLs, and scrolls Gutenberg code view to the selected embed URL.
+* Improvement: Edit link and Suggested URL can save an HTTPS/redirect URL when this server cannot verify it (geo-block, bot wall, or timeout), with an option to ignore that domain.
+* Fix: Delete (and other row actions) no longer show an error when the list row was already removed after editing the post.
 
 = 2.3.3 =
 * New: Bulk action **Upgrade selected to HTTPS** — only when the server confirms a working HTTPS URL (same rules as Suggestion → Apply; unverified bot-wall suggestions are skipped).

@@ -1946,6 +1946,35 @@ class TSOLIIN_HTTP {
 	}
 
 	/**
+	 * Statuses that mean “this host blocked our checker”, not a confirmed missing page.
+	 *
+	 * Includes bot walls and connection failures common with GEO-IP / datacenter blocks.
+	 *
+	 * @param int $code HTTP or internal status code.
+	 * @return bool
+	 */
+	public static function is_unverified_remote_status( $code ) {
+		$code = (int) $code;
+		if ( self::is_bot_block_status( $code ) ) {
+			return true;
+		}
+		return in_array( $code, array( 0, -3, -4, -5, -7 ), true );
+	}
+
+	/**
+	 * Suggestion note when HTTPS exists in theory but this server cannot confirm it.
+	 *
+	 * @param int $code HTTP or internal status code.
+	 * @return string
+	 */
+	public static function unverified_https_suggest_reason( $code ) {
+		if ( self::is_bot_block_status( $code ) ) {
+			return __( 'HTTPS available (access restricted to bots/login — confirm in browser)', 'tso-link-inspector' );
+		}
+		return __( 'HTTPS could not be verified from this server (geo-block, bot wall, or timeout). Apply anyway if you trust this host.', 'tso-link-inspector' );
+	}
+
+	/**
 	 * HTTP codes that mean the target resource no longer exists (www toggles cannot fix these).
 	 *
 	 * @param int $code HTTP status code.
@@ -2050,18 +2079,18 @@ class TSOLIIN_HTTP {
 				$r              = $this->check( $https, $post_id );
 				$code_https     = (int) $r['status_code'];
 				$https_verified = self::suggestion_fixes_broken_link( $r_orig, $r );
-				// 401/403/429 on HTTPS still proves TLS works (e.g. /wp-admin/ without cookies).
-				$https_bot_wall = self::is_bot_block_status( $code_https )
-					&& ! self::is_hard_broken_status( $code_https )
+				// Bot walls and GEO-IP / timeouts still allow an Apply-anyway HTTPS upgrade on the same path.
+				$https_unverified = ! $https_verified
+					&& self::is_unverified_remote_status( $code_https )
 					&& self::is_trusted_canonical_upgrade( $url, $https );
 
-				if ( $https_verified || $https_bot_wall ) {
+				if ( $https_verified || $https_unverified ) {
 					$target     = $https;
-					$reason     = $https_bot_wall && ! $https_verified
-						? __( 'HTTPS available (access restricted to bots/login — confirm in browser)', 'tso-link-inspector' )
+					$reason     = $https_unverified
+						? self::unverified_https_suggest_reason( $code_https )
 						: __( 'Secure HTTPS version available', 'tso-link-inspector' );
 					$status     = $code_https;
-					$unverified = ( $https_bot_wall && ! $https_verified );
+					$unverified = $https_unverified;
 
 					// HTTPS URL may itself redirect (e.g. legacy host); suggest the real destination, not the hop.
 					if ( ! $unverified && ! empty( $r['redirect_url'] ) && ! $this->is_trivial_redirect( $https, $r['redirect_url'] ) ) {
@@ -2069,14 +2098,13 @@ class TSOLIIN_HTTP {
 						$reason = __( 'Final URL after redirects', 'tso-link-inspector' );
 						$r2     = $this->check( $target, $post_id );
 						if ( ! self::suggestion_fixes_broken_link( $r_orig, $r2 ) ) {
-							// Redirect target may be HTTPS + auth wall (same-site wp-admin).
+							// Redirect target may be HTTPS + auth wall / GEO-IP (same-site wp-admin).
 							$code2 = (int) $r2['status_code'];
-							if ( self::is_bot_block_status( $code2 )
-								&& ! self::is_hard_broken_status( $code2 )
+							if ( self::is_unverified_remote_status( $code2 )
 								&& self::is_trusted_canonical_upgrade( $url, $target ) ) {
 								$status     = $code2;
 								$unverified = true;
-								$reason     = __( 'HTTPS available (access restricted to bots/login — confirm in browser)', 'tso-link-inspector' );
+								$reason     = self::unverified_https_suggest_reason( $code2 );
 							} else {
 								$target = '';
 							}
@@ -2171,8 +2199,8 @@ class TSOLIIN_HTTP {
 				}
 				$r    = $this->check( $candidate, $post_id );
 				$code = (int) $r['status_code'];
-				// Same-path HTTP→HTTPS with 401/403/429 = HTTPS is up (auth/bot wall), not “HTTP only”.
-				$unverified = self::is_bot_block_status( $code ) && ! self::is_hard_broken_status( $code );
+				// Same-path HTTP→HTTPS with bot wall / GEO-IP / timeout = offer Apply anyway, not “HTTP only”.
+				$unverified = self::is_unverified_remote_status( $code ) && ! self::suggestion_fixes_broken_link( $r_orig, $r );
 				if ( ! $unverified && ! self::suggestion_fixes_broken_link( $r_orig, $r ) ) {
 					continue;
 				}
@@ -2181,7 +2209,7 @@ class TSOLIIN_HTTP {
 					'status_code' => $code,
 					'label'       => self::status_label( $code, $candidate ),
 					'reason'      => $unverified
-						? __( 'HTTPS available (access restricted to bots/login — confirm in browser)', 'tso-link-inspector' )
+						? self::unverified_https_suggest_reason( $code )
 						: __( 'Secure HTTPS canonical URL', 'tso-link-inspector' ),
 					'confidence'  => 'high',
 					'actionable'  => true,
