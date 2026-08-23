@@ -1393,6 +1393,25 @@
 	max-width: 36em;
 }
 
+.tsoliin-apply-anyway-wrap,
+.tsoliin-ignore-domain-wrap {
+	margin: 8px 0 0;
+	max-width: 36em;
+}
+
+.tsoliin-apply-anyway-wrap label,
+.tsoliin-ignore-domain-wrap label {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+	font-weight: 400;
+}
+
+.tsoliin-apply-anyway-wrap input,
+.tsoliin-ignore-domain-wrap input {
+	margin-top: 3px;
+}
+
 @media screen and (max-width: 782px) {
 	.tsoliin-preview-grid {
 		grid-template-columns: 1fr;

@@ -160,6 +160,8 @@
 			this.$anchorNote     = $( '#tsoliin-modal-anchor-note' );
 			this.$modalSave    = $( '#tsoliin-modal-save' );
 			this.$modalCancel  = $( '#tsoliin-modal-cancel' );
+			this.$applyAnyway  = $( '#tsoliin-apply-anyway' );
+			this.$ignoreDomain = $( '#tsoliin-ignore-domain' );
 			this.$modalSpinner = $( '.tsoliin-modal__spinner' );
 			this.$feedback     = $( '#tsoliin-modal-feedback' );
 			this.$previewPanel = $( '#tsoliin-modal-preview' );
@@ -323,13 +325,26 @@
 				var linkId = parseInt( $btn.data( 'id' ), 10 );
 				var newUrl = $btn.data( 'url' );
 				var $row   = self.findLinkRow( linkId );
+				var opts   = {
+					applyAnyway  : 1 === parseInt( $btn.data( 'applyAnyway' ), 10 ) || 1 === parseInt( $btn.attr( 'data-apply-anyway' ), 10 ),
+					ignoreDomain : 1 === parseInt( $btn.data( 'ignoreDomain' ), 10 ) || 1 === parseInt( $btn.attr( 'data-ignore-domain' ), 10 )
+				};
 				if ( ! $row.length ) {
 					$row = $btn.closest( '.tsoliin-suggest-row' ).prev( 'tr' );
 					while ( $row.length && $row.hasClass( 'tsoliin-suggest-row' ) ) {
 						$row = $row.prev( 'tr' );
 					}
 				}
-				self.applySmartUrl( linkId, newUrl, $btn, $row );
+				if ( opts.ignoreDomain ) {
+					if ( ! window.confirm( tsoliinData.i18n.confirmApplyAnywayIgnore || tsoliinData.i18n.confirmAddIgnore ) ) {
+						return;
+					}
+				} else if ( opts.applyAnyway ) {
+					if ( ! window.confirm( tsoliinData.i18n.confirmApplyAnyway ) ) {
+						return;
+					}
+				}
+				self.applySmartUrl( linkId, newUrl, $btn, $row, opts );
 			} );
 
 			this.$modalSave.on( 'click', function () { self.saveLink(); } );
@@ -839,6 +854,28 @@
 			return params;
 		},
 
+		isStalePayload: function ( data ) {
+			return !!( data && ( data.gone || data.stale || ( data.removed && ! data.new_url ) ) );
+		},
+
+		removeStaleRow: function ( $row, data ) {
+			var self = this;
+			var msg  = ( data && data.message ) ? data.message : ( tsoliinData.i18n.staleRowGone || tsoliinData.i18n.urlSaved );
+			if ( ! $row || ! $row.length ) {
+				this.showNotice( msg, 'success' );
+				this.refreshStats();
+				return true;
+			}
+			this.removeSuggestPanelsForRow( $row );
+			$row.fadeOut( 300, function () {
+				$( this ).remove();
+				self.maybeReloadEmptyList();
+			} );
+			this.showNotice( msg, 'success' );
+			this.refreshStats();
+			return true;
+		},
+
 		removeRowIfFilterMismatch: function ( $row, data, skipReload ) {
 			if ( ! $row || ! $row.length || ! data || false !== data.matches_filter ) {
 				return false;
@@ -883,12 +920,8 @@
 						return;
 					}
 					var d = r.data;
-					if ( d.removed ) {
-						$row.fadeOut( 300, function () {
-							$( this ).remove();
-							self.refreshStats();
-							self.maybeReloadEmptyList();
-						} );
+					if ( self.isStalePayload( d ) ) {
+						self.removeStaleRow( $row, d );
 						return;
 					}
 					if ( self.removeRowIfFilterMismatch( $row, d ) ) {
@@ -957,6 +990,12 @@
 				this.$newAnchorInput.val( anchorText || '' );
 			}
 			this.$feedback.text( '' ).removeClass( 'is-error is-success is-warning' );
+			if ( this.$applyAnyway.length ) {
+				this.$applyAnyway.prop( 'checked', false );
+			}
+			if ( this.$ignoreDomain.length ) {
+				this.$ignoreDomain.prop( 'checked', false );
+			}
 			if ( this.canPreviewLinkEdit() ) {
 				this.$previewPanel.show();
 				this.scheduleLinkPreview();
@@ -1078,6 +1117,8 @@
 			var self       = this;
 			var newUrl     = this.$newUrlInput.val().trim();
 			var newAnchor  = this.$newAnchorInput.length ? this.$newAnchorInput.val().trim() : '';
+			var applyAnyway  = this.$applyAnyway.length && this.$applyAnyway.prop( 'checked' );
+			var ignoreDomain = this.$ignoreDomain.length && this.$ignoreDomain.prop( 'checked' );
 			if ( ! newUrl ) {
 				this.$feedback.text( tsoliinData.i18n.urlRequired ).addClass( 'is-error' );
 				return;
@@ -1091,27 +1132,41 @@
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
 				data  : $.extend( {
-					action     : 'tsoliin_update_link',
-					nonce      : tsoliinData.nonce,
-					link_id    : self.editLinkId,
-					new_url    : newUrl,
-					new_anchor : newAnchor
+					action        : 'tsoliin_update_link',
+					nonce         : tsoliinData.nonce,
+					link_id       : self.editLinkId,
+					new_url       : newUrl,
+					new_anchor    : newAnchor,
+					apply_anyway  : applyAnyway ? 1 : 0,
+					ignore_domain : ignoreDomain ? 1 : 0
 				}, self.listFilterParam() ),
 				success: function ( r ) {
 					self.$modalSave.prop( 'disabled', false ).text( tsoliinData.i18n.save );
 					self.$modalSpinner.removeClass( 'is-active' );
 					if ( ! r.success ) {
-						self.$feedback.text( r.data ? r.data.message : tsoliinData.i18n.error ).addClass( 'is-error' );
+						var err = r.data || {};
+						self.$feedback.text( err.message || tsoliinData.i18n.error ).addClass( 'is-error' );
+						if ( err.unverified && ! applyAnyway && window.confirm( tsoliinData.i18n.confirmApplyAnyway ) ) {
+							if ( self.$applyAnyway.length ) {
+								self.$applyAnyway.prop( 'checked', true );
+							}
+							self.saveLink();
+						}
 						return;
 					}
 					var d    = r.data || {};
+					var $row = $( 'tr' ).filter( function () {
+						return $( this ).find( '.tsoliin-edit-link[data-id="' + self.editLinkId + '"]' ).length > 0;
+					} );
+					if ( self.isStalePayload( d ) ) {
+						self.closeModal();
+						self.removeStaleRow( $row, d );
+						return;
+					}
 					var msg  = d.filter_promotion_message || ( d.warning ? d.warning : ( '✓ ' + tsoliinData.i18n.urlSaved ) );
 					if ( ! d.warning && tsoliinData.createRevision && self.editPostId > 0 && -1 !== [ 'link', 'image', 'iframe' ].indexOf( self.editLinkType ) ) {
 						msg += ' ' + ( tsoliinData.i18n.revisionSaved || '' );
 					}
-					var $row = $( 'tr' ).filter( function () {
-						return $( this ).find( '.tsoliin-edit-link[data-id="' + self.editLinkId + '"]' ).length > 0;
-					} );
 					if ( $row.length ) {
 						if ( self.removeRowIfFilterMismatch( $row, d ) ) {
 							self.$feedback.text( msg ).addClass( d.warning ? 'is-warning' : 'is-success' );
@@ -1146,6 +1201,11 @@
 				data  : { action: 'tsoliin_unlink', nonce: tsoliinData.nonce, link_id: linkId },
 				success: function ( r ) {
 					if ( r.success ) {
+						var d = r.data || {};
+						if ( self.isStalePayload( d ) ) {
+							self.removeStaleRow( $row, d );
+							return;
+						}
 						self.removeSuggestPanelsForRow( $row );
 						$row.fadeOut( 400, function () {
 							$( this ).remove();
@@ -1192,6 +1252,10 @@
 						return;
 					}
 					var d = r.data || {};
+					if ( self.isStalePayload( d ) ) {
+						self.removeStaleRow( $row, d );
+						return;
+					}
 					if ( self.removeRowIfFilterMismatch( $row, d ) ) {
 						self.showNotice( d.message, 'success' );
 						self.refreshStats();
@@ -1242,6 +1306,10 @@
 						return;
 					}
 					var d = r.data || {};
+					if ( self.isStalePayload( d ) ) {
+						self.removeStaleRow( $row, d );
+						return;
+					}
 					if ( self.removeRowIfFilterMismatch( $row, d ) ) {
 						self.showNotice( d.message, 'success' );
 						self.refreshStats();
@@ -1278,6 +1346,10 @@
 						return;
 					}
 					var d = r.data || {};
+					if ( self.isStalePayload( d ) ) {
+						self.removeStaleRow( $row, d );
+						return;
+					}
 					if ( self.removeRowIfFilterMismatch( $row, d ) ) {
 						self.showNotice( d.message, 'success' );
 						self.refreshStats();
@@ -1308,6 +1380,10 @@
 				data  : $.extend( { action: 'tsoliin_not_broken', nonce: tsoliinData.nonce, link_id: linkId }, self.listFilterParam() ),
 				success: function ( r ) {
 					if ( r.success ) {
+						if ( self.isStalePayload( r.data ) ) {
+							self.removeStaleRow( $row, r.data );
+							return;
+						}
 						if ( self.removeRowIfFilterMismatch( $row, r.data ) ) {
 							$trigger.text( tsoliinData.i18n.notBroken );
 							self.refreshStats();
@@ -1343,6 +1419,11 @@
 				data  : { action: 'tsoliin_delete_link', nonce: tsoliinData.nonce, link_id: linkId },
 				success: function ( r ) {
 					if ( r.success ) {
+						var d = r.data || {};
+						if ( self.isStalePayload( d ) ) {
+							self.removeStaleRow( $row, d );
+							return;
+						}
 						self.removeSuggestPanelsForRow( $row );
 						$row.fadeOut( 400, function () {
 							$( this ).remove();
@@ -1833,6 +1914,11 @@
 					var cols = $row.find( 'td' ).length;
 					var html = '<tr class="tsoliin-suggest-row" data-link-id="' + linkId + '"><td colspan="' + cols + '" class="tsoliin-suggest-panel">';
 
+					if ( r.success && self.isStalePayload( r.data ) ) {
+						self.removeStaleRow( $row, r.data );
+						return;
+					}
+
 					if ( ! r.success ) {
 						html += '<span style="color:#b32d2e;">' + self.escapeHtml( ( r.data && r.data.message ) ? r.data.message : tsoliinData.i18n.error ) + '</span>';
 					} else if ( ! r.data.suggestions || ! r.data.suggestions.length ) {
@@ -1846,11 +1932,13 @@
 						html += '<strong>💡 ' + tsoliinData.i18n.smartSuggest + ':</strong><ul class="tsoliin-suggest-list">';
 						$.each( r.data.suggestions, function ( i, s ) {
 							var actionable = ( false !== s.actionable );
+							var unverified = !! s.unverified;
 							var conf = 'high' === s.confidence ? '🟢' : '🟡';
 							var isHttps = /^https:\/\//i.test( s.url || '' );
 							var code = parseInt( s.status_code, 10 );
 							var isBotBlock = ( 401 === code || 403 === code || 429 === code );
-							if ( ! actionable || isBotBlock ) {
+							var isUnverifiedRemote = unverified || isBotBlock || ( 0 === code || -3 === code || -4 === code || -5 === code || -7 === code );
+							if ( ! actionable || isUnverifiedRemote ) {
 								conf = '⚠️';
 							} else if ( ! isHttps ) {
 								conf = '⚠️';
@@ -1858,19 +1946,26 @@
 							var urlAttr  = String( s.url ).replace( /"/g, '&quot;' );
 							var urlLabel = self.escapeHtml( s.url );
 							var statusCls = 'tsoliin-status--broken';
-							if ( actionable && ! isBotBlock ) {
+							if ( actionable && ! isUnverifiedRemote ) {
 								statusCls = isHttps ? 'tsoliin-status--ok' : 'tsoliin-status--warning';
-							} else if ( isBotBlock ) {
+							} else if ( isUnverifiedRemote ) {
 								statusCls = 'tsoliin-status--warning';
 							}
 							html += '<li>';
 							html += conf + ' <a href="' + urlAttr + '" target="_blank" rel="noopener">' + urlLabel + '</a>';
 							html += ' <span class="tsoliin-status ' + statusCls + '" style="font-size:11px;">' + parseInt( s.status_code, 10 ) + ' ' + self.escapeHtml( s.label ) + '</span>';
 							html += ' <em style="color:#646970;font-size:12px;">— ' + self.escapeHtml( s.reason ) + '</em>';
-							if ( actionable && ! s.unverified ) {
+							if ( actionable && ! unverified ) {
 								html += ' <button type="button" class="button button-small tsoliin-apply-suggest" style="margin-left:8px;"'
 									+ ' data-id="' + linkId + '" data-url="' + urlAttr + '">'
 									+ self.escapeHtml( tsoliinData.i18n.applyUrl ) + '</button>';
+							} else if ( unverified ) {
+								html += ' <button type="button" class="button button-small tsoliin-apply-suggest" style="margin-left:8px;"'
+									+ ' data-id="' + linkId + '" data-url="' + urlAttr + '" data-apply-anyway="1">'
+									+ self.escapeHtml( tsoliinData.i18n.applyAnyway || tsoliinData.i18n.applyUrl ) + '</button>';
+								html += ' <button type="button" class="button button-small tsoliin-apply-suggest" style="margin-left:4px;"'
+									+ ' data-id="' + linkId + '" data-url="' + urlAttr + '" data-apply-anyway="1" data-ignore-domain="1">'
+									+ self.escapeHtml( tsoliinData.i18n.applyAnywayIgnore || tsoliinData.i18n.addIgnore ) + '</button>';
 							}
 							html += '</li>';
 						} );
@@ -1904,18 +1999,30 @@
 			} );
 		},
 
-		applySmartUrl: function ( linkId, newUrl, $btn, $row ) {
+		applySmartUrl: function ( linkId, newUrl, $btn, $row, opts ) {
 			var self = this;
+			opts = opts || {};
 			self.cancelListReload();
 			$btn.prop( 'disabled', true ).text( tsoliinData.i18n.saving );
 
 			self.trackedAjax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
-				data  : $.extend( { action: 'tsoliin_update_link', nonce: tsoliinData.nonce, link_id: linkId, new_url: newUrl }, self.listFilterParam() ),
+				data  : $.extend( {
+					action        : 'tsoliin_update_link',
+					nonce         : tsoliinData.nonce,
+					link_id       : linkId,
+					new_url       : newUrl,
+					apply_anyway  : opts.applyAnyway ? 1 : 0,
+					ignore_domain : opts.ignoreDomain ? 1 : 0
+				}, self.listFilterParam() ),
 				success: function ( r ) {
 					if ( r.success ) {
-						var d = r.data;
+						var d = r.data || {};
+						if ( self.isStalePayload( d ) ) {
+							self.removeStaleRow( $row, d );
+							return;
+						}
 						if ( self.removeRowIfFilterMismatch( $row, d ) ) {
 							$btn.closest( '.tsoliin-suggest-row' ).fadeOut( 300, function () { $( this ).remove(); } );
 							self.showNotice( d.filter_promotion_message || ( '✅ ' + tsoliinData.i18n.urlUpdated + ' ' + d.new_url ), 'success' );
@@ -1927,12 +2034,17 @@
 						self.showNotice( '✅ ' + tsoliinData.i18n.urlUpdated + ' ' + d.new_url, 'success' );
 						self.refreshStats();
 					} else {
-						$btn.prop( 'disabled', false ).text( tsoliinData.i18n.applyUrl );
-						alert( r.data ? r.data.message : tsoliinData.i18n.error );
+						var err = r.data || {};
+						$btn.prop( 'disabled', false ).text( opts.applyAnyway ? ( tsoliinData.i18n.applyAnyway || tsoliinData.i18n.applyUrl ) : tsoliinData.i18n.applyUrl );
+						if ( err.unverified && ! opts.applyAnyway && window.confirm( tsoliinData.i18n.confirmApplyAnyway ) ) {
+							self.applySmartUrl( linkId, newUrl, $btn, $row, { applyAnyway: true, ignoreDomain: !! opts.ignoreDomain } );
+							return;
+						}
+						alert( err.message || tsoliinData.i18n.error );
 					}
 				},
 				error: function () {
-					$btn.prop( 'disabled', false ).text( tsoliinData.i18n.applyUrl );
+					$btn.prop( 'disabled', false ).text( opts.applyAnyway ? ( tsoliinData.i18n.applyAnyway || tsoliinData.i18n.applyUrl ) : tsoliinData.i18n.applyUrl );
 					alert( tsoliinData.i18n.error );
 				}
 			} );

@@ -300,6 +300,11 @@ class TSOLIIN_Admin {
 				'wooSuggestNote'   => __( 'WooCommerce product field URLs cannot be updated from suggestions. Change them in the product editor using Go to edit.', 'tso-link-inspector' ),
 				'detectedRedirect' => __( 'Redirect destination already detected', 'tso-link-inspector' ),
 				'applyUrl'      => __( 'Apply', 'tso-link-inspector' ),
+				'applyAnyway'   => __( 'Apply anyway', 'tso-link-inspector' ),
+				'applyAnywayIgnore' => __( 'Apply and ignore domain', 'tso-link-inspector' ),
+				'confirmApplyAnyway' => __( 'This server cannot verify the URL (geo-block, bot wall, or timeout). Save it anyway?', 'tso-link-inspector' ),
+				'confirmApplyAnywayIgnore' => __( 'Save this URL and add its domain to the ignore list? Future scans will skip this host.', 'tso-link-inspector' ),
+				'staleRowGone'  => __( 'This list row is already gone (the link was updated or removed from the content).', 'tso-link-inspector' ),
 				'itemsChecked'  => __( 'links rechecked.', 'tso-link-inspector' ),
 				'itemsUnlinked' => __( 'links unlinked.', 'tso-link-inspector' ),
 				'itemsSkipped'  => __( 'rows skipped (menu/widget/term).', 'tso-link-inspector' ),
@@ -703,6 +708,14 @@ class TSOLIIN_Admin {
 		echo '<p id="tsoliin-modal-anchor-row"><label for="tsoliin-new-anchor" id="tsoliin-modal-anchor-label">' . esc_html__( 'Link text:', 'tso-link-inspector' ) . '</label>';
 		echo '<input type="text" id="tsoliin-new-anchor" class="widefat" />';
 		echo '<span id="tsoliin-modal-anchor-note" class="description tsoliin-modal-anchor-note" style="display:none;"></span></p>';
+		echo '<p class="tsoliin-apply-anyway-wrap"><label for="tsoliin-apply-anyway">';
+		echo '<input type="checkbox" id="tsoliin-apply-anyway" value="1" /> ';
+		echo esc_html__( 'Save even if this server cannot verify the URL (geo-block, bot wall, or timeout).', 'tso-link-inspector' );
+		echo '</label></p>';
+		echo '<p class="tsoliin-ignore-domain-wrap"><label for="tsoliin-ignore-domain">';
+		echo '<input type="checkbox" id="tsoliin-ignore-domain" value="1" /> ';
+		echo esc_html__( 'Also add this domain to the ignore list (skip future scans and HTTP checks).', 'tso-link-inspector' );
+		echo '</label></p>';
 		echo '<div class="tsoliin-modal__actions">';
 		echo '<button type="button" id="tsoliin-modal-save" class="button button-primary">' . esc_html__( 'Save URL', 'tso-link-inspector' ) . '</button>';
 		echo '<button type="button" id="tsoliin-modal-cancel" class="button">' . esc_html__( 'Cancel', 'tso-link-inspector' ) . '</button>';
@@ -1588,6 +1601,27 @@ class TSOLIIN_Admin {
 	}
 
 	/**
+	 * Success payload when the inspector row is already gone (editor save / scan removed it).
+	 *
+	 * @param string $message Optional user message.
+	 * @return void
+	 */
+	private function send_stale_row_success( $message = '' ) {
+		if ( '' === $message ) {
+			$message = __( 'This list row is already gone (the link was updated or removed from the content).', 'tso-link-inspector' );
+		}
+		wp_send_json_success(
+			array(
+				'gone'           => true,
+				'removed'        => true,
+				'stale'          => true,
+				'matches_filter' => false,
+				'message'        => $message,
+			)
+		);
+	}
+
+	/**
 	 * Require object-level caps to change WordPress content for this link row.
 	 *
 	 * @param object|null $link DB link row.
@@ -1941,7 +1975,7 @@ class TSOLIIN_Admin {
 		$link_id = isset( $_POST['link_id'] ) ? absint( $_POST['link_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$link    = $link_id ? $this->db->get_link( $link_id ) : null;
 		if ( ! $link ) {
-			wp_send_json_error( array( 'message' => __( 'Link not found.', 'tso-link-inspector' ) ) );
+			$this->send_stale_row_success();
 		}
 		$link             = $this->resync_link_before_recheck( $link );
 		if ( ! $link ) {
@@ -1987,9 +2021,16 @@ class TSOLIIN_Admin {
 		$new_anchor_raw = isset( $_POST['new_anchor'] ) ? wp_unslash( $_POST['new_anchor'] ) : null; // phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$link           = $link_id ? $this->db->get_link( $link_id ) : null;
 		if ( ! $link ) {
-			wp_send_json_error( array( 'message' => __( 'Link not found.', 'tso-link-inspector' ) ) );
+			$this->send_stale_row_success();
 		}
 		$this->require_link_mutation_cap( $link );
+		$apply_anyway_raw  = isset( $_POST['apply_anyway'] ) ? sanitize_text_field( wp_unslash( $_POST['apply_anyway'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		$ignore_domain_raw = isset( $_POST['ignore_domain'] ) ? sanitize_text_field( wp_unslash( $_POST['ignore_domain'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		$apply_anyway      = in_array( $apply_anyway_raw, array( '1', 'true', 'yes' ), true );
+		$ignore_domain     = in_array( $ignore_domain_raw, array( '1', 'true', 'yes' ), true );
+		if ( $ignore_domain ) {
+			$apply_anyway = true;
+		}
 
 		$link_type = isset( $link->link_type ) ? (string) $link->link_type : 'link';
 		if ( 'widget' === $link_type ) {
@@ -2052,10 +2093,11 @@ class TSOLIIN_Admin {
 			wp_send_json_error( array( 'message' => __( 'No changes to save.', 'tso-link-inspector' ) ) );
 		}
 
-		if ( $url_changed && $this->rejects_unverified_https_upgrade( $link, $new_url ) ) {
+		if ( $url_changed && ! $apply_anyway && $this->rejects_unverified_https_upgrade( $link, $new_url ) ) {
 			wp_send_json_error(
 				array(
-					'message' => __( 'HTTPS could not be verified from the server. Use bulk Upgrade to HTTPS only when confirmed, or mark the link as OK manually.', 'tso-link-inspector' ),
+					'unverified' => true,
+					'message'    => __( 'HTTPS could not be verified from the server. Tick “Save even if this server cannot verify the URL” to apply it anyway, or mark the link as OK manually.', 'tso-link-inspector' ),
 				)
 			);
 		}
@@ -2106,7 +2148,13 @@ class TSOLIIN_Admin {
 		}
 
 		if ( $url_changed && ! $url_done ) {
-			if ( $anchor_changed && $anchor_done ) {
+			$already_in_post = ! empty( $link->post_id )
+				&& in_array( $link_type, array( 'link', 'image', 'iframe', 'template', 'wp_block', 'plain' ), true )
+				&& $this->scanner->is_url_editable_in_post( (int) $link->post_id, $new_url, $link_type );
+			if ( $already_in_post ) {
+				$url_done = true;
+				$warning  = __( 'The post already contains this URL. The list row was updated.', 'tso-link-inspector' );
+			} elseif ( $anchor_changed && $anchor_done ) {
 				$warning = __( 'Link text updated, but the URL could not be changed in the post. Edit the post manually or leave the URL field unchanged next time.', 'tso-link-inspector' );
 			} elseif ( 'comment' === $link_type ) {
 				wp_send_json_error( array( 'message' => __( 'Original URL not found in this comment. Edit the comment manually or check encoding (e.g. trailing slash).', 'tso-link-inspector' ) ) );
@@ -2135,6 +2183,13 @@ class TSOLIIN_Admin {
 			$r = $this->http->check( $new_url, (int) $link->post_id );
 			$this->db->update_check_result( $link_id, $r['status_code'], $r['redirect_url'], $r['is_broken'], isset( $r['redirect_chain'] ) ? $r['redirect_chain'] : '' );
 			$response = array( 'new_url' => $new_url );
+			if ( $ignore_domain ) {
+				$pattern = TSOLIIN_HTTP::suggest_ignore_pattern_from_url( $new_url );
+				if ( '' !== $pattern ) {
+					TSOLIIN_HTTP::add_ignore_pattern( $pattern );
+					$response['ignored_pattern'] = $pattern;
+				}
+			}
 		}
 		if ( $anchor_changed && $anchor_done ) {
 			$this->db->update_link_anchor_text( $link_id, $new_anchor );
@@ -2371,7 +2426,7 @@ class TSOLIIN_Admin {
 		$link_id = isset( $_POST['link_id'] ) ? absint( $_POST['link_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$link    = $link_id ? $this->db->get_link( $link_id ) : null;
 		if ( ! $link ) {
-			wp_send_json_error( array( 'message' => __( 'Link not found.', 'tso-link-inspector' ) ) );
+			$this->send_stale_row_success();
 		}
 		$type = isset( $link->link_type ) ? (string) $link->link_type : 'link';
 
@@ -2457,7 +2512,7 @@ class TSOLIIN_Admin {
 			wp_send_json_error( array( 'message' => __( 'Invalid ID.', 'tso-link-inspector' ) ) );
 		}
 		if ( ! $this->db->delete_link( $link_id ) ) {
-			wp_send_json_error( array( 'message' => __( 'Record not found.', 'tso-link-inspector' ) ) );
+			$this->send_stale_row_success();
 		}
 		wp_send_json_success( array( 'message' => __( 'Record deleted.', 'tso-link-inspector' ) ) );
 	}
@@ -2468,7 +2523,7 @@ class TSOLIIN_Admin {
 		$pattern = isset( $_POST['pattern'] ) ? sanitize_text_field( wp_unslash( $_POST['pattern'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$link    = $link_id ? $this->db->get_link( $link_id ) : null;
 		if ( ! $link ) {
-			wp_send_json_error( array( 'message' => __( 'Link not found.', 'tso-link-inspector' ) ) );
+			$this->send_stale_row_success();
 		}
 
 		if ( '' === $pattern ) {
@@ -2518,7 +2573,7 @@ class TSOLIIN_Admin {
 		$link_id = isset( $_POST['link_id'] ) ? absint( $_POST['link_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$link    = $link_id ? $this->db->get_link( $link_id ) : null;
 		if ( ! $link ) {
-			wp_send_json_error( array( 'message' => __( 'Link not found.', 'tso-link-inspector' ) ) );
+			$this->send_stale_row_success();
 		}
 		$this->require_link_mutation_cap( $link );
 
@@ -2558,7 +2613,7 @@ class TSOLIIN_Admin {
 		$link_id = isset( $_POST['link_id'] ) ? absint( $_POST['link_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$link    = $link_id ? $this->db->get_link( $link_id ) : null;
 		if ( ! $link ) {
-			wp_send_json_error( array( 'message' => __( 'Link not found.', 'tso-link-inspector' ) ) );
+			$this->send_stale_row_success();
 		}
 		$this->require_link_mutation_cap( $link );
 
@@ -2597,7 +2652,7 @@ class TSOLIIN_Admin {
 		}
 		$link = $this->db->get_link( $link_id );
 		if ( ! $link ) {
-			wp_send_json_error( array( 'message' => __( 'Link not found.', 'tso-link-inspector' ) ) );
+			$this->send_stale_row_success();
 		}
 		$this->db->mark_as_not_broken( $link_id );
 		$updated = $this->db->get_link( $link_id );
@@ -2721,6 +2776,9 @@ class TSOLIIN_Admin {
 				if ( $ok ) {
 					$this->db->delete_link( $link_id );
 				}
+			} else {
+				// Already removed by a post save / scan — treat as done so bulk does not error.
+				$ok = true;
 			}
 			wp_send_json_success( array(
 				'done'       => ( $index + 1 ) >= $total,
@@ -2887,6 +2945,9 @@ class TSOLIIN_Admin {
 				wp_send_json_success( array( 'done' => true, 'processed' => $total ) );
 			}
 			$deleted = $this->db->delete_link( $link_id );
+			if ( ! $deleted ) {
+				$deleted = true;
+			}
 			wp_send_json_success(
 				array(
 					'done'       => ( $index + 1 ) >= $total,
@@ -2980,7 +3041,7 @@ class TSOLIIN_Admin {
 		$link_id = isset( $_POST['link_id'] ) ? absint( $_POST['link_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$link    = $link_id ? $this->db->get_link( $link_id ) : null;
 		if ( ! $link ) {
-			wp_send_json_error( array( 'message' => __( 'Link not found.', 'tso-link-inspector' ) ) );
+			$this->send_stale_row_success();
 		}
 
 		$link_type = isset( $link->link_type ) ? (string) $link->link_type : 'link';
@@ -3014,6 +3075,7 @@ class TSOLIIN_Admin {
 		$suggestions  = array();
 		$seen_urls    = array( (string) $link->link_url );
 		$bot_blocked  = false;
+		$unverified_remote = false;
 		$link_broken  = ! empty( $link->is_broken );
 
 		// If the DB already has a known redirect_url, offer it as first (instant) suggestion — except when
@@ -3038,8 +3100,14 @@ class TSOLIIN_Admin {
 				$sc           = (int) $r_dest['status_code'];
 				$display_code = $sc;
 				$reason       = __( 'Destination detected (re-checked now)', 'tso-link-inspector' );
-				if ( TSOLIIN_HTTP::is_bot_block_status( $sc ) ) {
-					$bot_blocked = true;
+				$dest_unverified = TSOLIIN_HTTP::is_unverified_remote_status( $sc )
+					&& (
+						TSOLIIN_HTTP::is_trusted_canonical_upgrade( $orig_abs, $rurl )
+						|| $this->http->is_meaningful_redirect_target( $orig_abs, $rurl )
+					);
+				if ( TSOLIIN_HTTP::is_bot_block_status( $sc ) || TSOLIIN_HTTP::is_unverified_remote_status( $sc ) ) {
+					$bot_blocked = TSOLIIN_HTTP::is_bot_block_status( $sc );
+					$unverified_remote = true;
 					$stored_code = (int) $link->status_code;
 					if ( in_array( $stored_code, array( 301, 302, 303, 307, 308 ), true ) ) {
 						$display_code = $stored_code;
@@ -3052,7 +3120,9 @@ class TSOLIIN_Admin {
 					'label'       => TSOLIIN_HTTP::status_label( $display_code, $rurl ),
 					'reason'      => $reason,
 					'confidence'  => 'high',
+					'unverified'  => $dest_unverified && ! TSOLIIN_HTTP::suggestion_fixes_broken_link( $r_orig, $r_dest, (int) $link->status_code ),
 					'actionable'  => TSOLIIN_HTTP::suggestion_fixes_broken_link( $r_orig, $r_dest, (int) $link->status_code )
+						|| $dest_unverified
 						|| (
 							! $link_broken
 							&& in_array( (int) $link->status_code, array( 301, 302, 303, 307, 308 ), true )
@@ -3069,6 +3139,9 @@ class TSOLIIN_Admin {
 				if ( ! empty( $s['status_code'] ) && TSOLIIN_HTTP::is_bot_block_status( (int) $s['status_code'] ) ) {
 					$bot_blocked = true;
 				}
+				if ( ! empty( $s['status_code'] ) && TSOLIIN_HTTP::is_unverified_remote_status( (int) $s['status_code'] ) ) {
+					$unverified_remote = true;
+				}
 				$suggestions[] = $s;
 				$seen_urls[]   = $s['url'];
 			}
@@ -3084,18 +3157,21 @@ class TSOLIIN_Admin {
 			if ( TSOLIIN_HTTP::is_bot_block_status( (int) $r_live['status_code'] ) ) {
 				$bot_blocked = true;
 			}
+			if ( TSOLIIN_HTTP::is_unverified_remote_status( (int) $r_live['status_code'] ) ) {
+				$unverified_remote = true;
+			}
 			$suggestion['url']         = $safe_url;
 			$suggestion['status_code'] = (int) $r_live['status_code'];
 			$suggestion['label']       = TSOLIIN_HTTP::status_label( (int) $r_live['status_code'], $safe_url );
 			$suggestion['reason']      = sanitize_text_field( isset( $suggestion['reason'] ) ? (string) $suggestion['reason'] : '' );
-			$unverified                = ! empty( $suggestion['unverified'] )
-				|| (
-					TSOLIIN_HTTP::is_bot_block_status( (int) $r_live['status_code'] )
-					&& TSOLIIN_HTTP::is_trusted_canonical_upgrade( $orig_abs, $safe_url )
-				);
+			$meaningful                = TSOLIIN_HTTP::is_trusted_canonical_upgrade( $orig_abs, $safe_url )
+				|| $this->http->is_meaningful_redirect_target( $orig_abs, $safe_url );
+			$live_ok                   = TSOLIIN_HTTP::suggestion_fixes_broken_link( $r_orig, $r_live, (int) $link->status_code );
+			$unverified                = ! $live_ok
+				&& TSOLIIN_HTTP::is_unverified_remote_status( (int) $r_live['status_code'] )
+				&& $meaningful;
 			$suggestion['unverified']  = $unverified;
-			$suggestion['actionable']  = TSOLIIN_HTTP::suggestion_fixes_broken_link( $r_orig, $r_live, (int) $link->status_code )
-				|| ( $unverified && TSOLIIN_HTTP::is_trusted_canonical_upgrade( $orig_abs, $safe_url ) );
+			$suggestion['actionable']  = $live_ok || $unverified;
 			$safe_suggestions[]        = $suggestion;
 		}
 
@@ -3124,7 +3200,10 @@ class TSOLIIN_Admin {
 					if ( '' === $target ) {
 						return false;
 					}
-					if ( ! empty( $row['unverified'] ) && TSOLIIN_HTTP::is_trusted_canonical_upgrade( $orig_abs, $target ) ) {
+					if ( ! empty( $row['unverified'] ) && (
+						TSOLIIN_HTTP::is_trusted_canonical_upgrade( $orig_abs, $target )
+						|| $this->http->is_meaningful_redirect_target( $orig_abs, $target )
+					) ) {
 						return true;
 					}
 					if ( TSOLIIN_HTTP::is_trusted_canonical_upgrade( $orig_abs, $target ) && TSOLIIN_HTTP::is_plain_http_url( $orig_abs ) ) {
@@ -3144,16 +3223,26 @@ class TSOLIIN_Admin {
 				}
 			)
 		);
+		$has_unverified = ! empty(
+			array_filter(
+				$safe_suggestions,
+				static function ( $row ) {
+					return ! empty( $row['unverified'] );
+				}
+			)
+		);
 
 		$note = '';
 		if ( empty( $safe_suggestions ) ) {
-			if ( $bot_blocked ) {
-				$note = __( 'The destination blocks automated checks (403/401/429). It may work in a browser, but your server cannot confirm it — verify manually before editing the link.', 'tso-link-inspector' );
+			if ( $bot_blocked || $unverified_remote ) {
+				$note = __( 'This server cannot confirm the destination (geo-block, bot wall, or timeout). It may work in a browser. Use Edit link and tick “Save even if this server cannot verify the URL”, or mark the link as OK.', 'tso-link-inspector' );
 			} elseif ( $link_broken ) {
 				$note = __( 'No alternative URL could fix this broken link. The destination may be permanently gone — update or remove the link manually.', 'tso-link-inspector' );
 			} elseif ( TSOLIIN_HTTP::is_plain_http_url( $orig_abs ) ) {
 				$note = __( 'No HTTPS upgrade or other useful alternative was found. The site may only offer HTTP, so there is nothing helpful to apply—changing www alone would not fix the insecure HTTP link.', 'tso-link-inspector' );
 			}
+		} elseif ( $has_unverified ) {
+			$note = __( 'This server cannot confirm the suggested URL (geo-block, bot wall, or timeout). Use Apply anyway to save it, or Apply and ignore domain to skip future checks for this host.', 'tso-link-inspector' );
 		} elseif ( $bot_blocked && $has_actionable ) {
 			$note = __( 'Social networks often block server checks. The suggested HTTPS URL should work in a browser — open it to confirm before applying.', 'tso-link-inspector' );
 		} elseif ( $bot_blocked && ! $has_actionable ) {
@@ -3175,7 +3264,7 @@ class TSOLIIN_Admin {
 		$new_url_raw = isset( $_POST['new_url'] ) ? wp_unslash( $_POST['new_url'] ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 		$link        = $link_id ? $this->db->get_link( $link_id ) : null;
 		if ( ! $link ) {
-			wp_send_json_error( array( 'message' => __( 'Link not found.', 'tso-link-inspector' ) ) );
+			$this->send_stale_row_success();
 		}
 
 		$blocked = $this->get_non_editable_source_message( $link );
