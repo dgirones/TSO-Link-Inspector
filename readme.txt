@@ -5,7 +5,7 @@ Tags: broken links, link checker, seo, maintenance, links
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 2.3.5
+Stable tag: 2.3.6
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -115,6 +115,11 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 
 == Changelog ==
 
+= 2.3.6 =
+* Improvement: Edit link and Suggested URL can save a URL when this server cannot verify it (geo-block, bot wall, or timeout), with an option to ignore that domain.
+* Fix: Delete and other row actions no longer error when the list row was already removed after editing the post.
+* Fix: Dashboard totals no longer show 0 (`dai.ly` LIKE); Chrome Web Store IPv6 “Cannot connect”; **Go to edit** scroll for Classic `youtu.be` and Gutenberg code view.
+
 = 2.3.5 =
 * Fix: Check queue, bulk Mark as OK/unlink, Recheck sync, cron scan coverage, and verified HTTPS Suggest.
 * Fix: **Go to edit** for multi-gallery classic posts, YouTube embeds, and Jetpack galleries.
@@ -122,11 +127,6 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 * Fix: WordPress.org review — External services in readme, POST export/reset, report CSS/JS via enqueue (no inline style/onclick).
 * Fix: Count published posts without loading every ID; Internal/External tab counts stay in SQL; pin DNS before each HTTP hop.
 * Fix: Scoped dashboard/PDF stats, stale reset counts, cron incomplete-scan timestamp, blocked-redirect reporting, ACF Options Go to edit, and front-end focus needle.
-* Fix: Dashboard totals and filter tabs no longer show 0 when links exist (Dailymotion `dai.ly` LIKE clause broke `$wpdb->prepare()`).
-* Fix: Recheck no longer reports working Chrome Web Store (and other AAAA) URLs as “Cannot connect” — DNS pin keeps IPv4 when IPv6 is unreachable.
-* Fix: **Go to edit** selects/scrolls to Classic Visual plain `youtu.be` URLs, and scrolls Gutenberg code view to the selected embed URL.
-* Improvement: Edit link and Suggested URL can save an HTTPS/redirect URL when this server cannot verify it (geo-block, bot wall, or timeout), with an option to ignore that domain.
-* Fix: Delete (and other row actions) no longer show an error when the list row was already removed after editing the post.
 
 = 2.3.3 =
 * New: Bulk action **Upgrade selected to HTTPS** — only when the server confirms a working HTTPS URL (same rules as Suggestion → Apply; unverified bot-wall suggestions are skipped).
@@ -425,6 +425,9 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 * Initial release.
 
 == Upgrade Notice ==
+
+= 2.3.6 =
+Recommended. Save unverified URLs (geo-block), stale-row delete, dashboard totals, Chrome Web Store IPv6, and Go to edit scroll.
 
 = 2.3.5 =
 Recommended. Check/bulk/cron fixes, classic multi-gallery editor focus, and admin performance.
