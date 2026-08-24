@@ -37,6 +37,9 @@ Find and fix broken links across your entire WordPress site without opening each
 * **Configurable automatic checks**: recheck intervals for OK and broken links, plus hourly batch size.
 * **HTTP insecure detection**: flags active links still using HTTP instead of HTTPS.
 * **Ignore list**: add domains or URL prefixes to never scan or check.
+* **Continue check / Restart from zero**: resume a stopped run, or wipe progress and recheck everything.
+* **History**: Settings tab listing recent URL changes from Edit, Suggest, Convert to /path, and HTTPS (capped log; oldest rows pruned automatically).
+* **Save when unverified**: Edit link / Suggest can still save a URL if this server cannot confirm it (geo-block, bot wall, timeout), with an option to ignore that domain.
 * **Scan images and iframes**: optionally detect broken `<img src>` and embedded videos.
 * **Scan user comments**: optionally check links in approved comments.
 * **Custom fields (ACF)**: optionally scan URL fields added by plugins like Advanced Custom Fields.
@@ -53,9 +56,9 @@ Find and fix broken links across your entire WordPress site without opening each
 = How it works =
 
 1. Click **Scan now** to extract all links from your posts.
-2. Click **Check now** to send HTTP requests to every URL (runs server-side, you can close the browser).
+2. Click **Check now** to send HTTP requests to every URL (runs server-side, you can close the browser). If you stop mid-run, use **Continue check** to resume, or **Restart from zero** to wipe progress and recheck everything.
 3. Review results using the **Broken**, **Redirect**, **HTTP insecure** and other filter tabs.
-4. Fix links using **Edit URL**, **Suggestion**, **Unlink** or **Mark as OK** from each row.
+4. Fix links using **Edit URL**, **Suggestion**, **Unlink** or **Mark as OK** from each row. Recent URL changes appear under **Settings → History**.
 
 = Redirect intelligence =
 
@@ -93,6 +96,15 @@ Only if you want it to. Enable **Do not update modification date** in Settings t
 
 = What does "Mark as OK" do? =
 It sets the link status to 200 OK manually without making an HTTP request. The post is not modified. Useful for URLs that are temporarily blocked but you know they work.
+
+= What is Continue check vs Restart from zero? =
+If a check was stopped and unchecked links remain, **Continue check** resumes from where it left off (already-checked links stay as they are). **Restart from zero** clears check progress and rechecks every link from scratch. **Continue check** starts immediately; **Restart from zero** asks for confirmation.
+
+= Where is the URL change History? =
+Open **Tools → TSO Link Inspector → Settings → History**. It lists recent changes from Edit link, Suggest apply, Convert to /path, and Upgrade to HTTPS (including bulk actions). The log keeps a limited number of rows (oldest removed automatically). You can delete all history records; this does not change posts or the link list.
+
+= Can I save a URL when the server cannot verify it? =
+Yes. In Edit link or Suggest, if this server gets a geo-block, bot wall, or timeout, you can still save the URL. Optionally tick **ignore domain** so that host is added to the Ignore list and skipped in future scans/checks.
 
 == External services ==
 
@@ -169,7 +181,7 @@ See changelog.txt in the plugin folder for versions before 2.3.0.
 == Upgrade Notice ==
 
 = 2.3.7 =
-Recommended. History of URL edits, Continue/Restart check controls, clearer Edit link checkboxes, and fewer duplicate admin SQL queries.
+Recommended. History tab for URL edits, Continue check / Restart from zero, clearer Edit link checkboxes, and fewer duplicate admin SQL queries.
 
 = 2.3.6 =
 Recommended. Save unverified URLs, ACF/Elementor Go to edit, resume Check now, and consistent dashboard counters.

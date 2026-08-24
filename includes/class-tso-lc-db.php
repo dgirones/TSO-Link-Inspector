@@ -1054,20 +1054,19 @@ class TSOLIIN_DB {
 		global $wpdb;
 		$this->ensure_history_table();
 		$limit = max( 1, (int) $limit );
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix + fixed suffix.
 		$count = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$this->history_table}" );
 		$extra = self::history_overflow_count( $count, $limit );
-		if ( $extra < 1 ) {
-			// phpcs:enable
-			return 0;
+		$deleted = 0;
+		if ( $extra > 0 ) {
+			$deleted = (int) $wpdb->query(
+				$wpdb->prepare(
+					"DELETE FROM {$this->history_table} ORDER BY created_at ASC, id ASC LIMIT %d",
+					$extra
+				)
+			);
 		}
-		$deleted = (int) $wpdb->query(
-			$wpdb->prepare(
-				"DELETE FROM {$this->history_table} ORDER BY created_at ASC, id ASC LIMIT %d",
-				$extra
-			)
-		);
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		return max( 0, $deleted );
 	}
 
@@ -1077,7 +1076,7 @@ class TSOLIIN_DB {
 	public function count_url_change_history() {
 		global $wpdb;
 		$this->ensure_history_table();
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix + fixed suffix.
 		return (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$this->history_table}" );
 	}
 
@@ -1089,13 +1088,14 @@ class TSOLIIN_DB {
 		global $wpdb;
 		$this->ensure_history_table();
 		$limit = max( 1, min( self::HISTORY_MAX_ROWS, absint( $limit ) ) );
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix + fixed suffix.
 		$rows = $wpdb->get_results(
 			$wpdb->prepare(
 				"SELECT * FROM {$this->history_table} ORDER BY created_at DESC, id DESC LIMIT %d",
 				$limit
 			)
 		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		return is_array( $rows ) ? $rows : array();
 	}
 
@@ -1106,7 +1106,7 @@ class TSOLIIN_DB {
 		global $wpdb;
 		$this->ensure_history_table();
 		// Prefer DELETE over TRUNCATE so shared hosts without DROP privilege still work.
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix + fixed suffix.
 		$wpdb->query( "DELETE FROM {$this->history_table}" );
 		return 1;
 	}
