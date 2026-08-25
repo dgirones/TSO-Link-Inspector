@@ -5,7 +5,7 @@ Tags: broken links, link checker, seo, maintenance, links
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 2.3.9
+Stable tag: 2.3.8
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -127,10 +127,8 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 
 == Changelog ==
 
-= 2.3.9 =
-* Fix: Suggested URL Apply no longer says “No changes to save” when the new URL is a shorter path of the old one (e.g. Microsoft `/software-download/windows8` → `/software-download/`).
-
 = 2.3.8 =
+* Fix: Suggested URL Apply no longer says “No changes to save” when the new URL is a shorter path of the old one (e.g. Microsoft `/software-download/windows8` → `/software-download/`).
 * Fix: Do not run `CREATE TABLE` for the History log when `{prefix}tso_link_inspector_history` already exists (stops `Table ... already exists` on admin load).
 
 = 2.3.7 =
@@ -186,11 +184,8 @@ See changelog.txt in the plugin folder for versions before 2.3.0.
 
 == Upgrade Notice ==
 
-= 2.3.9 =
-Fix: Suggest Apply no longer reports “no changes” when the destination URL is a shorter path on the same host.
-
 = 2.3.8 =
-Recommended. Stops a harmless `Table ... already exists` log when the History table is already present.
+Recommended. Stops a harmless `Table ... already exists` log when the History table is already present. Suggest Apply no longer reports “no changes” when the destination is a shorter path on the same host.
 
 = 2.3.7 =
 Recommended. History tab for URL edits, Continue check / Restart from zero, clearer Edit link checkboxes, and fewer duplicate admin SQL queries.
