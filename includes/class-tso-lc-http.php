@@ -91,6 +91,112 @@ class TSOLIIN_HTTP {
 	}
 
 	/**
+	 * RFC 3986 characters that can continue a URL after a matched prefix.
+	 *
+	 * Used so `/software-download/` is not treated as `/software-download/windows8`.
+	 *
+	 * @return string Character class for PCRE (without enclosing brackets).
+	 */
+	private static function url_continuation_char_class() {
+		// ] first (literal), hyphen last. Preg delimiter is # — hash is \#.
+		return ']A-Za-z0-9._~:/?\#@!$&\'()*+,;=%[\\-';
+	}
+
+	/**
+	 * Whether a URL match at $offset is a complete URL, not a shorter prefix of a longer one.
+	 *
+	 * @param string $haystack Content.
+	 * @param int    $offset   Byte offset of the match.
+	 * @param int    $length   Length of the matched needle.
+	 * @return bool
+	 */
+	public static function url_match_is_complete_at( $haystack, $offset, $length ) {
+		$haystack = (string) $haystack;
+		$offset   = (int) $offset;
+		$length   = (int) $length;
+		$next_pos = $offset + $length;
+		if ( $length <= 0 || $offset < 0 || $next_pos > strlen( $haystack ) ) {
+			return false;
+		}
+		if ( $next_pos === strlen( $haystack ) ) {
+			return true;
+		}
+		$next = $haystack[ $next_pos ];
+		return ( 1 !== preg_match( '#[' . self::url_continuation_char_class() . ']#', $next ) );
+	}
+
+	/**
+	 * Byte offset of a complete URL occurrence (case-insensitive), or false.
+	 *
+	 * @param string $haystack Content.
+	 * @param string $needle   URL to find.
+	 * @return int|false
+	 */
+	public static function find_complete_url_offset( $haystack, $needle ) {
+		$haystack = (string) $haystack;
+		$needle   = (string) $needle;
+		if ( '' === $needle ) {
+			return false;
+		}
+		$offset = 0;
+		$len    = strlen( $needle );
+		$hay_l  = strlen( $haystack );
+		while ( $offset <= $hay_l - $len ) {
+			$pos = stripos( $haystack, $needle, $offset );
+			if ( false === $pos ) {
+				return false;
+			}
+			if ( self::url_match_is_complete_at( $haystack, $pos, $len ) ) {
+				return $pos;
+			}
+			$offset = $pos + 1;
+		}
+		return false;
+	}
+
+	/**
+	 * Whether $haystack contains $needle as a complete URL, not as a parent-path prefix.
+	 *
+	 * @param string $haystack Content.
+	 * @param string $needle   URL to find.
+	 * @return bool
+	 */
+	public static function content_contains_complete_url( $haystack, $needle ) {
+		return false !== self::find_complete_url_offset( $haystack, $needle );
+	}
+
+	/**
+	 * Replace complete URL occurrences (does not patch a shorter path inside a longer URL).
+	 *
+	 * @param string $haystack Content.
+	 * @param string $old      URL to replace.
+	 * @param string $new      Replacement.
+	 * @param int    $limit    Max replacements (-1 = all).
+	 * @return string
+	 */
+	public static function replace_complete_url_occurrences( $haystack, $old, $new, $limit = -1 ) {
+		$haystack = (string) $haystack;
+		$old      = (string) $old;
+		$new      = (string) $new;
+		$limit    = (int) $limit;
+		if ( '' === $old || 0 === $limit || false === stripos( $haystack, $old ) ) {
+			return $haystack;
+		}
+		$pattern = '#' . preg_quote( $old, '#' ) . '(?![' . self::url_continuation_char_class() . '])#i';
+		$count   = 0;
+		$next    = preg_replace_callback(
+			$pattern,
+			static function () use ( $new ) {
+				return $new;
+			},
+			$haystack,
+			$limit,
+			$count
+		);
+		return is_string( $next ) ? $next : $haystack;
+	}
+
+	/**
 	 * Hostnames considered internal for this WordPress site (with www / non-www variants).
 	 *
 	 * @return string[] Lowercase hostnames.

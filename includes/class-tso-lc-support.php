@@ -799,7 +799,7 @@ class TSOLIIN_Support {
 			if ( '' === $variant ) {
 				continue;
 			}
-			$pos = stripos( $content, $variant );
+			$pos = TSOLIIN_HTTP::find_complete_url_offset( $content, $variant );
 			if ( false !== $pos ) {
 				return substr( $content, $pos, strlen( $variant ) );
 			}
