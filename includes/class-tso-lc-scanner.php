@@ -3332,31 +3332,8 @@ class TSOLIIN_Scanner {
 		if ( '' === $stored || '' === $attr_value ) {
 			return false;
 		}
-		if ( 0 === strcasecmp( $stored, $attr_value ) ) {
+		if ( $this->urls_are_same_resource( $stored, $attr_value, $post_id ) ) {
 			return true;
-		}
-		$stored_abs = self::resolve_to_absolute_url( $stored, $post_id );
-		$attr_abs   = self::resolve_to_absolute_url( $attr_value, $post_id );
-		if (
-			'' !== $stored_abs
-			&& '' !== $attr_abs
-			&& class_exists( 'TSOLIIN_HTTP' )
-			&& TSOLIIN_HTTP::is_http_same_resource_bar_www( $stored_abs, $attr_abs )
-		) {
-			return true;
-		}
-		// Same resource ignoring #fragments (e.g. /page/#section vs /page/).
-		if ( '' !== $stored_abs && '' !== $attr_abs ) {
-			$stored_nof = $this->url_without_fragment( $stored_abs );
-			$attr_nof   = $this->url_without_fragment( $attr_abs );
-			if (
-				'' !== $stored_nof
-				&& '' !== $attr_nof
-				&& class_exists( 'TSOLIIN_HTTP' )
-				&& TSOLIIN_HTTP::is_http_same_resource_bar_www( $stored_nof, $attr_nof )
-			) {
-				return true;
-			}
 		}
 		foreach ( $this->build_url_replace_candidates( $stored, $post_id ) as $variant ) {
 			if ( 0 === strcasecmp( (string) $variant, $attr_value ) ) {
@@ -3365,19 +3342,9 @@ class TSOLIIN_Scanner {
 		}
 		$norm_stored = $this->normalize_url_for_matching( $stored );
 		$norm_attr   = $this->normalize_url_for_matching( $attr_value );
-		if ( $norm_stored === $norm_attr ) {
-			return true;
-		}
-		$norm_stored_nof = $this->normalize_url_for_matching( $this->url_without_fragment( $stored ) );
-		$norm_attr_nof   = $this->normalize_url_for_matching( $this->url_without_fragment( $attr_value ) );
-		if ( '' !== $norm_stored_nof && $norm_stored_nof === $norm_attr_nof ) {
-			return true;
-		}
+		// Truncated DB value: the href in content may continue after the stored prefix.
 		$min = 32;
 		if ( strlen( $norm_stored ) >= $min && 0 === strpos( $norm_attr, $norm_stored ) ) {
-			return true;
-		}
-		if ( strlen( $norm_attr ) >= $min && 0 === strpos( $norm_stored, $norm_attr ) ) {
 			return true;
 		}
 		return false;
@@ -5076,21 +5043,65 @@ class TSOLIIN_Scanner {
 	/**
 	 * Whether a candidate URL is equivalent to the stored link URL for editing.
 	 *
+	 * Used by Edit/Apply to skip no-op saves. Must not treat a shorter path as
+	 * the same URL (e.g. /software-download/ vs /software-download/windows8).
+	 *
 	 * @param string $stored_url    URL as stored in the database.
-	 * @param string $candidate_url URL submitted in the edit modal.
+	 * @param string $candidate_url URL submitted in the edit modal or Suggest Apply.
 	 * @param int    $post_id       Post ID for relative-path resolution.
 	 * @return bool
 	 */
 	public function urls_equivalent_for_stored_link( $stored_url, $candidate_url, $post_id = 0 ) {
-		$stored_url    = (string) $stored_url;
-		$candidate_url = (string) $candidate_url;
-		if ( '' === $stored_url || '' === $candidate_url ) {
+		return $this->urls_are_same_resource( $stored_url, $candidate_url, $post_id );
+	}
+
+	/**
+	 * Same resource (scheme/host/path/query), ignoring www, trailing slash, case, and #fragment.
+	 *
+	 * @param string $a       First URL.
+	 * @param string $b       Second URL.
+	 * @param int    $post_id Post ID for relative-path resolution.
+	 * @return bool
+	 */
+	private function urls_are_same_resource( $a, $b, $post_id = 0 ) {
+		$a = (string) $a;
+		$b = (string) $b;
+		if ( '' === $a || '' === $b ) {
 			return false;
 		}
-		if ( $stored_url === $candidate_url ) {
+		if ( 0 === strcasecmp( $a, $b ) ) {
 			return true;
 		}
-		return $this->url_attribute_matches_stored( $stored_url, $candidate_url, $post_id );
+		$a_abs = self::resolve_to_absolute_url( $a, $post_id );
+		$b_abs = self::resolve_to_absolute_url( $b, $post_id );
+		if (
+			'' !== $a_abs
+			&& '' !== $b_abs
+			&& class_exists( 'TSOLIIN_HTTP' )
+			&& TSOLIIN_HTTP::is_http_same_resource_bar_www( $a_abs, $b_abs )
+		) {
+			return true;
+		}
+		if ( '' !== $a_abs && '' !== $b_abs ) {
+			$a_nof = $this->url_without_fragment( $a_abs );
+			$b_nof = $this->url_without_fragment( $b_abs );
+			if (
+				'' !== $a_nof
+				&& '' !== $b_nof
+				&& class_exists( 'TSOLIIN_HTTP' )
+				&& TSOLIIN_HTTP::is_http_same_resource_bar_www( $a_nof, $b_nof )
+			) {
+				return true;
+			}
+		}
+		$norm_a = $this->normalize_url_for_matching( $a );
+		$norm_b = $this->normalize_url_for_matching( $b );
+		if ( $norm_a === $norm_b ) {
+			return true;
+		}
+		$norm_a_nof = $this->normalize_url_for_matching( $this->url_without_fragment( $a ) );
+		$norm_b_nof = $this->normalize_url_for_matching( $this->url_without_fragment( $b ) );
+		return ( '' !== $norm_a_nof && $norm_a_nof === $norm_b_nof );
 	}
 
 	/**

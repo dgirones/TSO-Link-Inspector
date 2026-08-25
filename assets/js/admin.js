@@ -337,7 +337,7 @@
 				e.preventDefault();
 				var $btn   = $( this );
 				var linkId = parseInt( $btn.data( 'id' ), 10 );
-				var newUrl = $btn.data( 'url' );
+				var newUrl = $btn.attr( 'data-url' ) || $btn.data( 'url' );
 				var $row   = self.findLinkRow( linkId );
 				var opts   = {
 					applyAnyway  : 1 === parseInt( $btn.data( 'applyAnyway' ), 10 ) || 1 === parseInt( $btn.attr( 'data-apply-anyway' ), 10 ),
@@ -2113,7 +2113,9 @@
 							self.applySmartUrl( linkId, newUrl, $btn, $row, { applyAnyway: true, ignoreDomain: !! opts.ignoreDomain } );
 							return;
 						}
-						alert( err.message || tsoliinData.i18n.error );
+						window.setTimeout( function () {
+							alert( err.message || tsoliinData.i18n.error );
+						}, 0 );
 					}
 				},
 				error: function () {
