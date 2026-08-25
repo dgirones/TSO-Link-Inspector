@@ -121,6 +121,21 @@ class TSOLIIN_DB {
 	 */
 	public function create_history_table() {
 		global $wpdb;
+
+		if ( $this->history_table_ensured ) {
+			return;
+		}
+		$this->history_table_ensured = true;
+
+		/*
+		 * dbDelta can re-run CREATE TABLE when DESCRIBE does not match (common with
+		 * DEFAULT CURRENT_TIMESTAMP). If the table already exists, skip — do not log
+		 * "Table ... already exists" on admin_init / version bump.
+		 */
+		if ( $this->db_table_exists_exact( $this->history_table ) ) {
+			return;
+		}
+
 		$charset = $wpdb->get_charset_collate();
 		$sql     = "CREATE TABLE {$this->history_table} (
 			id bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -136,8 +151,10 @@ class TSOLIIN_DB {
 			KEY link_id (link_id)
 		) $charset;";
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+		$suppress = $wpdb->suppress_errors();
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange -- dbDelta is the WP standard for schema changes.
 		dbDelta( $sql );
+		$wpdb->suppress_errors( $suppress );
 	}
 
 	/**
@@ -320,11 +337,7 @@ class TSOLIIN_DB {
 	 * @return void
 	 */
 	private function ensure_history_table() {
-		if ( $this->history_table_ensured ) {
-			return;
-		}
 		$this->create_history_table();
-		$this->history_table_ensured = true;
 	}
 
 	/**
