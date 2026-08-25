@@ -3342,12 +3342,34 @@ class TSOLIIN_Scanner {
 		}
 		$norm_stored = $this->normalize_url_for_matching( $stored );
 		$norm_attr   = $this->normalize_url_for_matching( $attr_value );
-		// Truncated DB value: the href in content may continue after the stored prefix.
+		return $this->stored_url_looks_truncated_in_attr( $norm_stored, $norm_attr );
+	}
+
+	/**
+	 * Truncated DB href: content may continue the same path token, not a new segment.
+	 *
+	 * `/software-download/` must not match `/software-download/windows8`.
+	 *
+	 * @param string $norm_stored Normalized stored URL.
+	 * @param string $norm_attr   Normalized attribute value.
+	 * @return bool
+	 */
+	private function stored_url_looks_truncated_in_attr( $norm_stored, $norm_attr ) {
 		$min = 32;
-		if ( strlen( $norm_stored ) >= $min && 0 === strpos( $norm_attr, $norm_stored ) ) {
+		if ( strlen( $norm_stored ) < $min || 0 !== strpos( $norm_attr, $norm_stored ) ) {
+			return false;
+		}
+		if ( $norm_stored === $norm_attr ) {
 			return true;
 		}
-		return false;
+		if ( '/' === substr( $norm_stored, -1 ) ) {
+			return false;
+		}
+		$rest = substr( $norm_attr, strlen( $norm_stored ) );
+		if ( '' === $rest ) {
+			return true;
+		}
+		return ! in_array( $rest[0], array( '/', '?', '#' ), true );
 	}
 
 	/**
@@ -3450,7 +3472,7 @@ class TSOLIIN_Scanner {
 		}
 
 		foreach ( $this->build_url_replace_candidates( $stored_url, $post_id ) as $variant ) {
-			if ( '' !== $variant && false !== stripos( $content, (string) $variant ) ) {
+			if ( '' !== $variant && TSOLIIN_HTTP::content_contains_complete_url( $content, (string) $variant ) ) {
 				$spellings[] = (string) $variant;
 			}
 		}
@@ -4074,10 +4096,10 @@ class TSOLIIN_Scanner {
 			$next           = preg_replace_callback(
 				$srcset_pattern,
 				static function ( $m ) use ( $v, $escaped_new ) {
-					if ( false === stripos( $m[3], (string) $v ) ) {
+					if ( ! TSOLIIN_HTTP::content_contains_complete_url( $m[3], (string) $v ) ) {
 						return $m[0];
 					}
-					$new_srcset = str_replace( (string) $v, $escaped_new, $m[3] );
+					$new_srcset = TSOLIIN_HTTP::replace_complete_url_occurrences( $m[3], (string) $v, $escaped_new, -1 );
 					if ( $new_srcset === $m[3] ) {
 						return $m[0];
 					}
@@ -4187,7 +4209,7 @@ class TSOLIIN_Scanner {
 			);
 		}
 
-		$next = str_replace( $variant, $new_url, $content );
+		$next = TSOLIIN_HTTP::replace_complete_url_occurrences( $content, $variant, $new_url, $limit );
 		return array(
 			'changed' => ( $next !== $content ),
 			'content' => $next,
@@ -4517,7 +4539,7 @@ class TSOLIIN_Scanner {
 			if ( '' === $variant ) {
 				continue;
 			}
-			$pos = stripos( $content, (string) $variant );
+			$pos = TSOLIIN_HTTP::find_complete_url_offset( $content, (string) $variant );
 			if ( false === $pos ) {
 				continue;
 			}

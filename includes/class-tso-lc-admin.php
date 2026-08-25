@@ -2445,9 +2445,9 @@ class TSOLIIN_Admin {
 				continue;
 			}
 			$content = (string) $comment->comment_content;
-			if ( false !== strpos( $content, $url )
-				|| false !== strpos( $content, str_replace( '&', '&amp;', $url ) )
-				|| false !== strpos( $content, urldecode( $url ) ) ) {
+			if ( TSOLIIN_HTTP::content_contains_complete_url( $content, $url )
+				|| TSOLIIN_HTTP::content_contains_complete_url( $content, str_replace( '&', '&amp;', $url ) )
+				|| TSOLIIN_HTTP::content_contains_complete_url( $content, urldecode( $url ) ) ) {
 				$matched[] = (int) $comment->comment_ID;
 			}
 		}
