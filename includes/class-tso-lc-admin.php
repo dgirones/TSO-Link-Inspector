@@ -210,8 +210,12 @@ class TSOLIIN_Admin {
 		if ( ! in_array( $hook, $our_pages, true ) ) {
 			return;
 		}
-		wp_enqueue_style( 'tsoliin-admin', TSOLIIN_PLUGIN_URL . 'assets/css/admin.css', array(), TSOLIIN_VERSION );
-		wp_enqueue_script( 'tsoliin-admin', TSOLIIN_PLUGIN_URL . 'assets/js/admin.js', array( 'jquery' ), TSOLIIN_VERSION, true );
+		$admin_css = TSOLIIN_PLUGIN_DIR . 'assets/css/admin.css';
+		$admin_js  = TSOLIIN_PLUGIN_DIR . 'assets/js/admin.js';
+		$css_ver   = is_readable( $admin_css ) ? (string) filemtime( $admin_css ) : TSOLIIN_VERSION;
+		$js_ver    = is_readable( $admin_js ) ? (string) filemtime( $admin_js ) : TSOLIIN_VERSION;
+		wp_enqueue_style( 'tsoliin-admin', TSOLIIN_PLUGIN_URL . 'assets/css/admin.css', array(), $css_ver );
+		wp_enqueue_script( 'tsoliin-admin', TSOLIIN_PLUGIN_URL . 'assets/js/admin.js', array( 'jquery' ), $js_ver, true );
 
 		$bg = $this->get_cached_bg_progress();
 
@@ -434,126 +438,69 @@ class TSOLIIN_Admin {
 		echo '<h1 class="wp-heading-inline">';
 		echo '<span class="dashicons dashicons-admin-links tsoliin-title-icon"></span> ';
 		if ( $view_post ) {
-			$this->render_plugin_title_with_version( true );
-			echo ' <span style="color:#646970;">&#8250;</span> ';
-			echo esc_html( $view_post->post_title );
+			$this->render_plugin_title_with_version( false );
 		} elseif ( $products_view ) {
 			$this->render_plugin_title_with_version( true );
-			echo ' <span style="color:#646970;">&#8250;</span> ';
+			echo ' <span class="tsoliin-breadcrumb-sep">&#8250;</span> ';
 			echo esc_html__( 'Products with issues', 'tso-link-inspector' );
 		} elseif ( $posts_view ) {
 			$this->render_plugin_title_with_version( true );
-			echo ' <span style="color:#646970;">&#8250;</span> ';
+			echo ' <span class="tsoliin-breadcrumb-sep">&#8250;</span> ';
 			echo esc_html__( 'Posts with issues', 'tso-link-inspector' );
 		} else {
 			$this->render_plugin_title_with_version( false );
 		}
 		echo '</h1>';
+		echo '<div class="tsoliin-page-head__actions">';
+		echo '<div id="tsoliin-screen-meta-slot" class="tsoliin-screen-meta-slot"></div>';
 		TSOLIIN_Support::render_donate_button();
+		echo '</div>';
 		echo '</div>';
 		echo '<hr class="wp-header-end">';
 
-		$this->render_scan_coverage_notices();
-		$this->render_onboarding_banner();
+		echo '<div class="tsoliin-hero">';
 
 		// Stats cards.
 		echo '<div class="tsoliin-stats">';
-		$this->stat_card( TSOLIIN_Support::format_display_number( $stats['total'] ),   __( 'Total', 'tso-link-inspector' ),    '' );
-		$this->stat_card( TSOLIIN_Support::format_display_number( $stats['broken'] ),  __( 'Broken', 'tso-link-inspector' ), 'broken' );
-		$this->stat_card( TSOLIIN_Support::format_display_number( $stats['redirect'] ),__( 'Redirect', 'tso-link-inspector' ),'redirect' );
-		$this->stat_card( TSOLIIN_Support::format_display_number( $stats['ok'] ),      __( 'OK', 'tso-link-inspector' ),'ok' );
-		$this->stat_card( TSOLIIN_Support::format_display_number( $stats['unchecked'] ), __( 'Unchecked', 'tso-link-inspector' ), 'unchecked', __( 'Links found but not checked by HTTP yet. Cron or Check now will verify them.', 'tso-link-inspector' ) );
+		$this->stat_card( TSOLIIN_Support::format_display_number( $stats['total'] ), __( 'Total', 'tso-link-inspector' ), '', '', 'all', $view_post_id );
+		$this->stat_card( TSOLIIN_Support::format_display_number( $stats['broken'] ), __( 'Broken', 'tso-link-inspector' ), 'broken', '', 'broken', $view_post_id );
+		$this->stat_card( TSOLIIN_Support::format_display_number( $stats['redirect'] ), __( 'Redirect', 'tso-link-inspector' ), 'redirect', '', 'redirect', $view_post_id );
+		$this->stat_card( TSOLIIN_Support::format_display_number( $stats['ok'] ), __( 'OK', 'tso-link-inspector' ), 'ok', '', 'ok', $view_post_id );
+		$this->stat_card(
+			TSOLIIN_Support::format_display_number( $stats['unchecked'] ),
+			__( 'Unchecked', 'tso-link-inspector' ),
+			'unchecked',
+			__( 'Links found but not checked by HTTP yet. Cron or Check now will verify them.', 'tso-link-inspector' ),
+			'unchecked',
+			$view_post_id
+		);
 		$http_insecure_count = isset( $stats['http_insecure'] ) ? $stats['http_insecure'] : 0;
 		if ( $http_insecure_count > 0 ) {
-			$this->stat_card( TSOLIIN_Support::format_display_number( $http_insecure_count ), __( 'HTTP insecure', 'tso-link-inspector' ), 'http-insecure', __( 'Active links using HTTP. Redirecting HTTP links are listed here first; after HTTPS they move to Redirect.', 'tso-link-inspector' ) );
+			$this->stat_card(
+				TSOLIIN_Support::format_display_number( $http_insecure_count ),
+				__( 'HTTP insecure', 'tso-link-inspector' ),
+				'http-insecure',
+				__( 'Active links using HTTP. Redirecting HTTP links are listed here first; after HTTPS they move to Redirect.', 'tso-link-inspector' ),
+				'http_insecure',
+				$view_post_id
+			);
 		}
-		$this->stat_card( $scanned_posts . ' / ' . $total_posts,   __( 'Scanned', 'tso-link-inspector' ),'posts' );
+		$this->stat_card( $scanned_posts . ' / ' . $total_posts, __( 'Scanned', 'tso-link-inspector' ), 'posts' );
 		echo '</div>';
 
-		// Last scan info.
-		echo '<p class="tsoliin-last-scan">';
-		if ( '' !== $last_scan ) {
-			echo esc_html( sprintf(
-				/* translators: %s: date */
-				__( 'Last scan: %s', 'tso-link-inspector' ),
-				wp_date( $date_fmt, strtotime( $last_scan ) )
-			) );
-		} else {
-			echo '<em>' . esc_html__( 'No scan has been run yet. Click Scan now.', 'tso-link-inspector' ) . '</em>';
-		}
 		$last_check_count = (int) get_option( 'tsoliin_last_check_count', 0 );
 		$schedule         = TSOLIIN_Schedule::get_settings();
 		$queue            = TSOLIIN_Schedule::get_queue_stats( $this->db );
 		$pending_count    = (int) $queue['pending'];
-		$ok_days          = (int) $schedule['recheck_days'];
-		$broken_days      = (int) $schedule['broken_recheck_days'];
-		$checks_per_day   = (int) $queue['checks_per_day'];
-		$est_days         = (int) $queue['est_days'];
-
-		if ( '' !== $last_check ) {
-			$check_info = wp_date( $date_fmt, strtotime( $last_check ) );
-			if ( $last_check_count > 0 ) {
-				/* translators: %d: number of links */
-				$check_info .= ' (' . sprintf( __( '%d links', 'tso-link-inspector' ), $last_check_count ) . ')';
-			} else {
-				$check_info .= ' ' . __( '(no pending links)', 'tso-link-inspector' );
-			}
-			echo ' | ' . esc_html( sprintf(
-				/* translators: %s: date and info */
-				__( 'Last automatic check: %s', 'tso-link-inspector' ),
-				$check_info
-			) );
-		}
-
-		// Pending links indicator.
-		if ( $pending_count > 0 ) {
-			$queue_tip = sprintf(
-				/* translators: 1: never-checked count, 2: broken stale count, 3: OK stale count, 4: OK recheck days, 5: broken recheck days, 6: checks per day, 7: estimated days to clear queue */
-				__( 'Queue: %1$d never checked, %2$d broken (older than %5$d days), %3$d OK (older than %4$d days). Throughput: ~%6$d checks/day. Estimated time to clear queue: ~%7$d days.', 'tso-link-inspector' ),
-				(int) $queue['unchecked'],
-				(int) $queue['broken_stale'],
-				(int) $queue['ok_stale'],
-				$ok_days,
-				$broken_days,
-				$checks_per_day,
-				max( 1, $est_days )
-			);
-			echo ' | ';
-			printf(
-				'<span title="%s">%s</span>',
-				esc_attr( $queue_tip ),
-				esc_html( sprintf(
-					/* translators: %d: count */
-					__( '%d in check queue', 'tso-link-inspector' ),
-					$pending_count
-				) )
-			);
-		} else {
-			echo ' | <span style="color:#0a7d33;" title="' . esc_attr__( 'All links were checked recently.', 'tso-link-inspector' ) . '">' . esc_html__( 'All up to date', 'tso-link-inspector' ) . '</span>';
-		}
-
-		// Next cron run times.
-		$next_scan  = wp_next_scheduled( TSOLIIN_Cron::HOOK_SCAN );
-		$next_check = wp_next_scheduled( TSOLIIN_Cron::HOOK_CHECK );
-		if ( $next_scan || $next_check ) {
-			// Use explicit date+time format for cron times (always show hours:minutes).
-			$cron_fmt = get_option( 'date_format' ) . ' H:i';
-			if ( $next_scan ) {
-				echo ' | ' . esc_html( sprintf(
-					/* translators: %s: date and time */
-					__( 'Next automatic scan: %s', 'tso-link-inspector' ),
-					wp_date( $cron_fmt, $next_scan )
-				) );
-			}
-			if ( $next_check ) {
-				echo ' | ' . esc_html( sprintf(
-					/* translators: %s: date and time */
-					__( 'Next automatic check: %s', 'tso-link-inspector' ),
-					wp_date( $cron_fmt, $next_check )
-				) );
-			}
-		}
-		echo '</p>';
+		$this->render_hero_status_chips(
+			$last_scan,
+			$last_check,
+			$last_check_count,
+			$pending_count,
+			$queue,
+			$schedule,
+			$date_fmt
+		);
 
 		// Toolbar.
 		$pending_check      = (int) $this->db->get_pending_check_count( absint( $view_post_id ) );
@@ -574,9 +521,14 @@ class TSOLIIN_Admin {
 		$check_prog_pct     = $bg['pct'];
 		$stop_check_style   = $bg['running'] ? '' : ' style="display:none;"';
 		$restart_style      = $show_restart ? '' : ' style="display:none;"';
+		$scan_btn_title     = __( 'Reads your content and adds links to this list. It does not test whether URLs work yet.', 'tso-link-inspector' );
+		$check_btn_title    = $view_post_id
+			? __( 'Tests each saved URL in this post over HTTP. Use Stop to cancel.', 'tso-link-inspector' )
+			: __( 'Tests every saved URL on the site over HTTP (can take a while). Use Stop to cancel. After editing one post, open its link list or use Recheck on a row.', 'tso-link-inspector' );
 
 		echo '<div class="tsoliin-toolbar">';
-		echo '<button type="button" id="tsoliin-start-scan" class="button button-primary">';
+		echo '<div class="tsoliin-toolbar__primary">';
+		echo '<button type="button" id="tsoliin-start-scan" class="button button-primary" title="' . esc_attr( $scan_btn_title ) . '">';
 		echo '<span class="dashicons dashicons-search"></span> ';
 		echo esc_html__( 'Scan now', 'tso-link-inspector' );
 		echo '</button>';
@@ -584,7 +536,7 @@ class TSOLIIN_Admin {
 		echo '<span class="dashicons dashicons-no-alt"></span> ';
 		echo esc_html__( 'Stop scan', 'tso-link-inspector' );
 		echo '</button>';
-		echo '<button type="button" id="tsoliin-start-check" class="button tsoliin-btn-check"' . $btn_check_disabled . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+		echo '<button type="button" id="tsoliin-start-check" class="button tsoliin-btn-check" title="' . esc_attr( $check_btn_title ) . '"' . $btn_check_disabled . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		echo '<span class="dashicons dashicons-yes-alt"></span> ';
 		echo esc_html( $btn_check_label );
 		echo '</button>';
@@ -596,6 +548,8 @@ class TSOLIIN_Admin {
 		echo '<span class="dashicons dashicons-no-alt"></span> ';
 		echo esc_html__( 'Stop', 'tso-link-inspector' );
 		echo '</button>';
+		echo '</div>';
+		echo '<div class="tsoliin-toolbar__secondary">';
 		echo '<button type="button" id="tsoliin-diagnose" class="button button-secondary" aria-expanded="false" aria-controls="tsoliin-diagnose-panel" title="' . esc_attr__( 'Quick health check when scan or check fails: database, settings, and one sample post.', 'tso-link-inspector' ) . '">';
 		echo '<span class="dashicons dashicons-info"></span> ';
 		echo esc_html__( 'Diagnostics', 'tso-link-inspector' );
@@ -636,6 +590,7 @@ class TSOLIIN_Admin {
 		}
 		$this->render_export_form( 'tsoliin_export_csv', 'tsoliin-export-csv', __( 'Export CSV', 'tso-link-inspector' ), 'download', $export_fields, false );
 		$this->render_export_form( 'tsoliin_export_pdf', 'tsoliin-export-pdf', __( 'Export report (PDF)', 'tso-link-inspector' ), 'media-document', $export_fields, true );
+		echo '</div>';
 		echo '<div id="tsoliin-scan-progress" class="tsoliin-progress" style="display:none;" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"><div class="tsoliin-progress__bar"></div><span class="tsoliin-progress__label"></span></div>';
 		echo '<div id="tsoliin-check-progress" class="tsoliin-progress tsoliin-progress--check" style="display:' . esc_attr( $check_prog_display ) . ';" role="progressbar" aria-valuenow="' . esc_attr( (string) $check_prog_pct ) . '" aria-valuemin="0" aria-valuemax="100">';
 		echo '<div class="tsoliin-progress__bar" style="width:' . esc_attr( (string) $check_prog_pct ) . '%"></div>';
@@ -645,73 +600,26 @@ class TSOLIIN_Admin {
 		}
 		echo '</span></div>';
 		echo '</div>';
-		echo '<p class="tsoliin-toolbar-help">';
-		echo '<span class="tsoliin-toolbar-help__scan"><strong>' . esc_html__( 'Scan:', 'tso-link-inspector' ) . '</strong> ';
-		echo esc_html__( 'Reads your content and adds links to this list. It does not test whether URLs work yet.', 'tso-link-inspector' );
-		echo '</span> ';
-		echo '<span class="tsoliin-toolbar-help__check"><strong>' . esc_html__( 'Check:', 'tso-link-inspector' ) . '</strong> ';
-		if ( $view_post_id ) {
-			echo esc_html__( 'Tests each saved URL in this post over HTTP. Use Stop to cancel.', 'tso-link-inspector' );
-		} else {
-			echo esc_html__( 'Tests every saved URL on the site over HTTP (can take a while). Use Stop to cancel. After editing one post, open its link list or use Recheck on a row.', 'tso-link-inspector' );
+		echo '</div><!-- .tsoliin-hero -->';
+
+		if ( ! $view_post ) {
+			$this->render_main_section_nav( $posts_view, $products_view );
 		}
-		echo '</span></p>';
+
+		$this->render_scan_coverage_notices();
+		$this->render_onboarding_banner();
 
 		echo '<div id="tsoliin-diagnose-panel" class="tsoliin-diagnose-panel" style="display:none;"></div>';
 
-		// ── Secondary action bar: context buttons + search ────────────────
-		echo '<div class="tsoliin-action-bar">';
-		echo '<div class="tsoliin-action-bar__left">';
-		echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector-settings' ) ) . '" class="button button-secondary">' . esc_html__( 'Settings', 'tso-link-inspector' ) . '</a> ';
-		echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector-settings&tab=history' ) ) . '" class="button button-secondary">' . esc_html__( 'History', 'tso-link-inspector' ) . '</a> ';
-		echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector-settings&tab=help' ) ) . '" class="button button-secondary">' . esc_html__( 'Help', 'tso-link-inspector' ) . '</a> ';
-		if ( ! $view_post ) {
-			if ( $summary_view ) {
-				echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector' ) ) . '" class="button button-secondary">&#8592; ' . esc_html__( 'All links', 'tso-link-inspector' ) . '</a> ';
-			} else {
-				echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector&view=posts' ) ) . '" class="button button-secondary">' . esc_html__( 'Posts with issues', 'tso-link-inspector' ) . '</a> ';
-				if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_scan_enabled() ) {
-					echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector&view=products' ) ) . '" class="button button-secondary">' . esc_html__( 'Products with issues', 'tso-link-inspector' ) . '</a> ';
-				}
-			}
-		}
 		if ( $view_post ) {
+			echo '<div class="tsoliin-action-bar">';
+			echo '<div class="tsoliin-action-bar__left">';
 			echo '<a href="' . esc_url( (string) get_edit_post_link( $view_post_id ) ) . '" class="button button-secondary" target="_blank">' . esc_html__( 'Edit post', 'tso-link-inspector' ) . '</a> ';
 			echo '<a href="' . esc_url( (string) get_permalink( $view_post_id ) ) . '" class="button button-secondary" target="_blank">' . esc_html__( 'View post', 'tso-link-inspector' ) . '</a> ';
-			echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector' ) ) . '" class="button button-secondary">&#8592; ' . esc_html__( 'Back', 'tso-link-inspector' ) . '</a>';
+			echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector' ) ) . '" class="button button-secondary tsoliin-post-scope-link tsoliin-post-scope-link--back">&#8592; ' . esc_html__( 'Back', 'tso-link-inspector' ) . '</a>';
+			echo '</div>';
+			echo '</div>';
 		}
-		echo '</div>';
-		echo '<div class="tsoliin-action-bar__right">';
-		if ( ! $summary_view ) {
-		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
-		$search_val = isset( $_REQUEST['s'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['s'] ) ) : '';
-		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
-		$filter_val = isset( $_REQUEST['filter'] ) ? sanitize_key( wp_unslash( $_REQUEST['filter'] ) ) : 'all';
-		if ( in_array( $filter_val, $this->get_allowed_quality_filters(), true ) ) {
-			$filter_val = 'all';
-		} elseif ( ! in_array( $filter_val, $this->get_allowed_status_filters(), true ) ) {
-			$filter_val = 'all';
-		}
-		$quality_val = $this->get_list_quality_filter_from_request();
-		echo '<form method="get" id="tsoliin-search-form" class="tsoliin-search-form" style="display:inline-flex;gap:4px;align-items:center;">';
-		echo '<input type="hidden" name="page" value="tso-link-inspector" />';
-		if ( $view_post_id ) { echo '<input type="hidden" name="post_id" value="' . esc_attr( (string) $view_post_id ) . '" />'; }
-		if ( 'all' !== $filter_val ) {
-			echo '<input type="hidden" name="filter" value="' . esc_attr( $filter_val ) . '" />';
-		}
-		if ( '' !== $quality_val ) {
-			echo '<input type="hidden" name="quality_filter" value="' . esc_attr( $quality_val ) . '" />';
-		}
-		$scope_search = $this->get_scope_from_request();
-		if ( 'all' !== $scope_search ) {
-			echo '<input type="hidden" name="scope" value="' . esc_attr( $scope_search ) . '" />';
-		}
-		echo '<input type="search" name="s" value="' . esc_attr( $search_val ) . '" placeholder="' . esc_attr__( 'Search URLs...', 'tso-link-inspector' ) . '" class="tsoliin-search-input" autocomplete="off" aria-controls="tsoliin-list-table-region" />';
-		echo '<button type="submit" class="button">' . esc_html__( 'Search', 'tso-link-inspector' ) . '</button>';
-		echo '</form>';
-		}
-		echo '</div>';
-		echo '</div>';
 
 		if ( $posts_view ) {
 			$this->render_content_summary_view( 'posts' );
@@ -719,10 +627,16 @@ class TSOLIIN_Admin {
 			$this->render_content_summary_view( 'products' );
 		} else {
 			$scope_val = $this->get_scope_from_request();
-			// Table (form without search_box since search is in action bar above).
+			// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			$filter_val = isset( $_REQUEST['filter'] ) ? sanitize_key( wp_unslash( $_REQUEST['filter'] ) ) : 'all';
+			if ( in_array( $filter_val, $this->get_allowed_quality_filters(), true ) ) {
+				$filter_val = 'all';
+			} elseif ( ! in_array( $filter_val, $this->get_allowed_status_filters(), true ) ) {
+				$filter_val = 'all';
+			}
 			echo '<form id="tsoliin-list-form" method="get">';
 			echo '<div id="tsoliin-list-table-region" class="tsoliin-list-table-region">';
-			$this->render_list_table_region( $table, $view_post_id, $filter_val, $scope_val, $search_val );
+			$this->render_list_table_region( $table, $view_post_id, $filter_val, $scope_val );
 			echo '</div>';
 			echo '</form>';
 		}
@@ -821,7 +735,7 @@ class TSOLIIN_Admin {
 				$post_id = absint( $row->post_id );
 				$url     = add_query_arg( 'post_id', $post_id, admin_url( 'tools.php?page=tso-link-inspector' ) );
 				echo '<tr>';
-				echo '<td><a href="' . esc_url( $url ) . '"><strong>' . esc_html( (string) $row->post_title ) . '</strong></a></td>';
+				echo '<td><a href="' . esc_url( $url ) . '" class="tsoliin-post-scope-link"><strong>' . esc_html( (string) $row->post_title ) . '</strong></a></td>';
 				echo '<td class="column-num">' . esc_html( TSOLIIN_Support::format_display_number( (int) $row->broken ) ) . '</td>';
 				echo '<td class="column-num">' . esc_html( TSOLIIN_Support::format_display_number( (int) $row->redirect_count ) ) . '</td>';
 				echo '<td class="column-num">' . esc_html( TSOLIIN_Support::format_display_number( (int) $row->unchecked_count ) ) . '</td>';
@@ -856,16 +770,167 @@ class TSOLIIN_Admin {
 	}
 
 	/**
-	 * Output a stat card.
+	 * Build a list-table URL for a status filter chip/card.
+	 *
+	 * @param string $filter_key  Allowed status filter or `all`.
+	 * @param int    $post_id     Optional post scope.
+	 * @return string
 	 */
-	private function stat_card( $number, $label, $modifier, $tooltip = '' ) {
+	private function get_stat_filter_url( $filter_key, $post_id = 0 ) {
+		$args = array(
+			'page' => 'tso-link-inspector',
+		);
+		if ( $post_id > 0 ) {
+			$args['post_id'] = absint( $post_id );
+		}
+		if ( 'all' !== $filter_key && in_array( $filter_key, $this->get_allowed_status_filters(), true ) ) {
+			$args['filter'] = $filter_key;
+		}
+		return add_query_arg( $args, admin_url( 'tools.php' ) );
+	}
+
+	/**
+	 * Status chips under the hero stats (scan/check/cron summary).
+	 *
+	 * @param string               $last_scan          Last full scan timestamp.
+	 * @param string               $last_check         Last cron check timestamp.
+	 * @param int                  $last_check_count   Links checked in last batch.
+	 * @param int                  $pending_count      Pending HTTP checks.
+	 * @param array<string,mixed>  $queue              Queue stats from schedule helper.
+	 * @param array<string,mixed>  $schedule           Schedule settings.
+	 * @param string               $date_fmt           Site date/time format.
+	 * @return void
+	 */
+	private function render_hero_status_chips( $last_scan, $last_check, $last_check_count, $pending_count, array $queue, array $schedule, $date_fmt ) {
+		echo '<div class="tsoliin-hero-chips" role="list">';
+
+		echo '<span class="tsoliin-chip" role="listitem">';
+		echo '<span class="dashicons dashicons-search" aria-hidden="true"></span> ';
+		if ( '' !== $last_scan ) {
+			echo esc_html( sprintf(
+				/* translators: %s: date */
+				__( 'Last scan: %s', 'tso-link-inspector' ),
+				wp_date( $date_fmt, strtotime( $last_scan ) )
+			) );
+		} else {
+			echo esc_html__( 'No scan yet', 'tso-link-inspector' );
+		}
+		echo '</span>';
+
+		if ( '' !== $last_check ) {
+			$check_date = wp_date( $date_fmt, strtotime( $last_check ) );
+			$check_info = $check_date;
+			if ( $last_check_count > 0 ) {
+				/* translators: %d: number of links */
+				$check_info .= ' (' . sprintf( __( '%d links', 'tso-link-inspector' ), $last_check_count ) . ')';
+			} else {
+				$check_info .= ' ' . __( '(no pending links)', 'tso-link-inspector' );
+			}
+			$check_chip_title = sprintf(
+				/* translators: %s: date and info */
+				__( 'Last automatic check: %s', 'tso-link-inspector' ),
+				$check_info
+			);
+			echo '<span class="tsoliin-chip" role="listitem" title="' . esc_attr( $check_chip_title ) . '">';
+			echo '<span class="dashicons dashicons-yes-alt" aria-hidden="true"></span> ';
+			echo esc_html( sprintf(
+				/* translators: %s: date (chip label; full detail in title attribute) */
+				__( 'Last check: %s', 'tso-link-inspector' ),
+				$check_date
+			) );
+			echo '</span>';
+		}
+
+		if ( $pending_count > 0 ) {
+			$queue_tip = sprintf(
+				/* translators: 1: never-checked count, 2: broken stale count, 3: OK stale count, 4: OK recheck days, 5: broken recheck days, 6: checks per day, 7: estimated days to clear queue */
+				__( 'Queue: %1$d never checked, %2$d broken (older than %5$d days), %3$d OK (older than %4$d days). Throughput: ~%6$d checks/day. Estimated time to clear queue: ~%7$d days.', 'tso-link-inspector' ),
+				(int) $queue['unchecked'],
+				(int) $queue['broken_stale'],
+				(int) $queue['ok_stale'],
+				(int) $schedule['recheck_days'],
+				(int) $schedule['broken_recheck_days'],
+				(int) $queue['checks_per_day'],
+				max( 1, (int) $queue['est_days'] )
+			);
+			echo '<span class="tsoliin-chip tsoliin-chip--warn" role="listitem" title="' . esc_attr( $queue_tip ) . '">';
+			echo '<span class="dashicons dashicons-clock" aria-hidden="true"></span> ';
+			echo esc_html( sprintf(
+				/* translators: %d: count */
+				__( '%d in check queue', 'tso-link-inspector' ),
+				$pending_count
+			) );
+			echo '</span>';
+		} else {
+			echo '<span class="tsoliin-chip tsoliin-chip--ok" role="listitem" title="' . esc_attr__( 'All links were checked recently.', 'tso-link-inspector' ) . '">';
+			echo '<span class="dashicons dashicons-saved" aria-hidden="true"></span> ';
+			echo esc_html__( 'All up to date', 'tso-link-inspector' );
+			echo '</span>';
+		}
+
+		$next_scan  = wp_next_scheduled( TSOLIIN_Cron::HOOK_SCAN );
+		$next_check = wp_next_scheduled( TSOLIIN_Cron::HOOK_CHECK );
+		if ( $next_scan || $next_check ) {
+			$cron_fmt = get_option( 'date_format' ) . ' H:i';
+			if ( $next_scan ) {
+				$scan_when = wp_date( $cron_fmt, $next_scan );
+				echo '<span class="tsoliin-chip" role="listitem" title="' . esc_attr( sprintf(
+					/* translators: %s: date and time */
+					__( 'Next automatic scan: %s', 'tso-link-inspector' ),
+					$scan_when
+				) ) . '">';
+				echo '<span class="dashicons dashicons-calendar-alt" aria-hidden="true"></span> ';
+				echo esc_html( sprintf(
+					/* translators: %s: date and time */
+					__( 'Next scan: %s', 'tso-link-inspector' ),
+					$scan_when
+				) );
+				echo '</span>';
+			}
+			if ( $next_check ) {
+				$check_when = wp_date( $cron_fmt, $next_check );
+				echo '<span class="tsoliin-chip" role="listitem" title="' . esc_attr( sprintf(
+					/* translators: %s: date and time */
+					__( 'Next automatic check: %s', 'tso-link-inspector' ),
+					$check_when
+				) ) . '">';
+				echo '<span class="dashicons dashicons-backup" aria-hidden="true"></span> ';
+				echo esc_html( sprintf(
+					/* translators: %s: date and time */
+					__( 'Next check: %s', 'tso-link-inspector' ),
+					$check_when
+				) );
+				echo '</span>';
+			}
+		}
+
+		echo '</div>';
+	}
+
+	/**
+	 * Output a stat card.
+	 *
+	 * @param string $number      Display number.
+	 * @param string $label       Label.
+	 * @param string $modifier    BEM modifier slug.
+	 * @param string $tooltip     Optional title attribute.
+	 * @param string $filter_key  Optional status filter for link cards.
+	 * @param int    $view_post_id Post scope for filter links.
+	 */
+	private function stat_card( $number, $label, $modifier, $tooltip = '', $filter_key = '', $view_post_id = 0 ) {
 		$cls   = '' !== $modifier ? ' tsoliin-stat--' . esc_attr( $modifier ) : '';
 		$title = '' !== $tooltip ? ' title="' . esc_attr( $tooltip ) . '"' : '';
-		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $cls and $title are fully escaped above.
-		echo '<div class="tsoliin-stat' . $cls . '"' . $title . '>';
+		$href  = ( '' !== $filter_key && 'posts' !== $filter_key ) ? $this->get_stat_filter_url( $filter_key, $view_post_id ) : '';
+		if ( '' !== $href ) {
+			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $cls and $title are fully escaped above.
+			echo '<a class="tsoliin-stat' . $cls . '" href="' . esc_url( $href ) . '"' . $title . '>';
+		} else {
+			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $cls and $title are fully escaped above.
+			echo '<div class="tsoliin-stat' . $cls . '"' . $title . '>';
+		}
 		echo '<span class="tsoliin-stat__number">' . esc_html( $number ) . '</span>';
 		echo '<span class="tsoliin-stat__label">' . esc_html( $label ) . '</span>';
-		echo '</div>';
+		echo ( '' !== $href ) ? '</a>' : '</div>';
 	}
 
 	/**
@@ -954,24 +1019,112 @@ class TSOLIIN_Admin {
 	}
 
 	/**
+	 * Card-style section navigation (shared markup).
+	 *
+	 * @param array<int, array{url:string,label:string,icon?:string,active?:bool}> $tabs Tab definitions.
+	 * @param string                                                              $aria_label Accessible nav label.
+	 */
+	private function render_section_nav_tabs( array $tabs, $aria_label ) {
+		echo '<nav class="nav-tab-wrapper tsoliin-section-tabs" aria-label="' . esc_attr( $aria_label ) . '">';
+		foreach ( $tabs as $tab ) {
+			$url       = isset( $tab['url'] ) ? (string) $tab['url'] : '';
+			$label     = isset( $tab['label'] ) ? (string) $tab['label'] : '';
+			$icon      = isset( $tab['icon'] ) ? (string) $tab['icon'] : '';
+			$is_active = ! empty( $tab['active'] );
+			$active    = $is_active ? ' nav-tab-active' : '';
+			echo '<a href="' . esc_url( $url ) . '" class="nav-tab' . esc_attr( $active ) . '"' . ( $is_active ? ' aria-current="page"' : '' ) . '>';
+			if ( '' !== $icon ) {
+				echo '<span class="dashicons ' . esc_attr( $icon ) . '" aria-hidden="true"></span>';
+			}
+			echo esc_html( $label );
+			echo '</a>';
+		}
+		echo '</nav>';
+	}
+
+	/**
+	 * Main screen section links (Settings, History, Help, summary views).
+	 *
+	 * @param bool $posts_view    Posts-with-issues view active.
+	 * @param bool $products_view Products-with-issues view active.
+	 */
+	private function render_main_section_nav( $posts_view, $products_view ) {
+		$tabs = array(
+			array(
+				'url'    => admin_url( 'tools.php?page=tso-link-inspector-settings' ),
+				'label'  => __( 'Settings', 'tso-link-inspector' ),
+				'icon'   => 'dashicons-admin-generic',
+				'active' => false,
+			),
+			array(
+				'url'    => admin_url( 'tools.php?page=tso-link-inspector-settings&tab=history' ),
+				'label'  => __( 'History', 'tso-link-inspector' ),
+				'icon'   => 'dashicons-backup',
+				'active' => false,
+			),
+			array(
+				'url'    => admin_url( 'tools.php?page=tso-link-inspector-settings&tab=help' ),
+				'label'  => __( 'Help', 'tso-link-inspector' ),
+				'icon'   => 'dashicons-editor-help',
+				'active' => false,
+			),
+			array(
+				'url'    => admin_url( 'tools.php?page=tso-link-inspector&view=posts' ),
+				'label'  => __( 'Posts with issues', 'tso-link-inspector' ),
+				'icon'   => 'dashicons-warning',
+				'active' => $posts_view,
+			),
+		);
+		if ( class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_scan_enabled() ) {
+			$tabs[] = array(
+				'url'    => admin_url( 'tools.php?page=tso-link-inspector&view=products' ),
+				'label'  => __( 'Products with issues', 'tso-link-inspector' ),
+				'icon'   => 'dashicons-cart',
+				'active' => $products_view,
+			);
+		}
+		if ( $posts_view || $products_view ) {
+			$tabs[] = array(
+				'url'    => admin_url( 'tools.php?page=tso-link-inspector' ),
+				'label'  => __( 'All links', 'tso-link-inspector' ),
+				'icon'   => 'dashicons-admin-links',
+				'active' => false,
+			);
+		}
+		$this->render_section_nav_tabs( $tabs, __( 'Plugin sections', 'tso-link-inspector' ) );
+	}
+
+	/**
 	 * Settings / History / Help tab navigation.
 	 *
 	 * @param string $active_tab Active tab slug.
 	 */
 	private function render_settings_nav_tabs( $active_tab ) {
 		$base = admin_url( 'tools.php?page=tso-link-inspector-settings' );
-		$tabs = array(
-			'settings' => __( 'Settings', 'tso-link-inspector' ),
-			'history'  => __( 'History', 'tso-link-inspector' ),
-			'help'     => __( 'Help', 'tso-link-inspector' ),
+		$defs = array(
+			'settings' => array(
+				'label' => __( 'Settings', 'tso-link-inspector' ),
+				'icon'  => 'dashicons-admin-generic',
+			),
+			'history'  => array(
+				'label' => __( 'History', 'tso-link-inspector' ),
+				'icon'  => 'dashicons-backup',
+			),
+			'help'     => array(
+				'label' => __( 'Help', 'tso-link-inspector' ),
+				'icon'  => 'dashicons-editor-help',
+			),
 		);
-		echo '<nav class="nav-tab-wrapper tsoliin-settings-tabs" aria-label="' . esc_attr__( 'Settings sections', 'tso-link-inspector' ) . '">';
-		foreach ( $tabs as $slug => $label ) {
-			$url    = ( 'settings' === $slug ) ? $base : add_query_arg( 'tab', $slug, $base );
-			$active = $active_tab === $slug ? ' nav-tab-active' : '';
-			echo '<a href="' . esc_url( $url ) . '" class="nav-tab' . esc_attr( $active ) . '">' . esc_html( $label ) . '</a>';
+		$tabs = array();
+		foreach ( $defs as $slug => $def ) {
+			$tabs[] = array(
+				'url'    => ( 'settings' === $slug ) ? $base : add_query_arg( 'tab', $slug, $base ),
+				'label'  => $def['label'],
+				'icon'   => $def['icon'],
+				'active' => $active_tab === $slug,
+			);
 		}
-		echo '</nav>';
+		$this->render_section_nav_tabs( $tabs, __( 'Settings sections', 'tso-link-inspector' ) );
 	}
 
 	/**
@@ -1290,7 +1443,7 @@ class TSOLIIN_Admin {
 			$settings_tab = 'settings';
 		}
 
-		echo '<div class="wrap">';
+		echo '<div class="wrap tsoliin-wrap">';
 		echo '<div class="tsoliin-page-head">';
 		echo '<h1>';
 		echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector' ) ) . '" class="tsoliin-back-link">';
@@ -1812,10 +1965,10 @@ class TSOLIIN_Admin {
 	 * @param int                $view_post_id Optional post filter.
 	 * @param string             $filter_val   Active status filter.
 	 * @param string             $scope_val    Internal/external scope.
-	 * @param string             $search_val   Search string.
+	 * @param string             $scope_val    Internal/external scope.
 	 * @return void
 	 */
-	private function render_list_table_region( TSOLIIN_List_Table $table, $view_post_id, $filter_val, $scope_val, $search_val ) {
+	private function render_list_table_region( TSOLIIN_List_Table $table, $view_post_id, $filter_val, $scope_val ) {
 		echo '<input type="hidden" name="page" value="tso-link-inspector" />';
 		if ( $view_post_id ) {
 			echo '<input type="hidden" name="post_id" value="' . esc_attr( (string) $view_post_id ) . '" />';
@@ -1830,14 +1983,11 @@ class TSOLIIN_Admin {
 		if ( 'all' !== $scope_val ) {
 			echo '<input type="hidden" name="scope" value="' . esc_attr( $scope_val ) . '" />';
 		}
-		if ( '' !== $search_val ) {
-			echo '<input type="hidden" name="s" value="' . esc_attr( $search_val ) . '" />';
-		}
 		$table->display();
 	}
 
 	/**
-	 * Live search: return refreshed list table HTML without a full page reload.
+	 * Live search and AJAX list navigation: return refreshed list table HTML.
 	 *
 	 * @return void
 	 */
@@ -1883,7 +2033,7 @@ class TSOLIIN_Admin {
 		$table->prepare_items();
 
 		ob_start();
-		$this->render_list_table_region( $table, $post_id, $filter, $scope, $search );
+		$this->render_list_table_region( $table, $post_id, $filter, $scope );
 		wp_send_json_success(
 			array(
 				'html'  => ob_get_clean(),
@@ -3463,6 +3613,7 @@ class TSOLIIN_Admin {
 		if ( ! $link ) {
 			$this->send_stale_row_success();
 		}
+		$this->require_link_mutation_cap( $link );
 
 		$blocked = $this->get_non_editable_source_message( $link );
 		if ( '' !== $blocked ) {

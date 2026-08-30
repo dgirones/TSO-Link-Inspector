@@ -867,6 +867,9 @@ msgstr "Comprovació completada. Esperant que acabin altres accions…"
 msgid "Check started. You can continue browsing."
 msgstr "Comprovació iniciada. Pots continuar navegant."
 
+msgid "Resuming check from where it left off. You can continue browsing."
+msgstr "Es repren la comprovació on es va aturar. Pots continuar navegant."
+
 msgid "Stopped"
 msgstr "Aturat"
 
@@ -3120,3 +3123,22 @@ msgid ""
 msgstr ""
 "Afegeix també el domini de la URL que estàs desant a la llista "
 "d’ignorats (salta els escanejos i comprovacions HTTP futures)."
+
+msgid "No scan yet"
+msgstr "Sense escaneig"
+
+msgid "Last check: %s"
+msgstr "Última comprovació: %s"
+
+msgid "Next scan: %s"
+msgstr "Proper escaneig: %s"
+
+msgid "Next check: %s"
+msgstr "Propera comprovació: %s"
+
+msgid "Next: scan %1$s, check %2$s"
+msgstr "Proper: escaneig %1$s, comprovació %2$s"
+
+msgid "Next automatic scan: %1$s. Next automatic check: %2$s."
+msgstr ""
+"Proper escaneig automàtic: %1$s. Propera comprovació automàtica: %2$s."

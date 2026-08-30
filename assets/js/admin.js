@@ -28,6 +28,7 @@
 		previewTimer: null,
 		searchTimer   : null,
 		searchXhr     : null,
+		listNavXhr    : null,
 		lastSearchVal : '',
 		suggestXhr      : null,
 		suggestTrigger  : null,
@@ -130,6 +131,9 @@
 			if ( this.searchXhr && this.searchXhr.readyState !== 4 ) {
 				return true;
 			}
+			if ( this.listNavXhr && this.listNavXhr.readyState !== 4 ) {
+				return true;
+			}
 			if ( this.suggestXhr && this.suggestXhr.readyState !== 4 ) {
 				return true;
 			}
@@ -139,7 +143,55 @@
 		// ---------------------------------------------------------------
 		// Init
 		// ---------------------------------------------------------------
+		repositionScreenMeta: function () {
+			var $wrap  = $( '.tsoliin-wrap' );
+			var $slot  = $( '#tsoliin-screen-meta-slot' );
+			var $links = $( '#screen-meta-links' );
+			var $meta  = $( '#screen-meta' );
+			var $head  = $wrap.find( '.tsoliin-page-head' ).first();
+			if ( $slot.length && $links.length && ! $links.closest( '#tsoliin-screen-meta-slot' ).length ) {
+				$links.appendTo( $slot );
+			}
+			// Keep the Screen Options panel with the plugin header (not orphaned at the page top).
+			if ( $head.length && $meta.length && ! $meta.data( 'tsoliinRepositioned' ) ) {
+				$head.after( $meta );
+				$meta.data( 'tsoliinRepositioned', true );
+			}
+		},
+
+		markScrollBeforePostNav: function () {
+			try {
+				window.sessionStorage.setItem( 'tsoliinScrollToList', '1' );
+			} catch ( err ) {
+				// Ignore — full navigation still works without scroll restore.
+			}
+		},
+
+		maybeScrollToListOnLoad: function () {
+			var should = false;
+			try {
+				if ( '1' === window.sessionStorage.getItem( 'tsoliinScrollToList' ) ) {
+					should = true;
+					window.sessionStorage.removeItem( 'tsoliinScrollToList' );
+				}
+			} catch ( err ) {
+				// Ignore storage errors.
+			}
+			if ( ! should && /[?&]post_id=\d+/.test( window.location.search ) ) {
+				should = true;
+			}
+			if ( ! should || ! document.getElementById( 'tsoliin-list-table-region' ) ) {
+				return;
+			}
+			var self = this;
+			self.restoreListScroll();
+			window.requestAnimationFrame( function () {
+				self.restoreListScroll();
+			} );
+		},
+
 		init: function () {
+			this.repositionScreenMeta();
 			this.$form         = $( '#tsoliin-list-form' );
 			this.$startBtn     = $( '#tsoliin-start-scan' );
 			this.$stopScanBtn  = $( '#tsoliin-stop-scan' );
@@ -172,6 +224,7 @@
 
 			this.bindEvents();
 			this.bindLiveSearch();
+			this.maybeScrollToListOnLoad();
 
 			// Resume polling if a check was running before page load.
 			if ( parseInt( tsoliinData.bgRunning, 10 ) === 1 ) {
@@ -198,11 +251,215 @@
 			}
 		},
 
+		/**
+		 * Parse list filter/pagination link query args.
+		 *
+		 * @param {string} href Link href.
+		 * @return {Object|null}
+		 */
+		parseListNavLink: function ( href ) {
+			if ( ! href ) {
+				return null;
+			}
+			try {
+				var url = new URL( href, window.location.href );
+				if ( url.searchParams.get( 'page' ) !== 'tso-link-inspector' ) {
+					return null;
+				}
+				return {
+					href           : url.toString(),
+					filter         : url.searchParams.get( 'filter' ) || 'all',
+					quality_filter : url.searchParams.get( 'quality_filter' ) || '',
+					scope          : url.searchParams.get( 'scope' ) || 'all',
+					paged          : Math.max( 1, parseInt( url.searchParams.get( 'paged' ), 10 ) || 1 ),
+					s              : url.searchParams.has( 's' ) ? ( url.searchParams.get( 's' ) || '' ) : '',
+					post_id        : parseInt( url.searchParams.get( 'post_id' ), 10 ) || 0,
+					orderby        : url.searchParams.get( 'orderby' ) || '',
+					order          : url.searchParams.get( 'order' ) || ''
+				};
+			} catch ( e ) {
+				return null;
+			}
+		},
+
+		/**
+		 * Keep JS state and the address bar in sync after AJAX list navigation.
+		 *
+		 * @param {Object} params Parsed nav params.
+		 * @param {string} href   Canonical URL.
+		 */
+		updateListNavState: function ( params, href ) {
+			tsoliinData.listFilter = params.filter || 'all';
+			tsoliinData.listQualityFilter = params.quality_filter || '';
+			tsoliinData.listScope = params.scope || 'all';
+			if ( params.orderby ) {
+				tsoliinData.listOrderby = params.orderby;
+			}
+			if ( params.order ) {
+				tsoliinData.listOrder = params.order;
+			}
+			this.lastSearchVal = params.s || '';
+			if ( window.history && window.history.replaceState && href ) {
+				try {
+					window.history.replaceState( null, '', href );
+				} catch ( err ) {
+					// Ignore URL API errors on very old browsers.
+				}
+			}
+		},
+
+		/**
+		 * Fetch list-table HTML without reloading the admin page.
+		 *
+		 * @param {Object} params Nav/search params.
+		 * @param {Object} opts   Callback options.
+		 */
+		fetchListRegion: function ( params, opts ) {
+			opts = opts || {};
+			var self = this;
+			var $region = $( '#tsoliin-list-table-region' );
+
+			if ( ! $region.length ) {
+				if ( opts.fallbackNavigate && params.href ) {
+					window.location.href = params.href;
+				}
+				return;
+			}
+
+			if ( self.listNavXhr && self.listNavXhr.readyState !== 4 ) {
+				self.listNavXhr.abort();
+			}
+			if ( self.searchXhr && self.searchXhr.readyState !== 4 ) {
+				self.searchXhr.abort();
+			}
+
+			$region.addClass( 'tsoliin-list-table-region--loading' );
+			$region.attr( 'aria-busy', 'true' );
+
+			var xhr = $.ajax( {
+				url    : tsoliinData.ajaxUrl,
+				method : 'POST',
+				timeout: 60000,
+				data   : {
+					action         : 'tsoliin_search_list',
+					nonce          : tsoliinData.nonce,
+					s              : params.s || '',
+					filter         : params.filter || tsoliinData.listFilter || 'all',
+					quality_filter : params.quality_filter !== undefined ? params.quality_filter : ( tsoliinData.listQualityFilter || '' ),
+					scope          : params.scope || tsoliinData.listScope || 'all',
+					post_id        : params.post_id !== undefined ? params.post_id : ( parseInt( tsoliinData.viewPostId, 10 ) || 0 ),
+					paged          : params.paged || 1,
+					orderby        : params.orderby || tsoliinData.listOrderby || 'date_found',
+					order          : params.order || tsoliinData.listOrder || 'DESC'
+				},
+				success: function ( r ) {
+					if ( r.success && r.data && r.data.html ) {
+						$region.html( r.data.html );
+						if ( opts.updateUrl && params.href ) {
+							self.updateListNavState( params, params.href );
+						}
+						if ( typeof opts.onSuccess === 'function' ) {
+							opts.onSuccess( r.data );
+						}
+					} else if ( opts.fallbackNavigate && params.href ) {
+						window.location.href = params.href;
+					}
+				},
+				error: function ( xhr, status ) {
+					if ( 'abort' === status ) {
+						return;
+					}
+					if ( opts.fallbackNavigate && params.href ) {
+						window.location.href = params.href;
+					} else {
+						alert( tsoliinData.i18n.error );
+					}
+				},
+				complete: function () {
+					$region.removeClass( 'tsoliin-list-table-region--loading' );
+					$region.attr( 'aria-busy', 'false' );
+					if ( self.listNavXhr === xhr ) {
+						self.listNavXhr = null;
+					}
+					if ( self.searchXhr === xhr ) {
+						self.searchXhr = null;
+					}
+					if ( typeof opts.onComplete === 'function' ) {
+						opts.onComplete();
+					}
+				}
+			} );
+
+			if ( opts.trackAsSearch ) {
+				self.searchXhr = xhr;
+			} else {
+				self.listNavXhr = xhr;
+			}
+		},
+
+		/**
+		 * Align the link list with the viewport after AJAX navigation.
+		 */
+		restoreListScroll: function () {
+			var el = document.getElementById( 'tsoliin-list-table-region' );
+			if ( el ) {
+				el.scrollIntoView( { block: 'start', behavior: 'auto' } );
+			}
+		},
+
+		/**
+		 * AJAX navigation for filters, scope tabs, pagination, and stat cards.
+		 *
+		 * @param {string} href Target admin URL.
+		 */
+		loadListNav: function ( href ) {
+			var params = this.parseListNavLink( href );
+			if ( ! params ) {
+				window.location.href = href;
+				return;
+			}
+			this.fetchListRegion( params, {
+				updateUrl       : true,
+				fallbackNavigate: true,
+				onSuccess       : function () {
+					LC.restoreListScroll();
+				}
+			} );
+		},
+
 		// ---------------------------------------------------------------
 		// Event bindings
 		// ---------------------------------------------------------------
 		bindEvents: function () {
 			var self = this;
+			var listNavSelector = '.tsoliin-wrap .pagination-links a, .tsoliin-wrap .tsoliin-filter-tabs a, .tsoliin-wrap .tsoliin-quality-tabs a, .tsoliin-wrap .tsoliin-scope-tabs a, .tsoliin-wrap a.tsoliin-stat[href]';
+
+			$( document ).on( 'click', listNavSelector, function ( e ) {
+				if ( e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || 2 === e.which ) {
+					return;
+				}
+				var href = $( this ).attr( 'href' );
+				if ( ! href || ! $( '#tsoliin-list-table-region' ).length ) {
+					return;
+				}
+				if ( ! self.parseListNavLink( href ) ) {
+					return;
+				}
+				e.preventDefault();
+				self.restoreListScroll();
+				self.loadListNav( href );
+			} );
+
+			$( document ).on(
+				'click',
+				'.tsoliin-post-icon--list, .tsoliin-post-icon--back, .tsoliin-wrap a.tsoliin-post-scope-link',
+				function ( e ) {
+					if ( e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || 2 === e.which ) {
+						return;
+					}
+					self.markScrollBeforePostNav();
+				}
+			);
 
 			this.$startBtn.on( 'click', function () {
 				if ( self.scanning ) { return; }
@@ -588,8 +845,12 @@
 						if ( typeof r.data.pending !== 'undefined' ) {
 							tsoliinData.pendingCheck = r.data.pending;
 						}
+						var noticeMsg = r.data.message || tsoliinData.i18n.checkStarted;
+						if ( r.data.resumed && tsoliinData.i18n.checkResumed ) {
+							noticeMsg = r.data.message || tsoliinData.i18n.checkResumed;
+						}
 						self.showNotice(
-							'✅ ' + ( r.data.message || tsoliinData.i18n.checkStarted ),
+							'✅ ' + noticeMsg,
 							'success'
 						);
 						self.startPolling();
@@ -866,7 +1127,11 @@
 		showNotice: function ( msg, type ) {
 			$( '.tsoliin-notice' ).remove();
 			var $n = $( '<div class="notice notice-' + ( type || 'info' ) + ' is-dismissible tsoliin-notice"><p>' + msg + '</p><button type="button" class="notice-dismiss"></button></div>' );
-			$( '.tsoliin-toolbar' ).after( $n );
+			var $anchor = $( '.tsoliin-hero' );
+			if ( ! $anchor.length ) {
+				$anchor = $( '.tsoliin-toolbar' );
+			}
+			$anchor.after( $n );
 			$n.on( 'click', '.notice-dismiss', function ( e ) {
 				e.preventDefault();
 				$n.fadeOut( 200, function () { $n.remove(); } );
@@ -1818,16 +2083,11 @@
 		// Live search (filter list as you type)
 		// ---------------------------------------------------------------
 		bindLiveSearch: function () {
-			var self   = this;
-			var $input = $( '.tsoliin-search-input' );
-			var $form  = $( '#tsoliin-search-form' );
-			if ( ! $input.length || ! $form.length ) {
-				return;
-			}
+			var self = this;
 
-			self.lastSearchVal = $input.val();
+			self.lastSearchVal = $( '.tsoliin-search-input' ).first().val() || '';
 
-			$input.on( 'input', function () {
+			$( document ).on( 'input', '.tsoliin-search-input', function () {
 				var term = $.trim( $( this ).val() );
 				window.clearTimeout( self.searchTimer );
 				self.searchTimer = window.setTimeout( function () {
@@ -1839,9 +2099,9 @@
 				}, 400 );
 			} );
 
-			$form.on( 'submit', function ( e ) {
+			$( document ).on( 'click', '.tsoliin-search-submit', function ( e ) {
 				e.preventDefault();
-				var term = $.trim( $input.val() );
+				var term = $.trim( $( this ).closest( '.tsoliin-search-form' ).find( '.tsoliin-search-input' ).val() );
 				window.clearTimeout( self.searchTimer );
 				self.lastSearchVal = term;
 				self.runLiveSearch( term );
@@ -1850,59 +2110,52 @@
 
 		runLiveSearch: function ( searchTerm ) {
 			var self    = this;
-			var $region = $( '#tsoliin-list-table-region' );
-			var $btn    = $( '#tsoliin-search-form button[type="submit"]' );
+			var $input  = $( '.tsoliin-search-input' ).first();
+			var $btn    = $( '.tsoliin-search-submit' ).first();
+			var focusPos = $input.length ? $input[0].selectionStart : null;
 
-			if ( ! $region.length ) {
-				$( '#tsoliin-search-form' )[0].submit();
+			if ( ! $( '#tsoliin-list-table-region' ).length ) {
+				if ( $( '#tsoliin-list-form' ).length ) {
+					$( '#tsoliin-list-form' )[0].submit();
+				}
 				return;
 			}
 
-			if ( self.searchXhr && self.searchXhr.readyState !== 4 ) {
-				self.searchXhr.abort();
-			}
-
-			$region.addClass( 'tsoliin-list-table-region--loading' );
-			$region.attr( 'aria-busy', 'true' );
 			if ( $btn.length ) {
 				$btn.prop( 'disabled', true ).text( tsoliinData.i18n.searching );
 			}
 
-			self.searchXhr = $.ajax( {
-				url    : tsoliinData.ajaxUrl,
-				method : 'POST',
-				timeout: 60000,
-				data   : {
-					action         : 'tsoliin_search_list',
-					nonce          : tsoliinData.nonce,
+			self.fetchListRegion(
+				{
 					s              : searchTerm,
 					filter         : tsoliinData.listFilter || 'all',
 					quality_filter : tsoliinData.listQualityFilter || '',
 					scope          : tsoliinData.listScope || 'all',
-					post_id : tsoliinData.viewPostId || 0,
-					paged   : 1,
-					orderby : tsoliinData.listOrderby || 'date_found',
-					order   : tsoliinData.listOrder || 'DESC'
+					post_id        : parseInt( tsoliinData.viewPostId, 10 ) || 0,
+					paged          : 1
 				},
-				success: function ( r ) {
-					if ( r.success && r.data && r.data.html ) {
-						$region.html( r.data.html );
+				{
+					trackAsSearch: true,
+					onSuccess: function () {
 						self.updateSearchUrl( searchTerm );
-					}
-				},
-				error: function ( xhr, status ) {
-					if ( 'abort' !== status ) {
-						alert( tsoliinData.i18n.error );
-					}
-				},
-				complete: function () {
-					$region.removeClass( 'tsoliin-list-table-region--loading' );
-					$region.attr( 'aria-busy', 'false' );
-					if ( $btn.length ) {
-						$btn.prop( 'disabled', false ).text( tsoliinData.i18n.searchBtn || 'Search' );
+						self.lastSearchVal = searchTerm;
+						var $newInput = $( '.tsoliin-search-input' ).first();
+						if ( $newInput.length ) {
+							$newInput.val( searchTerm ).trigger( 'focus' );
+							if ( null !== focusPos && $newInput[0].setSelectionRange ) {
+								var pos = Math.min( focusPos, String( searchTerm ).length );
+								$newInput[0].setSelectionRange( pos, pos );
+							}
+						}
+					},
+					onComplete: function () {
+						var $doneBtn = $( '.tsoliin-search-submit' ).first();
+						if ( $doneBtn.length ) {
+							$doneBtn.prop( 'disabled', false ).text( tsoliinData.i18n.searchBtn || 'Search' );
+						}
 					}
 				}
-			} );
+			);
 		},
 
 		updateSearchUrl: function ( searchTerm ) {

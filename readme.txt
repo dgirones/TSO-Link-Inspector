@@ -5,7 +5,7 @@ Tags: broken links, link checker, seo, maintenance, links
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 2.3.8
+Stable tag: 2.4.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -127,6 +127,13 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 
 == Changelog ==
 
+= 2.4.0 =
+* Improvement: Filter tabs, pagination, scope tabs, and stat cards refresh the link list via AJAX (no full page reload; scroll stays on the list).
+* Fix: Quality filters (empty anchor, generic anchor, unpublished target) work with live list navigation.
+* Fix: Post-scope navigation (list icon, Back, posts summary) scrolls to the link table after load.
+* Fix: Single-post view keeps the standard plugin title in the page header (no post title breadcrumb in the H1).
+* Fix: Screen Options panel stays aligned with the plugin header instead of appearing orphaned at the top of the admin page.
+
 = 2.3.8 =
 * Fix: Suggested URL Apply no longer says “No changes to save” when the new URL is a shorter path of the old one (e.g. Microsoft `/software-download/windows8` → `/software-download/`).
 * Fix: Editing or unlinking a shorter path no longer matches or rewrites a longer URL that only shares that prefix.
@@ -140,50 +147,12 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 * Fix: Admin dashboard reuses pending-check and cron-queue counts (fewer duplicate SQL queries on page load).
 * Dev: CLI unit smoke tests via `php scripts/run-unit-tests.php`.
 
-= 2.3.6 =
-* Improvement: Edit link and Suggested URL can save a URL when this server cannot verify it (geo-block, bot wall, or timeout), with an option to ignore that domain.
-* Fix: Delete and other row actions no longer error when the list row was already removed after editing the post.
-* Fix: Dashboard totals no longer show 0 (`dai.ly` LIKE); Chrome Web Store IPv6 “Cannot connect”; **Go to edit** scroll for Classic `youtu.be` and Gutenberg code view.
-* Fix: Scan ACF ID fields (image, file, gallery, page link, relationship) and Options pages; resolve Elementor/ACF dynamic tags via **Go to edit**.
-* Fix: **Check now** resumes partial progress; dashboard Broken/OK/Redirect/HTTP counts only use checked links (no stale totals during a run).
-
-= 2.3.5 =
-* Fix: Check queue, bulk Mark as OK/unlink, Recheck sync, cron scan coverage, and verified HTTPS Suggest.
-* Fix: **Go to edit** for multi-gallery classic posts, YouTube embeds, and Jetpack galleries.
-* Improvement: Admin transient lock performance; tested up to WordPress 7.1.
-* Fix: WordPress.org review — External services in readme, POST export/reset, report CSS/JS via enqueue (no inline style/onclick).
-* Fix: Count published posts without loading every ID; Internal/External tab counts stay in SQL; pin DNS before each HTTP hop.
-* Fix: Scoped dashboard/PDF stats, stale reset counts, cron incomplete-scan timestamp, blocked-redirect reporting, ACF Options Go to edit, and front-end focus needle.
-
-= 2.3.3 =
-* New: Bulk action **Upgrade selected to HTTPS** — only when the server confirms a working HTTPS URL (same rules as Suggestion → Apply; unverified bot-wall suggestions are skipped).
-* New: **Links per page** screen option (default 20, min 10, max 500, filterable via `tsoliin_max_per_page`). Also used by Posts/Products with issues.
-* Fix: Spanish/Catalan strings for the new bulk HTTPS and per-page UI; bulk HTTPS skip summary no longer mislabels skips as menu/widget/term.
-* Fix: Getting started banner translation casing and consistent secondary buttons.
-* Fix: Leftover empty/legacy `{prefix}pc_tso_link_inspector` is dropped on admin load (exact SHOW TABLES match).
-
-= 2.3.2 =
-* Fix: Legacy empty `{prefix}pc_tso_link_inspector` is dropped on every admin load until gone (no permanent skip flag), with exact SHOW TABLES matching via esc_like.
-* Fix: Spanish/Catalan strings for Links per page, Upgrade selected to HTTPS, and related bulk HTTPS messages.
-
-= 2.3.1 =
-* Fix: Remove leftover empty/legacy `{prefix}pc_tso_link_inspector` table on admin load (Tables Cleaner no longer lists two Link Inspector tables after upgrade).
-* Fix: Getting started banner uses the translated Scan description (matching msgid casing) and consistent secondary buttons for Help / Settings.
-
-= 2.3.0 =
-* New: Optional **WooCommerce** scanning (Settings) for external product URLs, downloadable files, featured image, and gallery — off by default.
-* New: **Products with issues** view (when WooCommerce scanning is enabled), same layout as Posts with issues.
-* Improvement: Product field links open the product editor via **Go to edit** (not the inline modal).
-* Improvement: Unified row action order (Go to edit, Edit link, Recheck, Not broken, Unlink, Delete, Ignore domain). Removed redundant **Open URL** (use the main URL link).
-* Fix: Classic Editor **Go to edit** scrolls to the matched link in Visual and Text modes (including shortcode/plain URLs and TinyMCE iframe content).
-* Fix: Bare `[gallery]` shortcodes no longer pull every image attached to the post (only explicit `ids=` / `include=`).
-* Fix: Image rows require real markup (img / gallery / block); stale ghost rows can be cleared with Unlink or Recheck.
-* Fix: HTTP to HTTPS suggestions for same-path URLs that return 401/403 (e.g. `/wp-admin/`) are offered as HTTPS upgrades instead of "HTTP only".
-* Improvement: Catalan and Spanish translations updated.
-
-See changelog.txt in the plugin folder for versions before 2.3.0.
+See changelog.txt in the plugin folder for versions before 2.3.7.
 
 == Upgrade Notice ==
+
+= 2.4.0 =
+Recommended. AJAX filter/pagination navigation, quality-filter fixes, smoother scroll when opening a post’s links, and cleaner admin header/Screen Options layout.
 
 = 2.3.8 =
 Recommended. Stops a harmless `Table ... already exists` log when the History table is already present. Suggest Apply no longer reports “no changes” when the destination is a shorter path on the same host, and no longer rewrites a longer sibling URL that only shares that prefix.

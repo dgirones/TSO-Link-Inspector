@@ -967,6 +967,9 @@ msgstr "Comprobación completada. Esperando a que terminen otras acciones…"
 msgid "Check started. You can continue browsing."
 msgstr "Comprobación iniciada. Puedes continuar navegando."
 
+msgid "Resuming check from where it left off. You can continue browsing."
+msgstr "Reanudando la comprobación donde se quedó. Puedes continuar navegando."
+
 msgid "Stopped"
 msgstr "Detenido"
 
@@ -3300,3 +3303,22 @@ msgid ""
 msgstr ""
 "Añadir también el dominio de la URL que estás guardando a la lista de "
 "ignorados (omitir futuros escaneos y comprobaciones HTTP)."
+
+msgid "No scan yet"
+msgstr "Sin escaneo"
+
+msgid "Last check: %s"
+msgstr "Última comprobación: %s"
+
+msgid "Next scan: %s"
+msgstr "Próximo escaneo: %s"
+
+msgid "Next check: %s"
+msgstr "Próxima comprobación: %s"
+
+msgid "Next: scan %1$s, check %2$s"
+msgstr "Próximo: escaneo %1$s, comprobación %2$s"
+
+msgid "Next automatic scan: %1$s. Next automatic check: %2$s."
+msgstr ""
+"Próximo escaneo automático: %1$s. Próxima comprobación automática: %2$s."
