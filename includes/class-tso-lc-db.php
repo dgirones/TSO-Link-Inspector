@@ -236,30 +236,66 @@ class TSOLIIN_DB {
 	}
 
 	/**
+	 * Legacy table names matching {prefix}pc_tso_link_inspector(+_history).
+	 *
+	 * @return string[]
+	 */
+	private function legacy_pc_table_names() {
+		global $wpdb;
+
+		$pattern = $wpdb->esc_like( $wpdb->prefix . 'pc_tso_link_inspector' ) . '%';
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$found = $wpdb->get_col( $wpdb->prepare( 'SHOW TABLES LIKE %s', $pattern ) );
+		if ( ! is_array( $found ) || empty( $found ) ) {
+			return array();
+		}
+
+		$expected = array(
+			$wpdb->prefix . 'pc_tso_link_inspector',
+			$wpdb->prefix . 'pc_tso_link_inspector_history',
+		);
+
+		$names = array();
+		foreach ( $found as $table_name ) {
+			$table_name = (string) $table_name;
+			if ( in_array( $table_name, $expected, true ) ) {
+				$names[] = $table_name;
+			}
+		}
+		return $names;
+	}
+
+	/**
 	 * Rename or drop leftover {prefix}pc_tso_link_inspector and
 	 * {prefix}pc_tso_link_inspector_history when safe.
 	 *
 	 * Older 2.3.x used `$wpdb->prefix . 'pc_tso_link_inspector'` (accidental `pc_`
 	 * from `{prefix}` + `tso_`) and derived history as `{that}_history`. After both
-	 * leftovers are gone, skip further SHOW TABLES (re-check on plugin version bump).
+	 * leftovers are gone, skip further checks until they reappear or the plugin
+	 * version bumps.
 	 *
+	 * @param string $phase Request pass: `early` (schema setup) or `late` (after other admin hooks).
 	 * @return void
 	 */
-	private function maybe_migrate_legacy_table() {
-		static $done_this_request = false;
-		if ( $done_this_request ) {
+	private function maybe_migrate_legacy_table( $phase = 'early' ) {
+		static $done = array();
+		if ( ! empty( $done[ $phase ] ) ) {
 			return;
 		}
-		$done_this_request = true;
-
-		if ( '1' === (string) get_option( 'tsoliin_legacy_pc_table_cleared', '' ) ) {
-			return;
-		}
+		$done[ $phase ] = true;
 
 		global $wpdb;
 
 		$legacy_main    = $wpdb->prefix . 'pc_tso_link_inspector';
 		$legacy_history = $wpdb->prefix . 'pc_tso_link_inspector_history';
+		$flag_cleared   = ( '1' === (string) get_option( 'tsoliin_legacy_pc_table_cleared', '' ) );
+
+		if ( $flag_cleared ) {
+			if ( empty( $this->legacy_pc_table_names() ) ) {
+				return;
+			}
+			delete_option( 'tsoliin_legacy_pc_table_cleared' );
+		}
 
 		$main_gone    = $this->migrate_or_drop_legacy_table( $legacy_main, $this->table );
 		$history_gone = $this->migrate_or_drop_legacy_table( $legacy_history, $this->history_table );
@@ -267,6 +303,15 @@ class TSOLIIN_DB {
 		if ( $main_gone && $history_gone ) {
 			update_option( 'tsoliin_legacy_pc_table_cleared', '1', true );
 		}
+	}
+
+	/**
+	 * Late admin pass: drop legacy pc_ tables recreated after early schema setup.
+	 *
+	 * @return void
+	 */
+	public function late_cleanup_legacy_pc_tables() {
+		$this->maybe_migrate_legacy_table( 'late' );
 	}
 
 	/**

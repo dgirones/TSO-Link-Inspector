@@ -5,7 +5,7 @@ Tags: broken links, link checker, seo, maintenance, links
 Requires at least: 5.9
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 2.4.2
+Stable tag: 2.4.3
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -127,6 +127,10 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 
 == Changelog ==
 
+= 2.4.3 =
+* Fix: Leftover `{prefix}pc_tso_link_inspector(_history)` is dropped again when it reappears after manual delete (skip flag no longer blocks cleanup).
+* Fix: Late admin pass removes legacy pc_ tables recreated by other plugins/tools on the same request.
+
 = 2.4.2 =
 * Fix: cosmetic UI changes
 * Fix: timeouts in search links
@@ -160,6 +164,9 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 See changelog.txt in the plugin folder for older versions
 
 == Upgrade Notice ==
+
+= 2.4.3 =
+Recommended. Drops recreated legacy `pc_tso_link_inspector` tables even when the cleanup flag was already set.
 
 = 2.4.2 =
 Recommended. Cleans up leftover legacy History table names and stops redundant `SHOW TABLES` on every admin load.
