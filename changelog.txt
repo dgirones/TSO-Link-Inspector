@@ -1,9 +1,21 @@
 === TSO Link Inspector — older changelog ===
 
-History for versions before 2.3.7. Current releases are listed in readme.txt
-(shown on WordPress.org). This file is not displayed on the plugin directory.
+Current releases are listed in readme.txt.
 
 == Changelog ==
+
+= 2.3.8 =
+* Fix: Suggested URL Apply no longer says “No changes to save” when the new URL is a shorter path of the old one (e.g. Microsoft `/software-download/windows8` → `/software-download/`).
+* Fix: Editing or unlinking a shorter path no longer matches or rewrites a longer URL that only shares that prefix.
+* Fix: Do not run `CREATE TABLE` for the History log when `{prefix}tso_link_inspector_history` already exists (stops `Table ... already exists` on admin load).
+
+= 2.3.7 =
+* New: History tab (Settings) lists recent URL changes from Edit, Suggest, relative, and HTTPS actions (max 500 rows; oldest auto-pruned; Delete all button).
+* New: Continue check / Restart from zero when unchecked links remain after a stopped run.
+* Fix: Edit link modal — checkbox labels aligned with the box on multi-line text.
+* Improvement: Clearer wording for “save unverified URL” and “ignore domain” checkboxes.
+* Fix: Admin dashboard reuses pending-check and cron-queue counts (fewer duplicate SQL queries on page load).
+* Dev: CLI unit smoke tests via `php scripts/run-unit-tests.php`.
 
 = 2.3.6 =
 * Improvement: Edit link and Suggested URL can save a URL when this server cannot verify it (geo-block, bot wall, or timeout), with an option to ignore that domain.
@@ -316,112 +328,3 @@ History for versions before 2.3.7. Current releases are listed in readme.txt
 = 1.0.0 =
 * Initial release.
 
-== Upgrade Notice ==
-
-= 2.3.6 =
-Recommended. Save unverified URLs, ACF/Elementor Go to edit, resume Check now, and consistent dashboard counters.
-
-= 2.3.5 =
-Recommended. Check/bulk/cron fixes, classic multi-gallery editor focus, and admin performance.
-
-= 2.3.3 =
-Recommended. Adds verified bulk HTTP→HTTPS upgrade and Links per page screen option, plus translation and legacy-table cleanups.
-
-= 2.3.2 =
-Recommended if Tables Cleaner still lists a leftover `pc_tso_link_inspector` table after 2.3.1.
-
-= 2.3.1 =
-Recommended. Drops leftover legacy `pc_tso_link_inspector` and fixes Getting started translations/buttons.
-
-= 2.3.0 =
-Optional WooCommerce product link scanning and Products with issues view. Also improves Classic Editor focus scroll, gallery/image detection, HTTPS suggestions for auth-walled URLs, and row actions. Enable WooCommerce scanning under Settings if you run a store.
-
-= 2.2.6 =
-Recommended update. Fixes duplicate/broken link list table headers on WordPress 6.6+.
-
-= 2.2.5 =
-Recommended update. Stops duplicate gallery attachment-page URLs; keeps only uploads file links. Run **Scan now** after updating.
-
-= 2.2.0 =
-Recommended update. Gallery alt-text fixes (Gutenberg blocks, thumbnails, media library), editor focus, inline edit reliability, and smarter Recheck/cron sync. Run **Scan now** once after updating.
-
-= 2.1.5 =
-Recommended update. Editor focus, inline edit reliability, and Recheck/cron sync improvements. Run **Scan now** once after updating.
-
-= 2.1.0 =
-Recommended update. External sources use **Go to edit**; gallery images classify correctly; **Recheck** syncs from WordPress before HTTP. Run **Scan now** after updating to refresh link types.
-
-= 2.0.0 =
-Major update: dashboard widget, Posts with issues, internal/external and quality filters, Help tab, view-post-at-link highlight, Convert to /path, PDF export, configurable cron schedule, ACF/meta improvements, and many admin fixes. Run **Scan now** after updating, then **Check now** once.
-
-= 1.9.9 =
-Recommended update. Edit link fixes for images and relative URLs, clearer Manual locks (“Not broken”) flow, and version badge in the admin header.
-
-= 1.9.8 =
-Recommended update. Clearer Scan vs Check UI with Stop buttons, per-post checking, plus anchor editing, search/filter fixes, and PHP 8.5/7.4 compatibility.
-
-= 1.9.7 =
-Recommended update. Extended scanning (widgets, terms, FSE, meta plain URLs, third-party API), many admin and redirect fixes, and automatic list refresh after bulk actions. Run **Scan now** after updating, then **Check now** once to normalize existing rows.
-
-= 1.9.6 =
-Recommended update. YouTube and other harmless redirects no longer clutter the Redirect filter; run **Check now** once after updating to normalize existing rows.
-
-= 1.9.5 =
-Recommended update. Scans many more link sources (plain-text URLs, Gutenberg JSON, menus, srcset/picture, data attributes), safer Smart Suggest (Apply only on confirmed 2xx), and numerous admin/HTTP fixes. Run **Scan now** after updating.
-
-= 1.9.4 =
-Recommended update. Internal link checks, redirect-to-404 handling, smarter suggestions, HTML broken-link emails, performance fix, Settings screen PHP 8.1 fix, WordPress 7.0 tested.
-
-= 1.9.3 =
-Recommended security update. Hardens HTTP checks against SSRF, validates edited URLs, fixes XSS in admin suggestion UI, and applies the ignore list during scans.
-
-= 1.9.2 =
-Recommended update. Fixes the plugin description not appearing in Catalan or Spanish on the Plugins screen; updates bundled translations.
-
-= 1.9.1 =
-Recommended update. Adds optional broken-link email alerts (summary/digest), a Manual locks tab with clearer tab counts, full-recheck behavior for locked rows, several admin UI fixes (search tabs, CSV encoding, empty lists), and a submenu registration fix for newer PHP versions.
-
-= 1.9.0 =
-Recommended update. Fixes comment scanning/link bookkeeping (`source_key` rows), stale cleanup after edits, cleanup when comments are deleted, stricter inline Edit URL for comments, and broader trivial redirect detection.
-
-= 1.8.4 =
-Recommended update. Corrects status display and counts for working HTTP-only links.
-
-= 1.8.3 =
-Recommended update. Renames internal identifiers to meet WordPress.org prefix length rules; migrates options and cron automatically.
-
-= 1.8.2 =
-Recommended update. Reduces false redirect warnings for protected `/wp-admin/` links that correctly route through WordPress login.
-
-= 1.8.1 =
-Recommended update. Background checks now resume from partial progress instead of restarting.
-
-= 1.8.0 =
-Recommended update. Includes the repository-required rename to TSO Link Inspector and slug/domain alignment.
-
-= 1.7.11 =
-Recommended update. Slightly better HTTP probing when servers return 401 to HEAD requests.
-
-= 1.7.10 =
-Recommended update. Fewer false redirect rows for www canonicalisation, Chrome Web Store, and LiberKey catalog URLs.
-
-= 1.7.9 =
-Recommended update. Better handling of “always latest” vendor download links (Telegram desktop).
-
-= 1.7.8 =
-Recommended update. Fewer false “redirect” rows for bare domain vs `www` plus harmless query parameters.
-
-= 1.7.7 =
-Recommended update. Better handling of hash/anchor links with redirects, and more reliable "Not broken" locking.
-
-= 1.7.6 =
-Recommended update. Improves multilingual behavior, mobile usability, and admin quality checks.
-
-= 1.4.3 =
-Recommended update. Adds HTTP insecure detection and per-article view. No database changes required.
-
-= 1.4.2 =
-Recommended update. Adds ignore list, CSV export, nofollow option and preserve dates. No database changes required.
-
-= 1.3.0 =
-Recommended update. Significantly improves redirect detection accuracy. Run "Check now" after updating to refresh existing redirect records.
