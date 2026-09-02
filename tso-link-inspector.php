@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       TSO Link Inspector
  * Description:       Find and fix broken links across your entire WordPress site without opening each post.
- * Version:           2.4.2
+ * Version:           2.4.3
  * Requires at least: 5.9
  * Requires PHP:      7.4
  * Tested up to:       7.1
@@ -20,7 +20,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'TSOLIIN_VERSION',    '2.4.2' );
+define( 'TSOLIIN_VERSION',    '2.4.3' );
 define( 'TSOLIIN_PLUGIN_FILE', __FILE__ );
 define( 'TSOLIIN_PLUGIN_DIR',  plugin_dir_path( __FILE__ ) );
 define( 'TSOLIIN_PLUGIN_URL',  plugin_dir_url( __FILE__ ) );
@@ -125,6 +125,7 @@ final class TSOLIIN_Link_Inspector {
 		add_filter( 'gettext', array( $this, 'runtime_gettext_fallback' ), 999, 3 );
 		add_action( 'init',       array( $this, 'load_textdomain' ), 1 );
 		add_action( 'admin_init', array( $this, 'maybe_upgrade_db' ) );
+		add_action( 'admin_init', array( $this, 'late_cleanup_legacy_pc_tables' ), 999 );
 		add_action( 'deleted_comment', array( $this, 'on_deleted_comment' ), 10, 2 );
 		// Re-scan post automatically when saved in editor (not during plugin AJAX calls).
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- only checking action name to guard hook registration, no data processed.
@@ -379,6 +380,13 @@ final class TSOLIIN_Link_Inspector {
 	}
 
 	
+	/**
+	 * Drop legacy pc_ tables if another admin hook recreated them this request.
+	 */
+	public function late_cleanup_legacy_pc_tables() {
+		$this->db->late_cleanup_legacy_pc_tables();
+	}
+
 	/**
 	 * Run DB upgrades when version changes.
 	 */
