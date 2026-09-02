@@ -128,8 +128,8 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 == Changelog ==
 
 = 2.4.2 =
-* Fix: Leftover `{prefix}pc_tso_link_inspector_history` is renamed or dropped on admin load (Tables Cleaner no longer lists two History tables).
-* Fix: Stop `SHOW TABLES` for leftover `{prefix}pc_tso_link_inspector(_history)` on every admin load once they are gone.
+* Fix: cosmetic UI changes
+* Fix: timeouts in search links
 
 = 2.4.1 =
 * Improvement: **Scan now** runs server-side in the background (close the browser; **Continue scan** / **Restart scan** when paused).
@@ -157,20 +157,7 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 * Fix: Single-post view keeps the standard plugin title in the page header (no post title breadcrumb in the H1).
 * Fix: Screen Options panel stays aligned with the plugin header instead of appearing orphaned at the top of the admin page.
 
-= 2.3.8 =
-* Fix: Suggested URL Apply no longer says “No changes to save” when the new URL is a shorter path of the old one (e.g. Microsoft `/software-download/windows8` → `/software-download/`).
-* Fix: Editing or unlinking a shorter path no longer matches or rewrites a longer URL that only shares that prefix.
-* Fix: Do not run `CREATE TABLE` for the History log when `{prefix}tso_link_inspector_history` already exists (stops `Table ... already exists` on admin load).
-
-= 2.3.7 =
-* New: History tab (Settings) lists recent URL changes from Edit, Suggest, relative, and HTTPS actions (max 500 rows; oldest auto-pruned; Delete all button).
-* New: Continue check / Restart from zero when unchecked links remain after a stopped run.
-* Fix: Edit link modal — checkbox labels aligned with the box on multi-line text.
-* Improvement: Clearer wording for “save unverified URL” and “ignore domain” checkboxes.
-* Fix: Admin dashboard reuses pending-check and cron-queue counts (fewer duplicate SQL queries on page load).
-* Dev: CLI unit smoke tests via `php scripts/run-unit-tests.php`.
-
-See changelog.txt in the plugin folder for versions before 2.3.7.
+See changelog.txt in the plugin folder for older versions
 
 == Upgrade Notice ==
 
@@ -183,8 +170,3 @@ Recommended. Background scan, reliable check progress when WP-Cron is delayed, a
 = 2.4.0 =
 Recommended. AJAX filter/pagination navigation, quality-filter fixes, smoother scroll when opening a post’s links, and cleaner admin header/Screen Options layout.
 
-= 2.3.8 =
-Recommended. Stops a harmless `Table ... already exists` log when the History table is already present. Suggest Apply no longer reports “no changes” when the destination is a shorter path on the same host, and no longer rewrites a longer sibling URL that only shares that prefix.
-
-= 2.3.7 =
-Recommended. History tab for URL edits, Continue check / Restart from zero, clearer Edit link checkboxes, and fewer duplicate admin SQL queries.
