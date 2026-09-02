@@ -145,6 +145,7 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 * Fix: List scroll helpers load on the dashboard so post-scope navigation keeps the table in view.
 * Fix: Dashboard no longer runs `WP_Query` for `page` ID 0 (`url_to_postid` miss) once per internal link.
 * Fix: Leftover `{prefix}pc_tso_link_inspector_history` is renamed or dropped on admin load (Tables Cleaner no longer lists two History tables).
+* Fix: Stop `SHOW TABLES` for leftover `{prefix}pc_tso_link_inspector(_history)` on every admin load once they are gone.
 * Change: Requires WordPress 5.9+.
 
 = 2.4.0 =

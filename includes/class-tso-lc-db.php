@@ -33,6 +33,9 @@ class TSOLIIN_DB {
 	/** @var bool|null Cached result of table_exists() for this request. */
 	private $table_exists_cache = null;
 
+	/** @var array<string, bool> Per-request cache for db_table_exists_exact(). */
+	private $db_table_exists_exact_cache = array();
+
 	/** @var bool Whether upgrade_schema() already ran this request. */
 	private $schema_upgraded = false;
 
@@ -166,7 +169,7 @@ class TSOLIIN_DB {
 	 *
 	 * @param string $legacy_raw    Unquoted leftover table name.
 	 * @param string $canonical_raw Unquoted current table name.
-	 * @return void
+	 * @return bool True when the leftover no longer exists.
 	 */
 	private function migrate_or_drop_legacy_table( $legacy_raw, $canonical_raw ) {
 		global $wpdb;
@@ -174,15 +177,16 @@ class TSOLIIN_DB {
 		$legacy_raw    = (string) $legacy_raw;
 		$canonical_raw = (string) $canonical_raw;
 		if ( '' === $legacy_raw || $legacy_raw === $canonical_raw ) {
-			return;
+			return true;
 		}
 
 		if ( ! $this->db_table_exists_exact( $legacy_raw ) ) {
-			return;
+			return true;
 		}
 
 		$canonical = esc_sql( $canonical_raw );
 		$legacy    = esc_sql( $legacy_raw );
+		$gone      = false;
 
 		/*
 		 * SHOW TABLES uses esc_like() so "_" is literal. Single phpcs:disable
@@ -192,28 +196,43 @@ class TSOLIIN_DB {
 
 		if ( ! $this->db_table_exists_exact( $canonical_raw ) ) {
 			$wpdb->query( "RENAME TABLE `{$legacy}` TO `{$canonical}`" );
+			$this->remember_table_exists( $legacy_raw, false );
+			$this->remember_table_exists( $canonical_raw, true );
 			if ( $canonical_raw === $this->table ) {
-				$this->table_exists_cache = null;
+				$this->table_exists_cache = true;
 			}
+			$gone = true;
 		} else {
 			$legacy_rows    = (int) $wpdb->get_var( "SELECT COUNT(1) FROM `{$legacy}`" );
 			$canonical_rows = (int) $wpdb->get_var( "SELECT COUNT(1) FROM `{$canonical}`" );
 
 			if ( 0 === $legacy_rows || ( $canonical_rows > 0 && $canonical_rows >= $legacy_rows ) ) {
 				$wpdb->query( "DROP TABLE IF EXISTS `{$legacy}`" );
+				$this->remember_table_exists( $legacy_raw, false );
+				$gone = true;
 			} else {
-				$tmp = esc_sql( $canonical_raw . '_mig_tmp' );
+				$tmp     = esc_sql( $canonical_raw . '_mig_tmp' );
 				$wpdb->query( "DROP TABLE IF EXISTS `{$tmp}`" );
 				$renamed = $wpdb->query( "RENAME TABLE `{$canonical}` TO `{$tmp}`, `{$legacy}` TO `{$canonical}`" );
 				if ( false !== $renamed ) {
 					$wpdb->query( "DROP TABLE IF EXISTS `{$tmp}`" );
+					$this->remember_table_exists( $legacy_raw, false );
+					$this->remember_table_exists( $canonical_raw, true );
 					if ( $canonical_raw === $this->table ) {
-						$this->table_exists_cache = null;
+						$this->table_exists_cache = true;
 					}
+					$gone = true;
 				}
 			}
 		}
 		// phpcs:enable
+
+		if ( $gone ) {
+			return true;
+		}
+
+		$this->remember_table_exists( $legacy_raw, null );
+		return ! $this->db_table_exists_exact( $legacy_raw );
 	}
 
 	/**
@@ -221,9 +240,8 @@ class TSOLIIN_DB {
 	 * {prefix}pc_tso_link_inspector_history when safe.
 	 *
 	 * Older 2.3.x used `$wpdb->prefix . 'pc_tso_link_inspector'` (accidental `pc_`
-	 * from `{prefix}` + `tso_`) and derived history as `{that}_history`. Current
-	 * code only creates {prefix}tso_link_inspector(_history). Re-check every
-	 * request (no permanent skip) so a restored snapshot cannot leave leftovers.
+	 * from `{prefix}` + `tso_`) and derived history as `{that}_history`. After both
+	 * leftovers are gone, skip further SHOW TABLES (re-check on plugin version bump).
 	 *
 	 * @return void
 	 */
@@ -234,16 +252,20 @@ class TSOLIIN_DB {
 		}
 		$done_this_request = true;
 
+		if ( '1' === (string) get_option( 'tsoliin_legacy_pc_table_cleared', '' ) ) {
+			return;
+		}
+
 		global $wpdb;
 
 		$legacy_main    = $wpdb->prefix . 'pc_tso_link_inspector';
 		$legacy_history = $wpdb->prefix . 'pc_tso_link_inspector_history';
 
-		$this->migrate_or_drop_legacy_table( $legacy_main, $this->table );
-		$this->migrate_or_drop_legacy_table( $legacy_history, $this->history_table );
+		$main_gone    = $this->migrate_or_drop_legacy_table( $legacy_main, $this->table );
+		$history_gone = $this->migrate_or_drop_legacy_table( $legacy_history, $this->history_table );
 
-		if ( ! $this->db_table_exists_exact( $legacy_main ) && ! $this->db_table_exists_exact( $legacy_history ) ) {
-			delete_option( 'tsoliin_legacy_pc_table_cleared' );
+		if ( $main_gone && $history_gone ) {
+			update_option( 'tsoliin_legacy_pc_table_cleared', '1', true );
 		}
 	}
 
@@ -259,9 +281,33 @@ class TSOLIIN_DB {
 		if ( '' === $table_name ) {
 			return false;
 		}
+		if ( array_key_exists( $table_name, $this->db_table_exists_exact_cache ) ) {
+			return $this->db_table_exists_exact_cache[ $table_name ];
+		}
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		$found = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table_name ) ) );
-		return ( $found === $table_name );
+		$found  = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table_name ) ) );
+		$exists = ( $found === $table_name );
+		$this->db_table_exists_exact_cache[ $table_name ] = $exists;
+		return $exists;
+	}
+
+	/**
+	 * Store or forget a cached SHOW TABLES result after DDL.
+	 *
+	 * @param string    $table_name Full table name.
+	 * @param bool|null $exists     True/false to cache; null to invalidate.
+	 * @return void
+	 */
+	private function remember_table_exists( $table_name, $exists ) {
+		$table_name = (string) $table_name;
+		if ( '' === $table_name ) {
+			return;
+		}
+		if ( null === $exists ) {
+			unset( $this->db_table_exists_exact_cache[ $table_name ] );
+			return;
+		}
+		$this->db_table_exists_exact_cache[ $table_name ] = (bool) $exists;
 	}
 
 	/**

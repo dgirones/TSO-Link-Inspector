@@ -385,6 +385,7 @@ final class TSOLIIN_Link_Inspector {
 	public function maybe_upgrade_db() {
 		$installed = (string) get_option( 'tsoliin_version', '0' );
 		if ( version_compare( $installed, TSOLIIN_VERSION, '<' ) ) {
+			delete_option( 'tsoliin_legacy_pc_table_cleared' );
 			$this->db->create_table();
 			$this->db->cleanup_trivial_redirects();
 			$this->db->cleanup_querystring_redirects();
