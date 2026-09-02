@@ -144,6 +144,7 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 * Fix: Getting started banner shows once per admin user (not on every visit until dismissed).
 * Fix: List scroll helpers load on the dashboard so post-scope navigation keeps the table in view.
 * Fix: Dashboard no longer runs `WP_Query` for `page` ID 0 (`url_to_postid` miss) once per internal link.
+* Fix: Leftover `{prefix}pc_tso_link_inspector_history` is renamed or dropped on admin load (Tables Cleaner no longer lists two History tables).
 * Change: Requires WordPress 5.9+.
 
 = 2.4.0 =
@@ -171,7 +172,7 @@ See changelog.txt in the plugin folder for versions before 2.3.7.
 == Upgrade Notice ==
 
 = 2.4.1 =
-Recommended. Background scan, reliable check progress when WP-Cron is delayed, fix for checks stuck at 99%, clearer queue status, and fixes for long runs timing out.
+Recommended. Background scan, reliable check progress when WP-Cron is delayed, leftover History table cleanup, and fixes for long runs timing out.
 
 = 2.4.0 =
 Recommended. AJAX filter/pagination navigation, quality-filter fixes, smoother scroll when opening a post’s links, and cleaner admin header/Screen Options layout.

@@ -122,6 +122,8 @@ class TSOLIIN_DB {
 	public function create_history_table() {
 		global $wpdb;
 
+		$this->maybe_migrate_legacy_table();
+
 		if ( $this->history_table_ensured ) {
 			return;
 		}
@@ -158,11 +160,70 @@ class TSOLIIN_DB {
 	}
 
 	/**
-	 * Rename or drop legacy {prefix}pc_tso_link_inspector when safe.
+	 * Rename leftover table onto canonical, or drop leftover when canonical already has data.
 	 *
-	 * Older maps referenced that name; current code only creates
-	 * {prefix}tso_link_inspector. Re-check every request (no permanent skip) so a
-	 * restored snapshot cannot leave the empty legacy table behind.
+	 * DDL names come from $wpdb->prefix + fixed suffixes (not user input).
+	 *
+	 * @param string $legacy_raw    Unquoted leftover table name.
+	 * @param string $canonical_raw Unquoted current table name.
+	 * @return void
+	 */
+	private function migrate_or_drop_legacy_table( $legacy_raw, $canonical_raw ) {
+		global $wpdb;
+
+		$legacy_raw    = (string) $legacy_raw;
+		$canonical_raw = (string) $canonical_raw;
+		if ( '' === $legacy_raw || $legacy_raw === $canonical_raw ) {
+			return;
+		}
+
+		if ( ! $this->db_table_exists_exact( $legacy_raw ) ) {
+			return;
+		}
+
+		$canonical = esc_sql( $canonical_raw );
+		$legacy    = esc_sql( $legacy_raw );
+
+		/*
+		 * SHOW TABLES uses esc_like() so "_" is literal. Single phpcs:disable
+		 * for the whole method (no enable before returns).
+		 */
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+		if ( ! $this->db_table_exists_exact( $canonical_raw ) ) {
+			$wpdb->query( "RENAME TABLE `{$legacy}` TO `{$canonical}`" );
+			if ( $canonical_raw === $this->table ) {
+				$this->table_exists_cache = null;
+			}
+		} else {
+			$legacy_rows    = (int) $wpdb->get_var( "SELECT COUNT(1) FROM `{$legacy}`" );
+			$canonical_rows = (int) $wpdb->get_var( "SELECT COUNT(1) FROM `{$canonical}`" );
+
+			if ( 0 === $legacy_rows || ( $canonical_rows > 0 && $canonical_rows >= $legacy_rows ) ) {
+				$wpdb->query( "DROP TABLE IF EXISTS `{$legacy}`" );
+			} else {
+				$tmp = esc_sql( $canonical_raw . '_mig_tmp' );
+				$wpdb->query( "DROP TABLE IF EXISTS `{$tmp}`" );
+				$renamed = $wpdb->query( "RENAME TABLE `{$canonical}` TO `{$tmp}`, `{$legacy}` TO `{$canonical}`" );
+				if ( false !== $renamed ) {
+					$wpdb->query( "DROP TABLE IF EXISTS `{$tmp}`" );
+					if ( $canonical_raw === $this->table ) {
+						$this->table_exists_cache = null;
+					}
+				}
+			}
+		}
+		// phpcs:enable
+	}
+
+	/**
+	 * Rename or drop leftover {prefix}pc_tso_link_inspector and
+	 * {prefix}pc_tso_link_inspector_history when safe.
+	 *
+	 * Older 2.3.x used `$wpdb->prefix . 'pc_tso_link_inspector'` (accidental `pc_`
+	 * from `{prefix}` + `tso_`) and derived history as `{that}_history`. Current
+	 * code only creates {prefix}tso_link_inspector(_history). Re-check every
+	 * request (no permanent skip) so a restored snapshot cannot leave leftovers.
 	 *
 	 * @return void
 	 */
@@ -175,47 +236,15 @@ class TSOLIIN_DB {
 
 		global $wpdb;
 
-		$canonical_raw = $this->table;
-		$legacy_raw    = $wpdb->prefix . 'pc_tso_link_inspector';
+		$legacy_main    = $wpdb->prefix . 'pc_tso_link_inspector';
+		$legacy_history = $wpdb->prefix . 'pc_tso_link_inspector_history';
 
-		if ( $canonical_raw === $legacy_raw ) {
-			return;
-		}
+		$this->migrate_or_drop_legacy_table( $legacy_main, $this->table );
+		$this->migrate_or_drop_legacy_table( $legacy_history, $this->history_table );
 
-		/*
-		 * DDL: names from $wpdb->prefix + fixed suffixes (not user input).
-		 * SHOW TABLES must use esc_like() so "_" is literal, not a wildcard.
-		 * Single phpcs:disable for the whole method (no enable before returns).
-		 */
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
-
-		if ( ! $this->db_table_exists_exact( $legacy_raw ) ) {
+		if ( ! $this->db_table_exists_exact( $legacy_main ) && ! $this->db_table_exists_exact( $legacy_history ) ) {
 			delete_option( 'tsoliin_legacy_pc_table_cleared' );
-		} else {
-			$canonical = esc_sql( $canonical_raw );
-			$legacy    = esc_sql( $legacy_raw );
-
-			if ( ! $this->db_table_exists_exact( $canonical_raw ) ) {
-				$wpdb->query( "RENAME TABLE `{$legacy}` TO `{$canonical}`" );
-				$this->table_exists_cache = null;
-			} else {
-				$legacy_rows    = (int) $wpdb->get_var( "SELECT COUNT(1) FROM `{$legacy}`" );
-				$canonical_rows = (int) $wpdb->get_var( "SELECT COUNT(1) FROM `{$canonical}`" );
-
-				if ( 0 === $legacy_rows || ( $canonical_rows > 0 && $canonical_rows >= $legacy_rows ) ) {
-					$wpdb->query( "DROP TABLE IF EXISTS `{$legacy}`" );
-				} else {
-					$tmp     = esc_sql( $canonical_raw . '_mig_tmp' );
-					$wpdb->query( "DROP TABLE IF EXISTS `{$tmp}`" );
-					$renamed = $wpdb->query( "RENAME TABLE `{$canonical}` TO `{$tmp}`, `{$legacy}` TO `{$canonical}`" );
-					if ( false !== $renamed ) {
-						$wpdb->query( "DROP TABLE IF EXISTS `{$tmp}`" );
-						$this->table_exists_cache = null;
-					}
-				}
-			}
 		}
-		// phpcs:enable
 	}
 
 	/**
@@ -354,17 +383,25 @@ class TSOLIIN_DB {
 	}
 
 	/**
-	 * Drop the table (used by uninstall).
+	 * Drop plugin tables (canonical + leftover pc_ names). Used by uninstall.
 	 */
 	public function drop_table() {
 		global $wpdb;
-		$legacy = $wpdb->prefix . 'pc_tso_link_inspector';
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
-		$wpdb->query( "DROP TABLE IF EXISTS `{$this->table}`" );
-		if ( $legacy !== $this->table ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
-			$wpdb->query( "DROP TABLE IF EXISTS `{$legacy}`" );
+
+		$tables = array(
+			$this->table,
+			$this->history_table,
+			$wpdb->prefix . 'pc_tso_link_inspector',
+			$wpdb->prefix . 'pc_tso_link_inspector_history',
+		);
+		$tables = array_unique( array_filter( $tables ) );
+
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+		foreach ( $tables as $table_name ) {
+			$quoted = esc_sql( $table_name );
+			$wpdb->query( "DROP TABLE IF EXISTS `{$quoted}`" );
 		}
+		// phpcs:enable
 	}
 
 	// -------------------------------------------------------------------------
