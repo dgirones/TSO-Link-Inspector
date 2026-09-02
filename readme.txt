@@ -143,6 +143,7 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 * Fix: Background check/scan poll fallback runs only during an active admin session (avoids server overload).
 * Fix: Getting started banner shows once per admin user (not on every visit until dismissed).
 * Fix: List scroll helpers load on the dashboard so post-scope navigation keeps the table in view.
+* Fix: Dashboard no longer runs `WP_Query` for `page` ID 0 (`url_to_postid` miss) once per internal link.
 * Change: Requires WordPress 5.9+.
 
 = 2.4.0 =

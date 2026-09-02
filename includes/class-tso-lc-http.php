@@ -372,6 +372,112 @@ class TSOLIIN_HTTP {
 	}
 
 	/**
+	 * Resolve an internal permalink to a post ID without url_to_postid().
+	 *
+	 * url_to_postid() runs WP_Query; a miss (home URL, unknown slug) becomes
+	 * `ID = 0 AND post_type = 'page'` once per link on the dashboard.
+	 *
+	 * @param string $url Absolute or site-relative URL.
+	 * @return int Post ID, or 0.
+	 */
+	public static function internal_url_to_post_id( $url ) {
+		static $cache = array();
+
+		$url = trim( str_replace( array( "\0", "\r", "\n" ), '', (string) $url ) );
+		if ( '' === $url ) {
+			return 0;
+		}
+
+		$cache_key = strtolower( $url );
+		if ( array_key_exists( $cache_key, $cache ) ) {
+			return (int) $cache[ $cache_key ];
+		}
+
+		$id = self::parse_query_post_id_from_url( $url );
+		if ( $id > 0 ) {
+			$cache[ $cache_key ] = $id;
+			return $id;
+		}
+
+		$path = wp_parse_url( $url, PHP_URL_PATH );
+		$path = is_string( $path ) ? $path : '';
+		if ( false !== stripos( $path, '/wp-content/' ) ) {
+			$cache[ $cache_key ] = 0;
+			return 0;
+		}
+		if ( preg_match( '/\.(?:jpe?g|png|gif|webp|avif|svg|bmp|ico|mp4|mp3|pdf|zip)(?:[?#]|$)/i', $path ) ) {
+			$cache[ $cache_key ] = 0;
+			return 0;
+		}
+
+		$home_parts = wp_parse_url( home_url( '/' ) );
+		$home_path  = ( is_array( $home_parts ) && ! empty( $home_parts['path'] ) )
+			? untrailingslashit( (string) $home_parts['path'] )
+			: '';
+		$norm_path = untrailingslashit( $path );
+		$is_home   = ( '' === $norm_path || '/' === $path || $norm_path === $home_path );
+		if ( $is_home ) {
+			$id = 0;
+			if ( 'page' === get_option( 'show_on_front' ) ) {
+				$id = absint( get_option( 'page_on_front' ) );
+			}
+			$cache[ $cache_key ] = $id;
+			return $id;
+		}
+
+		$rel = $norm_path;
+		if ( '' !== $home_path && 0 === strpos( $norm_path . '/', $home_path . '/' ) ) {
+			$rel = substr( $norm_path, strlen( $home_path ) );
+		}
+		$rel = trim( (string) $rel, '/' );
+		if ( '' === $rel || ! function_exists( 'get_page_by_path' ) ) {
+			$cache[ $cache_key ] = 0;
+			return 0;
+		}
+
+		$rel   = rawurldecode( $rel );
+		$types = get_post_types( array( 'public' => true ), 'names' );
+		if ( ! is_array( $types ) || empty( $types ) ) {
+			$types = array( 'page', 'post' );
+		} else {
+			$types = array_values( $types );
+		}
+		if ( ! in_array( 'attachment', $types, true ) ) {
+			$types[] = 'attachment';
+		}
+
+		$found               = get_page_by_path( $rel, OBJECT, $types );
+		$id                  = ( $found instanceof WP_Post ) ? (int) $found->ID : 0;
+		$cache[ $cache_key ] = $id;
+		return $id;
+	}
+
+	/**
+	 * Post ID from ?p= / ?page_id= / ?attachment_id= (0 if missing).
+	 *
+	 * @param string $url URL.
+	 * @return int
+	 */
+	public static function parse_query_post_id_from_url( $url ) {
+		$url = trim( (string) $url );
+		if ( '' === $url ) {
+			return 0;
+		}
+		$query = wp_parse_url( $url, PHP_URL_QUERY );
+		if ( ! is_string( $query ) || '' === $query ) {
+			return 0;
+		}
+		$qv = array();
+		wp_parse_str( $query, $qv );
+		foreach ( array( 'p', 'page_id', 'attachment_id' ) as $key ) {
+			if ( isset( $qv[ $key ] ) ) {
+				return absint( $qv[ $key ] );
+			}
+		}
+		return 0;
+	}
+
+	/**
 	 * Parse attachment_id from a WordPress attachment page URL.
 	 *
 	 * @param string $url Absolute or relative URL.
@@ -425,10 +531,6 @@ class TSOLIIN_HTTP {
 			}
 		}
 
-		if ( ! function_exists( 'url_to_postid' ) ) {
-			return false;
-		}
-
 		$abs = $url;
 		if ( preg_match( '#^(?:/|\./|\.\./)#', $abs ) ) {
 			$abs = home_url( $abs );
@@ -436,7 +538,7 @@ class TSOLIIN_HTTP {
 			$abs = ( is_ssl() ? 'https:' : 'http:' ) . $abs;
 		}
 
-		$attachment_id = (int) url_to_postid( $abs );
+		$attachment_id = self::internal_url_to_post_id( $abs );
 		if ( $attachment_id <= 0 ) {
 			return false;
 		}
