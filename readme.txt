@@ -2,7 +2,7 @@
 Contributors: deadko
 Donate link: https://ko-fi.com/deadko_cat
 Tags: broken links, link checker, seo, maintenance, links
-Requires at least: 6.1
+Requires at least: 5.9
 Tested up to: 7.1
 Requires PHP: 7.4
 Stable tag: 2.4.1
@@ -142,7 +142,8 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 * Fix: Main link list no longer runs transparent-redirect cleanup on every page load (cron only).
 * Fix: Background check/scan poll fallback runs only during an active admin session (avoids server overload).
 * Fix: Getting started banner shows once per admin user (not on every visit until dismissed).
-* Change: Requires WordPress 6.1+.
+* Fix: List scroll helpers load on the dashboard so post-scope navigation keeps the table in view.
+* Change: Requires WordPress 5.9+.
 
 = 2.4.0 =
 * Improvement: Filter tabs, pagination, scope tabs, and stat cards refresh the link list via AJAX (no full page reload; scroll stays on the list).

@@ -960,7 +960,7 @@ class TSOLIIN_Support {
 			}
 		}
 
-		if ( wp_is_block_theme() || ( ! current_theme_supports( 'widgets' ) && current_user_can( 'edit_theme_options' ) ) ) {
+		if ( ( function_exists( 'wp_is_block_theme' ) && wp_is_block_theme() ) || ( ! current_theme_supports( 'widgets' ) && current_user_can( 'edit_theme_options' ) ) ) {
 			$args = array( 'path' => '/wp-admin/widgets' );
 			if ( '' !== $widget_id ) {
 				$args['tsoliin_widget'] = $widget_id;
