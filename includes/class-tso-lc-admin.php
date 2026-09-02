@@ -232,6 +232,12 @@ class TSOLIIN_Admin {
 		$css_ver   = is_readable( $admin_css ) ? (string) filemtime( $admin_css ) : TSOLIIN_VERSION;
 		$js_ver    = is_readable( $admin_js ) ? (string) filemtime( $admin_js ) : TSOLIIN_VERSION;
 		wp_enqueue_style( 'tsoliin-admin', TSOLIIN_PLUGIN_URL . 'assets/css/admin.css', array(), $css_ver );
+		$scroll_head_js  = TSOLIIN_PLUGIN_DIR . 'assets/js/list-scroll-head.js';
+		$scroll_js       = TSOLIIN_PLUGIN_DIR . 'assets/js/list-scroll.js';
+		$scroll_head_ver = is_readable( $scroll_head_js ) ? (string) filemtime( $scroll_head_js ) : TSOLIIN_VERSION;
+		$scroll_ver      = is_readable( $scroll_js ) ? (string) filemtime( $scroll_js ) : TSOLIIN_VERSION;
+		wp_enqueue_script( 'tsoliin-list-scroll-head', TSOLIIN_PLUGIN_URL . 'assets/js/list-scroll-head.js', array(), $scroll_head_ver, false );
+		wp_enqueue_script( 'tsoliin-list-scroll', TSOLIIN_PLUGIN_URL . 'assets/js/list-scroll.js', array(), $scroll_ver, true );
 		wp_enqueue_script( 'tsoliin-admin', TSOLIIN_PLUGIN_URL . 'assets/js/admin.js', array( 'jquery' ), $js_ver, true );
 
 		$bg      = $this->get_cached_bg_progress();
