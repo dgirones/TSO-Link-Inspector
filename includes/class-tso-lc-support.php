@@ -714,8 +714,8 @@ class TSOLIIN_Support {
 			}
 		}
 		// Jetpack galleries often link to the attachment page (/slug/) instead of the file URL.
-		if ( $id <= 0 && function_exists( 'url_to_postid' ) ) {
-			$page_id = (int) url_to_postid( $url );
+		if ( $id <= 0 ) {
+			$page_id = TSOLIIN_HTTP::internal_url_to_post_id( $url );
 			if ( $page_id > 0 && 'attachment' === get_post_type( $page_id ) ) {
 				$id = $page_id;
 			}

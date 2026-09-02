@@ -313,8 +313,8 @@ class TSOLIIN_Quality {
 			}
 		}
 
-		$post_id = url_to_postid( $url );
-		$cache[ $cache_key ] = $post_id ? (int) $post_id : 0;
+		$post_id             = TSOLIIN_HTTP::internal_url_to_post_id( $url );
+		$cache[ $cache_key ] = $post_id > 0 ? $post_id : 0;
 		return (int) $cache[ $cache_key ];
 	}
 
