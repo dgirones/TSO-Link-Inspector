@@ -69,4 +69,75 @@ class TSOLIIN_Schedule {
 			)
 		);
 	}
+
+	/**
+	 * Human-readable queue chip label + tooltip for the dashboard hero.
+	 *
+	 * @param TSOLIIN_DB             $db       Database handler.
+	 * @param array<string, int>     $queue    Output from get_queue_stats().
+	 * @param array<string, mixed>   $settings Schedule settings.
+	 * @return array{ label: string, title: string, warn: bool }
+	 */
+	public static function get_queue_chip( TSOLIIN_DB $db, array $queue, array $settings ) {
+		$never_checked = (int) $db->get_unchecked_count();
+		$immediate       = (int) $queue['unchecked'];
+		$stale_count     = (int) $queue['broken_stale'] + (int) $queue['ok_stale'];
+		$total           = (int) $queue['pending'];
+
+		$title = sprintf(
+			/* translators: 1: never-checked count, 2: broken stale count, 3: OK stale count, 4: OK recheck days, 5: broken recheck days, 6: checks per day, 7: estimated days to clear queue */
+			__( 'Queue: %1$d never checked, %2$d broken (older than %5$d days), %3$d OK (older than %4$d days). Throughput: ~%6$d checks/day. Estimated time to clear queue: ~%7$d days.', 'tso-link-inspector' ),
+			(int) $queue['unchecked'],
+			(int) $queue['broken_stale'],
+			(int) $queue['ok_stale'],
+			(int) $settings['recheck_days'],
+			(int) $settings['broken_recheck_days'],
+			(int) $queue['checks_per_day'],
+			max( 1, (int) $queue['est_days'] )
+		);
+
+		if ( $total <= 0 ) {
+			return array(
+				'label' => __( 'All up to date', 'tso-link-inspector' ),
+				'title' => __( 'All links were checked recently.', 'tso-link-inspector' ),
+				'warn'  => false,
+			);
+		}
+
+		if ( $stale_count > 0 && $immediate > 0 ) {
+			if ( $never_checked > 0 && $never_checked <= $immediate ) {
+				$label = sprintf(
+					/* translators: 1: unchecked count, 2: scheduled recheck count */
+					__( '%1$d unchecked · %2$d scheduled recheck', 'tso-link-inspector' ),
+					$never_checked,
+					$stale_count
+				);
+			} else {
+				$label = sprintf(
+					/* translators: 1: pending count (includes manual locks), 2: scheduled recheck count */
+					__( '%1$d pending · %2$d scheduled recheck', 'tso-link-inspector' ),
+					$immediate,
+					$stale_count
+				);
+			}
+		} elseif ( $stale_count > 0 ) {
+			$label = sprintf(
+				/* translators: %d: count */
+				__( '%d scheduled recheck', 'tso-link-inspector' ),
+				$stale_count
+			);
+		} else {
+			$label = sprintf(
+				/* translators: %d: count */
+				__( '%d unchecked', 'tso-link-inspector' ),
+				max( $never_checked, $immediate )
+			);
+		}
+
+		return array(
+			'label' => $label,
+			'title' => $title,
+			'warn'  => true,
+		);
+	}
 }

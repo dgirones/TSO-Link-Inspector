@@ -39,6 +39,13 @@ $tsoliin_options = array(
 	'tsoliin_bg_check_total',
 	'tsoliin_bg_check_started',
 	'tsoliin_bg_check_post_id',
+	'tsoliin_bg_scan_running',
+	'tsoliin_bg_scan_page',
+	'tsoliin_bg_scan_total',
+	'tsoliin_bg_scan_scanned',
+	'tsoliin_bg_scan_started',
+	'tsoliin_bg_scan_error',
+	'tsoliin_bg_scan_complete',
 	'tsoliin_total_posts_scanned',
 	'tsoliin_comment_scan_after_id',
 	'tsoliin_menu_scan_after_id',
@@ -47,6 +54,7 @@ $tsoliin_options = array(
 	'tsoliin_fse_scan_after_id',
 	'tsoliin_broken_digest_last_sent',
 	'tsoliin_immediate_broken_queue',
+	'tsoliin_bg_check_empty_retries',
 	'tsoliin_site_gate_state',
 );
 foreach ( $tsoliin_options as $tsoliin_option_name ) {
@@ -81,6 +89,7 @@ $tsoliin_hooks = array(
 	'tsoliin_cron_scan',
 	'tsoliin_cron_check',
 	'tsoliin_bg_check_step',
+	'tsoliin_bg_scan_step',
 );
 foreach ( $tsoliin_hooks as $tsoliin_hook_name ) {
 	wp_clear_scheduled_hook( $tsoliin_hook_name );

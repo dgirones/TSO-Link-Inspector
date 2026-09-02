@@ -1578,8 +1578,6 @@ class TSOLIIN_DB {
 	private function query_links_paginated( $args ) {
 		global $wpdb;
 
-		$this->maybe_cleanup_transparent_redirects();
-
 		$query_parts = $this->build_links_list_query_parts( $args );
 		$where       = $query_parts['where'];
 		$params      = $query_parts['params'];
@@ -1845,8 +1843,6 @@ class TSOLIIN_DB {
 	 */
 	public function get_posts_link_summary( $args = array() ) {
 		global $wpdb;
-
-		$this->maybe_cleanup_transparent_redirects();
 
 		$defaults = array(
 			'per_page'          => 20,
@@ -2290,8 +2286,6 @@ class TSOLIIN_DB {
 		if ( isset( self::$stats_cache[ $cache_key ] ) ) {
 			return self::$stats_cache[ $cache_key ];
 		}
-
-		$this->maybe_cleanup_transparent_redirects();
 
 		global $wpdb;
 		$generic = TSOLIIN_Quality::build_generic_anchor_count_expr();

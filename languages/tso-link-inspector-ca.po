@@ -3142,3 +3142,18 @@ msgstr "Proper: escaneig %1$s, comprovació %2$s"
 msgid "Next automatic scan: %1$s. Next automatic check: %2$s."
 msgstr ""
 "Proper escaneig automàtic: %1$s. Propera comprovació automàtica: %2$s."
+
+msgid "Check paused. Click Continue check."
+msgstr "Comprovació en pausa. Fes clic a Continuar comprovació."
+
+msgid "%1$d%% — %2$d links pending. Click Continue check."
+msgstr "%1$d%% — %2$d enllaços pendents. Fes clic a Continuar comprovació."
+
+msgid "%1$d unchecked · %2$d scheduled recheck"
+msgstr "%1$d sense comprovar · %2$d reprogramats"
+
+msgid "%1$d pending · %2$d scheduled recheck"
+msgstr "%1$d pendents · %2$d reprogramats"
+
+msgid "%d scheduled recheck"
+msgstr "%d reprogramats"

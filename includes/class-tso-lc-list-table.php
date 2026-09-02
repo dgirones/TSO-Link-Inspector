@@ -25,6 +25,9 @@ class TSOLIIN_List_Table extends WP_List_Table {
 	/** @var TSOLIIN_HTTP|null */
 	private $http;
 
+	/** @var array<string, mixed>|null Cached tab nav context for one render pass. */
+	private $list_tabnav_context = null;
+
 	public function __construct( TSOLIIN_DB $db, ?TSOLIIN_HTTP $http = null ) {
 		$this->db   = $db;
 		$this->http = $http;
@@ -83,14 +86,14 @@ class TSOLIIN_List_Table extends WP_List_Table {
 	 * @return string
 	 */
 	private function read_request_quality_filter() {
-		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
-		if ( isset( $_REQUEST['quality_filter'] ) ) {
-			$quality = sanitize_key( wp_unslash( $_REQUEST['quality_filter'] ) );
-			return in_array( $quality, $this->get_quality_filter_keys(), true ) ? $quality : '';
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Admin list GET filter; read-only display.
+		$quality_raw = isset( $_REQUEST['quality_filter'] ) ? sanitize_key( wp_unslash( $_REQUEST['quality_filter'] ) ) : '';
+		if ( '' !== $quality_raw && in_array( $quality_raw, $this->get_quality_filter_keys(), true ) ) {
+			return $quality_raw;
 		}
 
 		// Legacy: quality value stored in filter= (older URLs).
-		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Admin list GET filter; read-only display.
 		$filter_raw = isset( $_REQUEST['filter'] ) ? sanitize_key( wp_unslash( $_REQUEST['filter'] ) ) : 'all';
 		if ( in_array( $filter_raw, $this->get_quality_filter_keys(), true ) ) {
 			return $filter_raw;
@@ -650,19 +653,42 @@ class TSOLIIN_List_Table extends WP_List_Table {
 		echo '</div>';
 	}
 
-	protected function extra_tablenav( $which ) {
-		if ( 'top' !== $which ) {
-			return;
+	/**
+	 * Shared list-tab navigation context (filters, scope, stats).
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function get_list_tabnav_context() {
+		if ( null !== $this->list_tabnav_context ) {
+			return $this->list_tabnav_context;
 		}
-		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
-		$current         = $this->read_request_status_filter();
-		$quality_current = $this->read_request_quality_filter();
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$view_post_id_nav = isset( $_REQUEST['post_id'] ) ? absint( $_REQUEST['post_id'] ) : 0;
 		$scope_current    = $this->read_request_scope();
-		$stats = $view_post_id_nav
+		$stats            = $view_post_id_nav
 			? $this->db->get_stats_for_post( $view_post_id_nav, $scope_current )
 			: $this->db->get_stats( $scope_current );
+
+		$this->list_tabnav_context = array(
+			'current'          => $this->read_request_status_filter(),
+			'quality_current'  => $this->read_request_quality_filter(),
+			'view_post_id_nav' => $view_post_id_nav,
+			'scope_current'    => $scope_current,
+			'stats'            => $stats,
+		);
+
+		return $this->list_tabnav_context;
+	}
+
+	/**
+	 * Status filter tabs (All, Broken, Redirect, …).
+	 *
+	 * @return void
+	 */
+	private function render_status_filter_tabs() {
+		$ctx     = $this->get_list_tabnav_context();
+		$current = $ctx['current'];
+		$stats   = $ctx['stats'];
 
 		$filters = array(
 			/* translators: %s: number of links */
@@ -686,11 +712,11 @@ class TSOLIIN_List_Table extends WP_List_Table {
 			// Switching tabs should reset active search terms from the query string.
 			$tab_args = array( 'filter' => $key );
 			$this->merge_active_quality_into_args( $tab_args );
-			if ( $view_post_id_nav > 0 ) {
-				$tab_args['post_id'] = $view_post_id_nav;
+			if ( $ctx['view_post_id_nav'] > 0 ) {
+				$tab_args['post_id'] = $ctx['view_post_id_nav'];
 			}
-			if ( 'all' !== $scope_current ) {
-				$tab_args['scope'] = $scope_current;
+			if ( 'all' !== $ctx['scope_current'] ) {
+				$tab_args['scope'] = $ctx['scope_current'];
 			}
 			$url    = esc_url( $this->list_nav_url( $tab_args, array( 'paged', 's' ) ) );
 			$active = $current === $key ? ' class="current"' : '';
@@ -707,6 +733,18 @@ class TSOLIIN_List_Table extends WP_List_Table {
 			echo '<a href="' . $url . '"' . $active . $title . '>' . esc_html( $label ) . '</a> '; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		}
 		echo '</div>';
+	}
+
+	/**
+	 * Quality filter tabs (empty anchor, generic anchor, …).
+	 *
+	 * @return void
+	 */
+	private function render_quality_filter_tabs() {
+		$ctx             = $this->get_list_tabnav_context();
+		$current         = $ctx['current'];
+		$quality_current = $ctx['quality_current'];
+		$stats           = $ctx['stats'];
 
 		$quality_filters = array(
 			/* translators: %s: number of links with empty anchor text */
@@ -730,11 +768,11 @@ class TSOLIIN_List_Table extends WP_List_Table {
 			} else {
 				$omit_keys[] = 'quality_filter';
 			}
-			if ( $view_post_id_nav > 0 ) {
-				$tab_args['post_id'] = $view_post_id_nav;
+			if ( $ctx['view_post_id_nav'] > 0 ) {
+				$tab_args['post_id'] = $ctx['view_post_id_nav'];
 			}
-			if ( 'unpublished_target' !== $key && 'all' !== $scope_current ) {
-				$tab_args['scope'] = $scope_current;
+			if ( 'unpublished_target' !== $key && 'all' !== $ctx['scope_current'] ) {
+				$tab_args['scope'] = $ctx['scope_current'];
 			}
 			$url    = esc_url( $this->list_nav_url( $tab_args, $omit_keys ) );
 			$active = $quality_current === $key ? ' class="current"' : '';
@@ -754,6 +792,17 @@ class TSOLIIN_List_Table extends WP_List_Table {
 			echo '<a href="' . $url . '"' . $active . $title . '>' . esc_html( $label ) . '</a> '; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		}
 		echo '</div>';
+	}
+
+	/**
+	 * Internal / external scope tabs.
+	 *
+	 * @return void
+	 */
+	private function render_scope_tabs() {
+		$ctx             = $this->get_list_tabnav_context();
+		$current         = $ctx['current'];
+		$scope_current   = $ctx['scope_current'];
 
 		$scope_labels = array(
 			'all'      => __( 'All links', 'tso-link-inspector' ),
@@ -767,8 +816,8 @@ class TSOLIIN_List_Table extends WP_List_Table {
 				$scope_args['filter'] = $current;
 			}
 			$this->merge_active_quality_into_args( $scope_args );
-			if ( $view_post_id_nav > 0 ) {
-				$scope_args['post_id'] = $view_post_id_nav;
+			if ( $ctx['view_post_id_nav'] > 0 ) {
+				$scope_args['post_id'] = $ctx['view_post_id_nav'];
 			}
 			$scope_omit = array( 'paged', 's' );
 			if ( 'all' !== $scope_key ) {
@@ -851,11 +900,17 @@ class TSOLIIN_List_Table extends WP_List_Table {
 		if ( isset( $_REQUEST['filter_action'] ) && '' !== sanitize_text_field( wp_unslash( $_REQUEST['filter_action'] ) ) ) {
 			return false;
 		}
-		if ( isset( $_REQUEST['action'] ) && '-1' !== $_REQUEST['action'] && '' !== $_REQUEST['action'] ) {
-			return sanitize_key( wp_unslash( $_REQUEST['action'] ) );
+		if ( isset( $_REQUEST['action'] ) ) {
+			$action = sanitize_key( wp_unslash( (string) $_REQUEST['action'] ) );
+			if ( '' !== $action && '-1' !== $action ) {
+				return $action;
+			}
 		}
-		if ( isset( $_REQUEST['action2'] ) && '-1' !== $_REQUEST['action2'] && '' !== $_REQUEST['action2'] ) {
-			return sanitize_key( wp_unslash( $_REQUEST['action2'] ) );
+		if ( isset( $_REQUEST['action2'] ) ) {
+			$action2 = sanitize_key( wp_unslash( (string) $_REQUEST['action2'] ) );
+			if ( '' !== $action2 && '-1' !== $action2 ) {
+				return $action2;
+			}
 		}
 		// phpcs:enable WordPress.Security.NonceVerification.Recommended
 		return false;
@@ -986,7 +1041,14 @@ class TSOLIIN_List_Table extends WP_List_Table {
 		echo '<div class="tablenav ' . esc_attr( $which ) . '">';
 
 		if ( 'top' === $which ) {
-			$this->extra_tablenav( $which );
+			$this->render_status_filter_tabs();
+			$this->render_quality_filter_tabs();
+			echo '<div class="tsoliin-scope-search-row">';
+			$this->render_scope_tabs();
+			echo '<div class="tsoliin-scope-search-row__search">';
+			$this->render_search_controls();
+			echo '</div>';
+			echo '</div>';
 			echo '<div class="tsoliin-bulk-pagination-row">';
 			echo '<div class="alignleft actions bulkactions tsoliin-bulk-bar">';
 			$this->bulk_actions( $which );
@@ -1036,14 +1098,7 @@ class TSOLIIN_List_Table extends WP_List_Table {
 		echo '<div class="tablenav-pages tsoliin-pagination tsoliin-pagination--' . esc_attr( $position ) . '">';
 		/* translators: %s: number of links in the current list view. */
 		echo '<span class="displaying-num">' . esc_html( sprintf( _n( '%s item', '%s items', $total_items, 'tso-link-inspector' ), number_format_i18n( $total_items ) ) ) . '</span>';
-		if ( 'top' === $which ) {
-			echo '<div class="tsoliin-pagination-right">';
-			$this->render_search_controls();
-			if ( $page_links ) {
-				echo '<span class="pagination-links" aria-label="' . esc_attr__( 'Pagination', 'tso-link-inspector' ) . '">' . $page_links . '</span>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
-			}
-			echo '</div>';
-		} elseif ( $page_links ) {
+		if ( $page_links ) {
 			echo '<span class="pagination-links" aria-label="' . esc_attr__( 'Pagination', 'tso-link-inspector' ) . '">' . $page_links . '</span>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		}
 		echo '</div>';

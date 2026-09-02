@@ -3322,3 +3322,18 @@ msgstr "Próximo: escaneo %1$s, comprobación %2$s"
 msgid "Next automatic scan: %1$s. Next automatic check: %2$s."
 msgstr ""
 "Próximo escaneo automático: %1$s. Próxima comprobación automática: %2$s."
+
+msgid "Check paused. Click Continue check."
+msgstr "Comprobación en pausa. Haz clic en Continuar comprobación."
+
+msgid "%1$d%% — %2$d links pending. Click Continue check."
+msgstr "%1$d%% — %2$d enlaces pendientes. Haz clic en Continuar comprobación."
+
+msgid "%1$d unchecked · %2$d scheduled recheck"
+msgstr "%1$d sin comprobar · %2$d reprogramados"
+
+msgid "%1$d pending · %2$d scheduled recheck"
+msgstr "%1$d pendientes · %2$d reprogramados"
+
+msgid "%d scheduled recheck"
+msgstr "%d reprogramados"

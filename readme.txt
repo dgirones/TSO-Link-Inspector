@@ -2,10 +2,10 @@
 Contributors: deadko
 Donate link: https://ko-fi.com/deadko_cat
 Tags: broken links, link checker, seo, maintenance, links
-Requires at least: 6.0
+Requires at least: 6.1
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 2.4.0
+Stable tag: 2.4.1
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -127,6 +127,23 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 
 == Changelog ==
 
+= 2.4.1 =
+* Improvement: **Scan now** runs server-side in the background (close the browser; **Continue scan** / **Restart scan** when paused).
+* Fix: **Check now** / **Continue check** keep progressing when WP-Cron does not fire (admin poll fallback).
+* Fix: Long scan and check runs no longer stop after 30 minutes (heartbeat per batch).
+* Fix: Check no longer stalls at ~99% with pending links — polling resumes automatically and the server reschedules instead of marking complete too early.
+* Fix: Stale 30-minute timeout no longer stops a check while unchecked links remain.
+* Improvement: Queue chip distinguishes unchecked links from scheduled automatic rechecks.
+* Fix: Scan error bar visible after reload; uninstall removes background scan cron hook.
+* Fix: Admin poll uses a smaller HTTP batch/time budget so progress AJAX does not time out.
+* Fix: Nudge/resume only runs once per paused session (no repeated `start_bg_check` on every poll).
+* Fix: Paused checks no longer auto-resume on page load — click **Continue check** explicitly.
+* Fix: Bulk action dropdown sanitization; removed dead list-table tablenav code.
+* Fix: Main link list no longer runs transparent-redirect cleanup on every page load (cron only).
+* Fix: Background check/scan poll fallback runs only during an active admin session (avoids server overload).
+* Fix: Getting started banner shows once per admin user (not on every visit until dismissed).
+* Change: Requires WordPress 6.1+.
+
 = 2.4.0 =
 * Improvement: Filter tabs, pagination, scope tabs, and stat cards refresh the link list via AJAX (no full page reload; scroll stays on the list).
 * Fix: Quality filters (empty anchor, generic anchor, unpublished target) work with live list navigation.
@@ -151,6 +168,9 @@ See changelog.txt in the plugin folder for versions before 2.3.7.
 
 == Upgrade Notice ==
 
+= 2.4.1 =
+Recommended. Background scan, reliable check progress when WP-Cron is delayed, fix for checks stuck at 99%, clearer queue status, and fixes for long runs timing out.
+
 = 2.4.0 =
 Recommended. AJAX filter/pagination navigation, quality-filter fixes, smoother scroll when opening a post’s links, and cleaner admin header/Screen Options layout.
 
@@ -159,21 +179,3 @@ Recommended. Stops a harmless `Table ... already exists` log when the History ta
 
 = 2.3.7 =
 Recommended. History tab for URL edits, Continue check / Restart from zero, clearer Edit link checkboxes, and fewer duplicate admin SQL queries.
-
-= 2.3.6 =
-Recommended. Save unverified URLs, ACF/Elementor Go to edit, resume Check now, and consistent dashboard counters.
-
-= 2.3.5 =
-Recommended. Check/bulk/cron fixes, classic multi-gallery editor focus, and admin performance.
-
-= 2.3.3 =
-Recommended. Adds verified bulk HTTP→HTTPS upgrade and Links per page screen option, plus translation and legacy-table cleanups.
-
-= 2.3.2 =
-Recommended if Tables Cleaner still lists a leftover `pc_tso_link_inspector` table after 2.3.1.
-
-= 2.3.1 =
-Recommended. Drops leftover legacy `pc_tso_link_inspector` and fixes Getting started translations/buttons.
-
-= 2.3.0 =
-Optional WooCommerce product link scanning and Products with issues view. Also improves Classic Editor focus scroll, gallery/image detection, HTTPS suggestions for auth-walled URLs, and row actions. Enable WooCommerce scanning under Settings if you run a store.
