@@ -5,7 +5,7 @@ Tags: broken links, link checker, seo, maintenance, links
 Requires at least: 5.9
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 2.4.1
+Stable tag: 2.4.2
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -127,6 +127,10 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 
 == Changelog ==
 
+= 2.4.2 =
+* Fix: Leftover `{prefix}pc_tso_link_inspector_history` is renamed or dropped on admin load (Tables Cleaner no longer lists two History tables).
+* Fix: Stop `SHOW TABLES` for leftover `{prefix}pc_tso_link_inspector(_history)` on every admin load once they are gone.
+
 = 2.4.1 =
 * Improvement: **Scan now** runs server-side in the background (close the browser; **Continue scan** / **Restart scan** when paused).
 * Fix: **Check now** / **Continue check** keep progressing when WP-Cron does not fire (admin poll fallback).
@@ -144,8 +148,6 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 * Fix: Getting started banner shows once per admin user (not on every visit until dismissed).
 * Fix: List scroll helpers load on the dashboard so post-scope navigation keeps the table in view.
 * Fix: Dashboard no longer runs `WP_Query` for `page` ID 0 (`url_to_postid` miss) once per internal link.
-* Fix: Leftover `{prefix}pc_tso_link_inspector_history` is renamed or dropped on admin load (Tables Cleaner no longer lists two History tables).
-* Fix: Stop `SHOW TABLES` for leftover `{prefix}pc_tso_link_inspector(_history)` on every admin load once they are gone.
 * Change: Requires WordPress 5.9+.
 
 = 2.4.0 =
@@ -172,8 +174,11 @@ See changelog.txt in the plugin folder for versions before 2.3.7.
 
 == Upgrade Notice ==
 
+= 2.4.2 =
+Recommended. Cleans up leftover legacy History table names and stops redundant `SHOW TABLES` on every admin load.
+
 = 2.4.1 =
-Recommended. Background scan, reliable check progress when WP-Cron is delayed, leftover History table cleanup, and fixes for long runs timing out.
+Recommended. Background scan, reliable check progress when WP-Cron is delayed, and fixes for long runs timing out.
 
 = 2.4.0 =
 Recommended. AJAX filter/pagination navigation, quality-filter fixes, smoother scroll when opening a post’s links, and cleaner admin header/Screen Options layout.
