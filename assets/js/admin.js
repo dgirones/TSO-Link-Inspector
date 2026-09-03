@@ -534,6 +534,10 @@
 
 			this.$checkBtn.on( 'click', function () {
 				if ( $( this ).prop( 'disabled' ) ) { return; }
+				if ( parseInt( tsoliinData.bgRunning, 10 ) === 1 ) {
+					self.startBgCheck();
+					return;
+				}
 				if ( self.scanning && ! window.confirm( tsoliinData.i18n.confirmCheckWhileScan ) ) {
 					return;
 				}
