@@ -236,8 +236,8 @@
 			var checkRunning = parseInt( tsoliinData.bgRunning, 10 ) === 1;
 
 			if ( scanRunning ) {
+				// Monitor background progress only; inline batches run after the user clicks Scan/Continue.
 				this.scanning = true;
-				this.scanSessionActive = true;
 				this.$progress.show();
 				this.$startBtn.prop( 'disabled', true );
 				this.$stopScanBtn.show();
@@ -264,7 +264,6 @@
 				this.$restartBtn.hide();
 				this.$startBtn.prop( 'disabled', scanRunning );
 				this.$stopBtn.show();
-				this.checkSessionActive = true;
 			} else {
 				var pendingOnLoad = parseInt( tsoliinData.pendingCheck, 10 ) || 0;
 				var pctOnLoad     = parseInt( tsoliinData.bgPct, 10 ) || 0;

@@ -1089,7 +1089,7 @@ class TSOLIIN_Admin {
 
 		if ( $this->http->is_site_gated_cached() ) {
 			echo '<div class="notice notice-warning"><p>';
-			echo esc_html__( 'This site appears to be behind a coming-soon or maintenance page. Internal HTML links are not marked OK or broken (status: Unverifiable) until the site is publicly reachable. External URLs and media files are still checked. Scan now still finds links in post content and ACF fields; only HTTP status checks for same-site HTML pages are skipped.', 'tso-link-inspector' );
+			echo esc_html__( 'A coming-soon or site-gate plugin appears to be active on the front end (this is not WordPress core maintenance mode). Internal HTML links are not marked OK or broken (status: Unverifiable) until the site is publicly reachable. External URLs and media files are still checked. Scan now still finds links in post content and ACF fields; only HTTP status checks for same-site HTML pages are skipped.', 'tso-link-inspector' );
 			echo '</p></div>';
 		}
 	}
