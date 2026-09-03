@@ -543,7 +543,6 @@ class TSOLIIN_Admin {
 		// Toolbar.
 		$pending_check      = (int) $this->db->get_pending_check_count( absint( $view_post_id ) );
 		$btn_check_disabled = ( $bg_scan['running'] && ! $bg['running'] ) ? ' disabled' : '';
-		$btn_scan_disabled  = ( $bg['running'] && ! $bg_scan['running'] ) ? ' disabled' : '';
 		$show_restart       = ( ! $bg['running'] && $pending_check > 0 );
 		$show_scan_restart  = ( ! $bg_scan['running'] && ! empty( $bg_scan['resumable'] ) );
 		if ( $bg_scan['running'] ) {
@@ -584,7 +583,7 @@ class TSOLIIN_Admin {
 
 		echo '<div class="tsoliin-toolbar">';
 		echo '<div class="tsoliin-toolbar__primary">';
-		echo '<button type="button" id="tsoliin-start-scan" class="button button-primary" title="' . esc_attr( $scan_btn_title ) . '"' . $btn_scan_disabled . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+		echo '<button type="button" id="tsoliin-start-scan" class="button button-primary" title="' . esc_attr( $scan_btn_title ) . '">';
 		echo '<span class="dashicons dashicons-search"></span> ';
 		echo esc_html( $btn_scan_label );
 		echo '</button>';
