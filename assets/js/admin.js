@@ -244,7 +244,10 @@
 				if ( this.$restartScanBtn && this.$restartScanBtn.length ) {
 					this.$restartScanBtn.hide();
 				}
-				this.$checkBtn.prop( 'disabled', true );
+				this.$checkBtn.prop(
+					'disabled',
+					! parseInt( tsoliinData.bgRunning, 10 ) || this.checkSessionActive
+				);
 				if ( tsoliinData.scanPct ) {
 					this.updateProgress( tsoliinData.scanPct, tsoliinData.i18n.scanning );
 				}
@@ -882,7 +885,10 @@
 				if ( this.$restartScanBtn && this.$restartScanBtn.length ) {
 					this.$restartScanBtn.hide();
 				}
-				this.$checkBtn.prop( 'disabled', true );
+				this.$checkBtn.prop(
+					'disabled',
+					! parseInt( tsoliinData.bgRunning, 10 ) || this.checkSessionActive
+				);
 			}
 		},
 
