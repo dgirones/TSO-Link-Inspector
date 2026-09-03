@@ -389,22 +389,12 @@ class TSOLIIN_Cron {
 		}
 
 		if ( $running && '' !== $started && ( time() - (int) strtotime( $started ) ) > 1800 ) {
-			$work_remaining = $scanned > 0 && $scanned < $total;
-			if ( $work_remaining ) {
-				// Work remains — keep the run alive and reschedule (do not mark stopped).
-				update_option( 'tsoliin_bg_scan_started', current_time( 'mysql', true ), false );
-				if ( ! wp_next_scheduled( self::HOOK_BG_SCAN_STEP ) ) {
-					wp_schedule_single_event( time(), self::HOOK_BG_SCAN_STEP );
-					spawn_cron();
-				}
-			} else {
-				$running = false;
-				update_option( 'tsoliin_bg_scan_running', 0, false );
-				wp_clear_scheduled_hook( self::HOOK_BG_SCAN_STEP );
-				if ( '' === $error ) {
-					$error = __( 'Scan timed out or was interrupted. Use Continue scan to resume.', 'tso-link-inspector' );
-					update_option( 'tsoliin_bg_scan_error', $error, false );
-				}
+			$running = false;
+			update_option( 'tsoliin_bg_scan_running', 0, false );
+			wp_clear_scheduled_hook( self::HOOK_BG_SCAN_STEP );
+			if ( '' === $error ) {
+				$error = __( 'Scan timed out or was interrupted. Use Continue scan to resume.', 'tso-link-inspector' );
+				update_option( 'tsoliin_bg_scan_error', $error, false );
 			}
 		}
 

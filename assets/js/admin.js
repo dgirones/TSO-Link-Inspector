@@ -21,7 +21,6 @@
 		statsTimer     : null,
 		completed      : false,   // Guard: prevents check reload loop
 		checkSessionActive : false,
-		scanSessionActive  : false,
 		nudgePending   : false,
 		editLinkId  : 0,
 		editOldUrl  : '',
@@ -237,7 +236,6 @@
 
 			if ( scanRunning ) {
 				this.scanning = true;
-				this.scanSessionActive = true;
 				this.$progress.show();
 				this.$startBtn.prop( 'disabled', true );
 				this.$stopScanBtn.show();
@@ -761,7 +759,6 @@
 			self.scanning       = true;
 			self.scanAborted    = false;
 			self.scanCompleted  = false;
-			self.scanSessionActive = true;
 			tsoliinData.scanError = '';
 			self.$startBtn.prop( 'disabled', true );
 			self.$stopScanBtn.show();
@@ -809,7 +806,6 @@
 		stopScan: function () {
 			var self = this;
 			self.scanAborted = true;
-			self.scanSessionActive = false;
 			$.ajax( {
 				url    : tsoliinData.ajaxUrl,
 				method : 'POST',
@@ -892,7 +888,6 @@
 				return;
 			}
 			this.scanning = false;
-			this.scanSessionActive = false;
 			tsoliinData.scanRunning = 0;
 			tsoliinData.scanResumable = 0;
 			tsoliinData.scanError = '';
@@ -918,7 +913,6 @@
 
 		scanError: function ( msg ) {
 			this.scanning = false;
-			this.scanSessionActive = false;
 			tsoliinData.scanRunning = 0;
 			this.$stopScanBtn.hide();
 			this.resetScanButton();
@@ -1082,7 +1076,7 @@
 					nonce         : tsoliinData.nonce,
 					post_id       : parseInt( tsoliinData.viewPostId, 10 ) || 0,
 					nudge         : sendNudge ? '1' : '0',
-					session_active: ( self.checkSessionActive || self.scanSessionActive ) ? '1' : '0'
+					session_active: self.checkSessionActive ? '1' : '0'
 				},
 				success: function ( r ) {
 					if ( ! r.success ) {
@@ -1121,7 +1115,6 @@
 								// Stopped mid-run (Stop scan or stale flag cleared).
 								tsoliinData.scanRunning = 0;
 								self.scanning = false;
-								self.scanSessionActive = false;
 								tsoliinData.scanResumable = d.scan.resumable ? 1 : 0;
 								self.$stopScanBtn.hide();
 								self.resetScanButton();
