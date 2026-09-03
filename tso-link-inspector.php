@@ -28,6 +28,31 @@ define( 'TSOLIIN_TEXT_DOMAIN', 'tso-link-inspector' );
 define( 'TSOLIIN_BATCH_SIZE',  10 );
 
 /**
+ * Whether the current request is a Link Inspector admin screen or plugin AJAX call.
+ *
+ * Used to scope heavy admin_init work to plugin pages only (not every wp-admin load).
+ *
+ * @return bool
+ */
+function tsoliin_is_plugin_admin_request() {
+	// phpcs:disable WordPress.Security.NonceVerification.Recommended -- read-only routing; no state change.
+	if ( defined( 'DOING_AJAX' ) && DOING_AJAX && isset( $_REQUEST['action'] ) ) {
+		$action = sanitize_key( wp_unslash( $_REQUEST['action'] ) );
+		if ( 0 === strpos( $action, 'tsoliin_' ) ) {
+			return true;
+		}
+	}
+	if ( isset( $_GET['page'] ) ) {
+		$page = sanitize_key( wp_unslash( $_GET['page'] ) );
+		if ( 0 === strpos( $page, 'tso-link-inspector' ) ) {
+			return true;
+		}
+	}
+	// phpcs:enable WordPress.Security.NonceVerification.Recommended
+	return false;
+}
+
+/**
  * Main plugin class.
  *
  * @since 1.0.0
@@ -384,6 +409,9 @@ final class TSOLIIN_Link_Inspector {
 	 * Drop legacy pc_ tables if another admin hook recreated them this request.
 	 */
 	public function late_cleanup_legacy_pc_tables() {
+		if ( ! tsoliin_is_plugin_admin_request() ) {
+			return;
+		}
 		$this->db->late_cleanup_legacy_pc_tables();
 	}
 
@@ -405,11 +433,14 @@ final class TSOLIIN_Link_Inspector {
 			$this->db->cleanup_attachment_permalink_rows();
 			$this->cron->schedule();
 			update_option( 'tsoliin_version', TSOLIIN_VERSION, false );
-		} else {
-			$this->db->ensure_table_exists();
-			// Re-register cron hooks if they were removed externally (e.g. cache flush, cron plugin).
-			$this->cron->schedule();
+			return;
 		}
+		if ( ! tsoliin_is_plugin_admin_request() ) {
+			return;
+		}
+		$this->db->ensure_table_exists();
+		// Re-register cron hooks if they were removed externally (e.g. cache flush, cron plugin).
+		$this->cron->schedule();
 	}
 
 	/**

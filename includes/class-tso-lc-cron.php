@@ -372,6 +372,36 @@ class TSOLIIN_Cron {
 	}
 
 	/**
+	 * Schedule the next background scan cron step when none is pending.
+	 *
+	 * @param bool $spawn_cron When true, nudge WP-Cron (use only when actively advancing work).
+	 * @return void
+	 */
+	private function schedule_bg_scan_step_if_needed( $spawn_cron = false ) {
+		if ( ! wp_next_scheduled( self::HOOK_BG_SCAN_STEP ) ) {
+			wp_schedule_single_event( time(), self::HOOK_BG_SCAN_STEP );
+			if ( $spawn_cron ) {
+				spawn_cron();
+			}
+		}
+	}
+
+	/**
+	 * Schedule the next background check cron step when none is pending.
+	 *
+	 * @param bool $spawn_cron When true, nudge WP-Cron (use only when actively advancing work).
+	 * @return void
+	 */
+	private function schedule_bg_check_step_if_needed( $spawn_cron = false ) {
+		if ( ! wp_next_scheduled( self::HOOK_BG_STEP ) ) {
+			wp_schedule_single_event( time(), self::HOOK_BG_STEP );
+			if ( $spawn_cron ) {
+				spawn_cron();
+			}
+		}
+	}
+
+	/**
 	 * Current background scan progress.
 	 *
 	 * @return array{ running: bool, scanned: int, total: int, pct: int, complete: bool, resumable: bool, error: string, done: bool }
@@ -393,10 +423,7 @@ class TSOLIIN_Cron {
 			if ( $work_remaining ) {
 				// Work remains — keep the run alive and reschedule (do not mark stopped).
 				update_option( 'tsoliin_bg_scan_started', current_time( 'mysql', true ), false );
-				if ( ! wp_next_scheduled( self::HOOK_BG_SCAN_STEP ) ) {
-					wp_schedule_single_event( time(), self::HOOK_BG_SCAN_STEP );
-					spawn_cron();
-				}
+				$this->schedule_bg_scan_step_if_needed( false );
 			} else {
 				$running = false;
 				update_option( 'tsoliin_bg_scan_running', 0, false );
@@ -707,10 +734,7 @@ class TSOLIIN_Cron {
 				if ( $stale_pending > 0 ) {
 					// Work remains — keep the run alive and reschedule (do not mark stopped).
 					update_option( 'tsoliin_bg_check_started', current_time( 'mysql', true ), false );
-					if ( ! wp_next_scheduled( self::HOOK_BG_STEP ) ) {
-						wp_schedule_single_event( time(), self::HOOK_BG_STEP );
-						spawn_cron();
-					}
+					$this->schedule_bg_check_step_if_needed( false );
 				} else {
 					$running = false;
 					$this->flush_immediate_broken_queue();
