@@ -1089,7 +1089,7 @@ class TSOLIIN_Admin {
 
 		if ( $this->http->is_site_gated_cached() ) {
 			echo '<div class="notice notice-warning"><p>';
-			echo esc_html__( 'This site appears to be behind a coming-soon or maintenance page. Internal HTML links are not marked OK or broken (status: Unverifiable) until the site is publicly reachable. External URLs and media files are still checked.', 'tso-link-inspector' );
+			echo esc_html__( 'This site appears to be behind a coming-soon or maintenance page. Internal HTML links are not marked OK or broken (status: Unverifiable) until the site is publicly reachable. External URLs and media files are still checked. Scan now still finds links in post content and ACF fields; only HTTP status checks for same-site HTML pages are skipped.', 'tso-link-inspector' );
 			echo '</p></div>';
 		}
 	}
@@ -1396,7 +1396,7 @@ class TSOLIIN_Admin {
 		echo '<dd>' . esc_html__( 'Links in headers, footers, and popups are stored in builder post types (for example Elementor Library or Porto Builder). Enable those types under Settings → Content types, then run Scan now. They are never turned on automatically.', 'tso-link-inspector' ) . '</dd>';
 
 		echo '<dt>' . esc_html__( 'Coming soon / maintenance', 'tso-link-inspector' ) . '</dt>';
-		echo '<dd>' . esc_html__( 'If a coming-soon plugin serves the same HTML for every internal page, HTTP checks cannot tell working pages from missing ones. Internal HTML URLs are marked Unverifiable (coming soon / maintenance) until the site is live. External links and uploaded files are still tested.', 'tso-link-inspector' ) . '</dd>';
+		echo '<dd>' . esc_html__( 'If a coming-soon plugin serves the same HTML for every internal page, HTTP checks cannot tell working pages from missing ones. Internal HTML URLs are marked Unverifiable (coming soon / maintenance) until the site is live. External links and uploaded files are still tested. Scan now still extracts links from posts and ACF fields behind the gate; removing the coming-soon page is only required if you need OK/Broken status on internal HTML URLs.', 'tso-link-inspector' ) . '</dd>';
 
 		echo '<dt>' . esc_html__( 'Broken links email notifications', 'tso-link-inspector' ) . '</dt>';
 		echo '<dd>' . esc_html__( 'Choose immediate alerts, confirmed alerts (two consecutive failed checks), or periodic summaries every 7, 15, or 30 days. Only hard-broken links (no redirect destination) are included. Summary emails are skipped when there are none.', 'tso-link-inspector' ) . '</dd>';
