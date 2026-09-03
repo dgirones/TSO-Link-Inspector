@@ -36,7 +36,7 @@ define( 'TSOLIIN_BATCH_SIZE',  10 );
  */
 function tsoliin_is_plugin_admin_request() {
 	// phpcs:disable WordPress.Security.NonceVerification.Recommended -- read-only routing; no state change.
-	if ( defined( 'DOING_AJAX' ) && DOING_AJAX && isset( $_REQUEST['action'] ) ) {
+	if ( isset( $_REQUEST['action'] ) ) {
 		$action = sanitize_key( wp_unslash( $_REQUEST['action'] ) );
 		if ( 0 === strpos( $action, 'tsoliin_' ) ) {
 			return true;
@@ -410,6 +410,8 @@ final class TSOLIIN_Link_Inspector {
 	 */
 	public function late_cleanup_legacy_pc_tables() {
 		if ( ! tsoliin_is_plugin_admin_request() ) {
+			// Cron self-healing is lightweight and must not depend on opening the plugin screen.
+			$this->cron->schedule();
 			return;
 		}
 		$this->db->late_cleanup_legacy_pc_tables();

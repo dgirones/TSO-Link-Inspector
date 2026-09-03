@@ -236,10 +236,10 @@
 			var checkRunning = parseInt( tsoliinData.bgRunning, 10 ) === 1;
 
 			if ( scanRunning ) {
-				// Monitor background progress only; inline batches run after the user clicks Scan/Continue.
+				// Monitor only until the user explicitly clicks Continue scan here.
 				this.scanning = true;
 				this.$progress.show();
-				this.$startBtn.prop( 'disabled', true );
+				this.$startBtn.prop( 'disabled', false );
 				this.$stopScanBtn.show();
 				if ( this.$restartScanBtn && this.$restartScanBtn.length ) {
 					this.$restartScanBtn.hide();
@@ -260,7 +260,7 @@
 
 			if ( checkRunning ) {
 				this.$checkProg.show();
-				this.$checkBtn.prop( 'disabled', true );
+				this.$checkBtn.prop( 'disabled', false );
 				this.$restartBtn.hide();
 				this.$startBtn.prop( 'disabled', scanRunning );
 				this.$stopBtn.show();
@@ -502,6 +502,12 @@
 			);
 
 			this.$startBtn.on( 'click', function () {
+				if ( self.scanning && parseInt( tsoliinData.scanRunning, 10 ) === 1 ) {
+					self.scanSessionActive = true;
+					self.$startBtn.prop( 'disabled', true );
+					self.startPolling();
+					return;
+				}
 				if ( self.scanning ) { return; }
 				if ( parseInt( tsoliinData.bgRunning, 10 ) === 1 && ! window.confirm( tsoliinData.i18n.confirmScanWhileCheck ) ) {
 					return;
@@ -870,7 +876,8 @@
 			}
 			if ( scan.running ) {
 				this.scanning = true;
-				this.$startBtn.prop( 'disabled', true );
+				// Keep the explicit "Continue scan here" action available until selected.
+				this.$startBtn.prop( 'disabled', this.scanSessionActive );
 				this.$stopScanBtn.show();
 				if ( this.$restartScanBtn && this.$restartScanBtn.length ) {
 					this.$restartScanBtn.hide();
@@ -942,6 +949,13 @@
 			var postId = parseInt( tsoliinData.viewPostId, 10 ) || 0;
 			var pending = parseInt( tsoliinData.pendingCheck, 10 ) || 0;
 			var willResume = ( typeof resume === 'undefined' ) ? ( pending > 0 ) : !! resume;
+
+			if ( parseInt( tsoliinData.bgRunning, 10 ) === 1 ) {
+				this.checkSessionActive = true;
+				this.$checkBtn.prop( 'disabled', true );
+				this.startPolling();
+				return;
+			}
 
 			// Resume ("Continue check") starts immediately — the button label already states intent.
 			// Only ask before a full site-wide recheck from zero.

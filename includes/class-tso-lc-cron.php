@@ -374,30 +374,22 @@ class TSOLIIN_Cron {
 	/**
 	 * Schedule the next background scan cron step when none is pending.
 	 *
-	 * @param bool $spawn_cron When true, nudge WP-Cron (use only when actively advancing work).
 	 * @return void
 	 */
-	private function schedule_bg_scan_step_if_needed( $spawn_cron = false ) {
+	private function schedule_bg_scan_step_if_needed() {
 		if ( ! wp_next_scheduled( self::HOOK_BG_SCAN_STEP ) ) {
 			wp_schedule_single_event( time(), self::HOOK_BG_SCAN_STEP );
-			if ( $spawn_cron ) {
-				spawn_cron();
-			}
 		}
 	}
 
 	/**
 	 * Schedule the next background check cron step when none is pending.
 	 *
-	 * @param bool $spawn_cron When true, nudge WP-Cron (use only when actively advancing work).
 	 * @return void
 	 */
-	private function schedule_bg_check_step_if_needed( $spawn_cron = false ) {
+	private function schedule_bg_check_step_if_needed() {
 		if ( ! wp_next_scheduled( self::HOOK_BG_STEP ) ) {
 			wp_schedule_single_event( time(), self::HOOK_BG_STEP );
-			if ( $spawn_cron ) {
-				spawn_cron();
-			}
 		}
 	}
 
@@ -421,9 +413,8 @@ class TSOLIIN_Cron {
 		if ( $running && '' !== $started && ( time() - (int) strtotime( $started ) ) > 1800 ) {
 			$work_remaining = $scanned > 0 && $scanned < $total;
 			if ( $work_remaining ) {
-				// Work remains — keep the run alive and reschedule (do not mark stopped).
-				update_option( 'tsoliin_bg_scan_started', current_time( 'mysql', true ), false );
-				$this->schedule_bg_scan_step_if_needed( false );
+				// Work remains — reschedule without faking a successful batch heartbeat.
+				$this->schedule_bg_scan_step_if_needed();
 			} else {
 				$running = false;
 				update_option( 'tsoliin_bg_scan_running', 0, false );
@@ -732,9 +723,8 @@ class TSOLIIN_Cron {
 				TSOLIIN_DB::clear_stats_cache();
 				$stale_pending = $this->db->get_pending_check_count( $post_id );
 				if ( $stale_pending > 0 ) {
-					// Work remains — keep the run alive and reschedule (do not mark stopped).
-					update_option( 'tsoliin_bg_check_started', current_time( 'mysql', true ), false );
-					$this->schedule_bg_check_step_if_needed( false );
+					// Work remains — reschedule without faking a successful batch heartbeat.
+					$this->schedule_bg_check_step_if_needed();
 				} else {
 					$running = false;
 					$this->flush_immediate_broken_queue();

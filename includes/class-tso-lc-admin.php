@@ -542,18 +542,19 @@ class TSOLIIN_Admin {
 
 		// Toolbar.
 		$pending_check      = (int) $this->db->get_pending_check_count( absint( $view_post_id ) );
-		$btn_check_disabled = ( $bg['running'] || $bg_scan['running'] ) ? ' disabled' : '';
+		$btn_check_disabled = ( $bg_scan['running'] && ! $bg['running'] ) ? ' disabled' : '';
+		$btn_scan_disabled  = ( $bg['running'] && ! $bg_scan['running'] ) ? ' disabled' : '';
 		$show_restart       = ( ! $bg['running'] && $pending_check > 0 );
 		$show_scan_restart  = ( ! $bg_scan['running'] && ! empty( $bg_scan['resumable'] ) );
 		if ( $bg_scan['running'] ) {
-			$btn_scan_label = __( 'Scanning...', 'tso-link-inspector' );
+			$btn_scan_label = __( 'Continue scan here', 'tso-link-inspector' );
 		} elseif ( ! empty( $bg_scan['resumable'] ) ) {
 			$btn_scan_label = __( 'Continue scan', 'tso-link-inspector' );
 		} else {
 			$btn_scan_label = __( 'Scan now', 'tso-link-inspector' );
 		}
 		if ( $bg['running'] ) {
-			$btn_check_label = __( 'Checking...', 'tso-link-inspector' );
+			$btn_check_label = __( 'Continue check here', 'tso-link-inspector' );
 		} elseif ( $pending_check > 0 ) {
 			$btn_check_label = $view_post_id
 				? __( 'Continue this post', 'tso-link-inspector' )
@@ -583,7 +584,7 @@ class TSOLIIN_Admin {
 
 		echo '<div class="tsoliin-toolbar">';
 		echo '<div class="tsoliin-toolbar__primary">';
-		echo '<button type="button" id="tsoliin-start-scan" class="button button-primary" title="' . esc_attr( $scan_btn_title ) . '"' . ( $bg_scan['running'] ? ' disabled' : '' ) . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+		echo '<button type="button" id="tsoliin-start-scan" class="button button-primary" title="' . esc_attr( $scan_btn_title ) . '"' . $btn_scan_disabled . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		echo '<span class="dashicons dashicons-search"></span> ';
 		echo esc_html( $btn_scan_label );
 		echo '</button>';
@@ -3962,12 +3963,14 @@ class TSOLIIN_Admin {
 		$lines = array();
 
 		if ( defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON ) {
-			$lines[] = 'WARN ' . __( 'DISABLE_WP_CRON is true — schedule a system cron to call wp-cron.php or use Continue scan / Continue check while this page stays open.', 'tso-link-inspector' );
+			$lines[] = 'WARN ' . __( 'DISABLE_WP_CRON is true — schedule a system cron to call wp-cron.php, or click Continue scan/check here to enable the page fallback.', 'tso-link-inspector' );
 		}
 
 		$settings = get_option( 'tsoliin_settings', array() );
-		$acf_on   = ! empty( $settings['scan_meta'] ) && class_exists( 'TSOLIIN_Acf', false ) && TSOLIIN_Acf::is_plugin_active();
-		$lines[] = ( $acf_on ? 'OK' : '—' ) . ' ' . __( 'ACF/custom fields scan:', 'tso-link-inspector' ) . ' ' . ( $acf_on ? __( 'enabled', 'tso-link-inspector' ) : __( 'disabled', 'tso-link-inspector' ) );
+		$meta_on  = ! empty( $settings['scan_meta'] );
+		$acf_on   = class_exists( 'TSOLIIN_Acf', false ) && TSOLIIN_Acf::is_plugin_active();
+		$lines[] = ( $meta_on ? 'OK' : 'INFO' ) . ' ' . __( 'Custom fields scan:', 'tso-link-inspector' ) . ' ' . ( $meta_on ? __( 'enabled', 'tso-link-inspector' ) : __( 'disabled', 'tso-link-inspector' ) );
+		$lines[] = ( $acf_on ? 'OK' : 'INFO' ) . ' ' . __( 'ACF plugin:', 'tso-link-inspector' ) . ' ' . ( $acf_on ? __( 'active', 'tso-link-inspector' ) : __( 'not active', 'tso-link-inspector' ) );
 
 		if ( $this->http->is_site_gated_cached() ) {
 			$lines[] = 'WARN ' . __( 'Coming-soon gate active — internal HTML links are Unverifiable; Scan now and ACF extraction still work from the database.', 'tso-link-inspector' );
@@ -4065,7 +4068,7 @@ class TSOLIIN_Admin {
 				$total,
 				$pct
 			);
-		} elseif ( $pending > 0 && $pct > 0 && $pct < 100 ) {
+		} elseif ( $pending > 0 && $pct < 100 ) {
 			$lines[] = sprintf(
 				'WARN %s %d/%d (%d%%), %d %s — %s',
 				__( 'Background check paused at', 'tso-link-inspector' ),
@@ -4102,7 +4105,14 @@ class TSOLIIN_Admin {
 	private function format_diagnostic_cron_lines( $job_label, $hook, $started_option, $job_running ) {
 		$lines = array();
 		$next  = wp_next_scheduled( $hook );
-		if ( $next ) {
+		if ( $next && $next < time() - 15 ) {
+			$lines[] = 'WARN ' . sprintf(
+				/* translators: 1: scan or check, 2: local datetime */
+				__( 'Background %1$s cron is overdue since %2$s — click Continue scan/check here or inspect WP-Cron.', 'tso-link-inspector' ),
+				$job_label,
+				wp_date( 'Y-m-d H:i:s', $next )
+			);
+		} elseif ( $next ) {
 			$lines[] = 'OK ' . sprintf(
 				/* translators: 1: scan or check, 2: local datetime */
 				__( 'Next background %1$s cron: %2$s', 'tso-link-inspector' ),
@@ -4112,7 +4122,7 @@ class TSOLIIN_Admin {
 		} elseif ( $job_running ) {
 			$lines[] = 'WARN ' . sprintf(
 				/* translators: %s: scan or check */
-				__( 'Background %s is marked running but no WP-Cron step is scheduled — click Continue or keep this admin page open.', 'tso-link-inspector' ),
+				__( 'Background %s is marked running but no WP-Cron step is scheduled — click Continue scan/check here to enable the page fallback.', 'tso-link-inspector' ),
 				$job_label
 			);
 		}

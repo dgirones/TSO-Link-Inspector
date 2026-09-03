@@ -44,6 +44,8 @@ class TSOLIIN_Dashboard {
 	 * Render widget body.
 	 */
 	public function render_widget() {
+		// The widget can load before any Link Inspector screen has repaired a missing table.
+		$this->db->ensure_table_exists();
 		$stats     = $this->db->get_stats();
 		$last_scan = (string) get_option( 'tsoliin_last_full_scan', '' );
 		$base      = admin_url( 'tools.php?page=tso-link-inspector' );
