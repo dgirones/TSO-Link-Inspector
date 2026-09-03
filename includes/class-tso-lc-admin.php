@@ -609,7 +609,7 @@ class TSOLIIN_Admin {
 		echo '</button>';
 		echo '</div>';
 		echo '<div class="tsoliin-toolbar__secondary">';
-		echo '<button type="button" id="tsoliin-diagnose" class="button button-secondary" aria-expanded="false" aria-controls="tsoliin-diagnose-panel" title="' . esc_attr__( 'Quick health check when scan or check fails: database, settings, and one sample post.', 'tso-link-inspector' ) . '">';
+		echo '<button type="button" id="tsoliin-diagnose" class="button button-secondary" aria-expanded="false" aria-controls="tsoliin-diagnose-panel" title="' . esc_attr__( 'Health check: database, sample scan, background scan/check status, WP-Cron, and coming-soon gate.', 'tso-link-inspector' ) . '">';
 		echo '<span class="dashicons dashicons-info"></span> ';
 		echo esc_html__( 'Diagnostics', 'tso-link-inspector' );
 		echo '</button>';
@@ -3918,6 +3918,15 @@ class TSOLIIN_Admin {
 
 	public function ajax_diagnose() {
 		$this->check_nonce_and_cap();
+		wp_send_json_success( array( 'lines' => $this->get_diagnostic_lines() ) );
+	}
+
+	/**
+	 * Build diagnostics output lines (DB, sample scan, background jobs, cron).
+	 *
+	 * @return string[]
+	 */
+	private function get_diagnostic_lines() {
 		$info  = array();
 		$test  = $this->db->self_test();
 		$info[] = ( $test['table_exists'] ? 'OK' : 'ERR' ) . ' ' . __( 'DB table:', 'tso-link-inspector' ) . ' ' . $this->db->get_table();
@@ -3938,6 +3947,191 @@ class TSOLIIN_Admin {
 		}
 		$stats  = $this->db->get_stats();
 		$info[] = 'OK ' . __( 'DB records:', 'tso-link-inspector' ) . ' ' . $stats['total'];
-		wp_send_json_success( array( 'lines' => $info ) );
+
+		$info = array_merge( $info, $this->get_diagnostic_background_lines() );
+
+		return $info;
+	}
+
+	/**
+	 * Diagnostics for background scan/check, WP-Cron, and site gate.
+	 *
+	 * @return string[]
+	 */
+	private function get_diagnostic_background_lines() {
+		$lines = array();
+
+		if ( defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON ) {
+			$lines[] = 'WARN ' . __( 'DISABLE_WP_CRON is true — schedule a system cron to call wp-cron.php or use Continue scan / Continue check while this page stays open.', 'tso-link-inspector' );
+		}
+
+		$settings = get_option( 'tsoliin_settings', array() );
+		$acf_on   = ! empty( $settings['scan_meta'] ) && class_exists( 'TSOLIIN_Acf', false ) && TSOLIIN_Acf::is_plugin_active();
+		$lines[] = ( $acf_on ? 'OK' : '—' ) . ' ' . __( 'ACF/custom fields scan:', 'tso-link-inspector' ) . ' ' . ( $acf_on ? __( 'enabled', 'tso-link-inspector' ) : __( 'disabled', 'tso-link-inspector' ) );
+
+		if ( $this->http->is_site_gated_cached() ) {
+			$lines[] = 'WARN ' . __( 'Coming-soon gate active — internal HTML links are Unverifiable; Scan now and ACF extraction still work from the database.', 'tso-link-inspector' );
+		}
+
+		$scan = $this->cron->get_bg_scan_progress();
+		$lines = array_merge( $lines, $this->format_diagnostic_scan_lines( $scan ) );
+
+		$check = $this->cron->get_bg_progress();
+		$lines = array_merge( $lines, $this->format_diagnostic_check_lines( $check ) );
+
+		$last_scan = (string) get_option( 'tsoliin_last_full_scan', '' );
+		if ( '' !== $last_scan ) {
+			$lines[] = 'OK ' . __( 'Last full scan:', 'tso-link-inspector' ) . ' ' . $last_scan;
+		}
+		$last_check = (string) get_option( 'tsoliin_last_check_batch', '' );
+		if ( '' !== $last_check ) {
+			$lines[] = 'OK ' . __( 'Last check batch:', 'tso-link-inspector' ) . ' ' . $last_check;
+		}
+
+		return $lines;
+	}
+
+	/**
+	 * @param array{ running: bool, scanned: int, total: int, pct: int, complete: bool, resumable: bool, error: string, done: bool } $scan Scan progress.
+	 * @return string[]
+	 */
+	private function format_diagnostic_scan_lines( array $scan ) {
+		$lines   = array();
+		$scanned = (int) $scan['scanned'];
+		$total   = (int) $scan['total'];
+		$pct     = (int) $scan['pct'];
+		$error   = isset( $scan['error'] ) ? trim( (string) $scan['error'] ) : '';
+
+		if ( ! empty( $scan['running'] ) ) {
+			$lines[] = sprintf(
+				'OK %s %d/%d (%d%%)',
+				__( 'Background scan:', 'tso-link-inspector' ),
+				$scanned,
+				$total,
+				$pct
+			);
+		} elseif ( '' !== $error ) {
+			$lines[] = 'ERR ' . __( 'Background scan stopped:', 'tso-link-inspector' ) . ' ' . $error;
+			if ( $scanned > 0 && $scanned < $total ) {
+				$lines[] = sprintf(
+					'WARN %s %d/%d (%d%%)',
+					__( 'Scan progress saved at', 'tso-link-inspector' ),
+					$scanned,
+					$total,
+					$pct
+				);
+			}
+		} elseif ( ! empty( $scan['resumable'] ) ) {
+			$lines[] = sprintf(
+				'WARN %s %d/%d (%d%%) — %s',
+				__( 'Background scan paused at', 'tso-link-inspector' ),
+				$scanned,
+				$total,
+				$pct,
+				__( 'click Continue scan', 'tso-link-inspector' )
+			);
+		} elseif ( ! empty( $scan['done'] ) ) {
+			$lines[] = 'OK ' . __( 'Background scan: completed', 'tso-link-inspector' );
+		} else {
+			$lines[] = 'OK ' . __( 'Background scan: idle', 'tso-link-inspector' );
+		}
+
+		$lines = array_merge( $lines, $this->format_diagnostic_cron_lines(
+			__( 'scan', 'tso-link-inspector' ),
+			TSOLIIN_Cron::HOOK_BG_SCAN_STEP,
+			'tsoliin_bg_scan_started',
+			! empty( $scan['running'] )
+		) );
+
+		return $lines;
+	}
+
+	/**
+	 * @param array{ running: bool, checked: int, total: int, pct: int, post_id: int, pending: int } $check Check progress.
+	 * @return string[]
+	 */
+	private function format_diagnostic_check_lines( array $check ) {
+		$lines   = array();
+		$checked = (int) $check['checked'];
+		$total   = (int) $check['total'];
+		$pct     = (int) $check['pct'];
+		$pending = (int) $check['pending'];
+
+		if ( ! empty( $check['running'] ) ) {
+			$lines[] = sprintf(
+				'OK %s %d/%d (%d%%)',
+				__( 'Background check:', 'tso-link-inspector' ),
+				$checked,
+				$total,
+				$pct
+			);
+		} elseif ( $pending > 0 && $pct > 0 && $pct < 100 ) {
+			$lines[] = sprintf(
+				'WARN %s %d/%d (%d%%), %d %s — %s',
+				__( 'Background check paused at', 'tso-link-inspector' ),
+				$checked,
+				$total,
+				$pct,
+				$pending,
+				__( 'pending', 'tso-link-inspector' ),
+				__( 'click Continue check', 'tso-link-inspector' )
+			);
+		} elseif ( $total > 0 && $pending <= 0 && ! empty( $check['running'] ) === false ) {
+			$lines[] = 'OK ' . __( 'Background check: completed', 'tso-link-inspector' );
+		} else {
+			$lines[] = 'OK ' . __( 'Background check: idle', 'tso-link-inspector' ) . ( $pending > 0 ? ' (' . $pending . ' ' . __( 'unchecked', 'tso-link-inspector' ) . ')' : '' );
+		}
+
+		$lines = array_merge( $lines, $this->format_diagnostic_cron_lines(
+			__( 'check', 'tso-link-inspector' ),
+			TSOLIIN_Cron::HOOK_BG_STEP,
+			'tsoliin_bg_check_started',
+			! empty( $check['running'] )
+		) );
+
+		return $lines;
+	}
+
+	/**
+	 * @param string $job_label Short label (scan / check).
+	 * @param string $hook      WP-Cron hook name.
+	 * @param string $started_option Option key for last heartbeat timestamp.
+	 * @param bool   $job_running Whether the job flag is set.
+	 * @return string[]
+	 */
+	private function format_diagnostic_cron_lines( $job_label, $hook, $started_option, $job_running ) {
+		$lines = array();
+		$next  = wp_next_scheduled( $hook );
+		if ( $next ) {
+			$lines[] = 'OK ' . sprintf(
+				/* translators: 1: scan or check, 2: local datetime */
+				__( 'Next background %1$s cron: %2$s', 'tso-link-inspector' ),
+				$job_label,
+				wp_date( 'Y-m-d H:i:s', $next )
+			);
+		} elseif ( $job_running ) {
+			$lines[] = 'WARN ' . sprintf(
+				/* translators: %s: scan or check */
+				__( 'Background %s is marked running but no WP-Cron step is scheduled — click Continue or keep this admin page open.', 'tso-link-inspector' ),
+				$job_label
+			);
+		}
+
+		if ( $job_running ) {
+			$started = (string) get_option( $started_option, '' );
+			if ( '' !== $started ) {
+				$age = time() - (int) strtotime( $started );
+				if ( $age > 300 ) {
+					$lines[] = 'WARN ' . sprintf(
+						/* translators: 1: scan or check, 2: minutes since last batch */
+						__( 'Background %1$s heartbeat: %2$d min since last batch (may look stuck if WP-Cron is delayed).', 'tso-link-inspector' ),
+						$job_label,
+						(int) round( $age / 60 )
+					);
+				}
+			}
+		}
+
+		return $lines;
 	}
 }
