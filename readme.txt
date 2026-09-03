@@ -5,7 +5,7 @@ Tags: broken links, link checker, seo, maintenance, links
 Requires at least: 5.9
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 2.4.2
+Stable tag: 2.4.3
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -127,6 +127,12 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 
 == Changelog ==
 
+= 2.4.3 =
+* Fix: Opening Link Inspector no longer triggers heavy inline scan/check batches on the first progress poll (session fallback only after you click Scan/Continue/Check).
+* Fix: Legacy table cleanup and routine schema checks run on Link Inspector screens only, not on every wp-admin page load.
+* Fix: Reading background scan/check progress no longer calls `spawn_cron()` (fewer loopback requests on page load).
+* Fix: Clearer coming-soon admin notice — site-gate plugin, not WordPress core maintenance mode.
+
 = 2.4.2 =
 * Fix: Leftover `{prefix}pc_tso_link_inspector_history` is renamed or dropped on admin load (Tables Cleaner no longer lists two History tables).
 * Fix: Stop `SHOW TABLES` for leftover `{prefix}pc_tso_link_inspector(_history)` on every admin load once they are gone.
@@ -165,6 +171,9 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 See changelog.txt in the plugin folder for older versions
 
 == Upgrade Notice ==
+
+= 2.4.3 =
+Recommended. Lighter Link Inspector admin load on staging sites; scan/check poll fallback only when you explicitly resume a run.
 
 = 2.4.2 =
 Recommended. Legacy History cleanup, scan progress when WP-Cron is delayed, coming-soon scan/ACF clarity, and fewer redundant `SHOW TABLES`.
