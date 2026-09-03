@@ -132,6 +132,9 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 * Fix: Stop `SHOW TABLES` for leftover `{prefix}pc_tso_link_inspector(_history)` on every admin load once they are gone.
 * Fix: Leftover `{prefix}pc_tso_link_inspector(_history)` is dropped again when it reappears after manual delete (skip flag no longer blocks cleanup).
 * Fix: Late admin pass removes legacy pc_ tables recreated by other plugins/tools on the same request.
+* Fix: Background scan poll fallback runs during an active **Scan now** session (not only during Check now).
+* Fix: Long scans no longer stop after 30 minutes while posts remain unscanned (reschedule like Check now).
+* Fix: Clearer coming-soon notice — Scan now and ACF still work; only internal HTML HTTP status is skipped.
 
 = 2.4.1 =
 * Improvement: **Scan now** runs server-side in the background (close the browser; **Continue scan** / **Restart scan** when paused).
@@ -164,7 +167,7 @@ See changelog.txt in the plugin folder for older versions
 == Upgrade Notice ==
 
 = 2.4.2 =
-Recommended. Legacy History table cleanup, fewer redundant `SHOW TABLES`, and drops recreated `pc_tso_link_inspector` tables even when the cleanup flag was already set.
+Recommended. Legacy History cleanup, scan progress when WP-Cron is delayed, coming-soon scan/ACF clarity, and fewer redundant `SHOW TABLES`.
 
 = 2.4.1 =
 Recommended. Background scan, reliable check progress when WP-Cron is delayed, and fixes for long runs timing out.
