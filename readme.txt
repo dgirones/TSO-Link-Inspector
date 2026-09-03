@@ -134,6 +134,10 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 * Fix: Clearer coming-soon admin notice — site-gate plugin, not WordPress core maintenance mode.
 * Fix: Only one `SHOW TABLES` for leftover `{prefix}pc_tso_link_inspector(_history)` per Link Inspector admin load when the cleanup flag is set (not two).
 * Improvement: Diagnostics panel reports background scan/check progress, pause/stop reasons, WP-Cron schedule, coming-soon gate, and ACF scan status.
+* Fix: Reopened running jobs offer an explicit Continue scan/check here action so WP-Cron fallback resumes without automatic heavy work on page load.
+* Fix: Diagnostics preserves stale heartbeats, warns about overdue cron events, and reports custom fields and ACF separately.
+* Fix: Cron self-healing also runs outside plugin screens; admin-post actions and the Dashboard widget repair missing schema when needed.
+* Improvement: Catalan and Spanish catalogs updated for all current plugin strings.
 
 = 2.4.2 =
 * Fix: Leftover `{prefix}pc_tso_link_inspector_history` is renamed or dropped on admin load (Tables Cleaner no longer lists two History tables).
