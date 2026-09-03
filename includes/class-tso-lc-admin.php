@@ -4076,7 +4076,7 @@ class TSOLIIN_Admin {
 				__( 'pending', 'tso-link-inspector' ),
 				__( 'click Continue check', 'tso-link-inspector' )
 			);
-		} elseif ( $total > 0 && $pending <= 0 && ! empty( $check['running'] ) === false ) {
+		} elseif ( $total > 0 && $pending <= 0 && empty( $check['running'] ) ) {
 			$lines[] = 'OK ' . __( 'Background check: completed', 'tso-link-inspector' );
 		} else {
 			$lines[] = 'OK ' . __( 'Background check: idle', 'tso-link-inspector' ) . ( $pending > 0 ? ' (' . $pending . ' ' . __( 'unchecked', 'tso-link-inspector' ) . ')' : '' );
