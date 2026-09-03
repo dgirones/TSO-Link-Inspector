@@ -241,13 +241,19 @@ class TSOLIIN_DB {
 	 * @return string[]
 	 */
 	private function legacy_pc_table_names() {
+		static $cache = null;
+		if ( null !== $cache ) {
+			return $cache;
+		}
+
 		global $wpdb;
 
 		$pattern = $wpdb->esc_like( $wpdb->prefix . 'pc_tso_link_inspector' ) . '%';
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$found = $wpdb->get_col( $wpdb->prepare( 'SHOW TABLES LIKE %s', $pattern ) );
 		if ( ! is_array( $found ) || empty( $found ) ) {
-			return array();
+			$cache = array();
+			return $cache;
 		}
 
 		$expected = array(
@@ -262,7 +268,8 @@ class TSOLIIN_DB {
 				$names[] = $table_name;
 			}
 		}
-		return $names;
+		$cache = $names;
+		return $cache;
 	}
 
 	/**
@@ -285,6 +292,10 @@ class TSOLIIN_DB {
 		$done[ $phase ] = true;
 
 		if ( '1' === (string) get_option( 'tsoliin_legacy_pc_table_cleared', '' ) ) {
+			// Early pass: trust the flag; late pass re-checks once per request (tables may reappear).
+			if ( 'early' === $phase ) {
+				return;
+			}
 			if ( empty( $this->legacy_pc_table_names() ) ) {
 				return;
 			}

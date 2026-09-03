@@ -132,6 +132,7 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 * Fix: Legacy table cleanup and routine schema checks run on Link Inspector screens only, not on every wp-admin page load.
 * Fix: Reading background scan/check progress no longer calls `spawn_cron()` (fewer loopback requests on page load).
 * Fix: Clearer coming-soon admin notice — site-gate plugin, not WordPress core maintenance mode.
+* Fix: Only one `SHOW TABLES` for leftover `{prefix}pc_tso_link_inspector(_history)` per Link Inspector admin load when the cleanup flag is set (not two).
 
 = 2.4.2 =
 * Fix: Leftover `{prefix}pc_tso_link_inspector_history` is renamed or dropped on admin load (Tables Cleaner no longer lists two History tables).
