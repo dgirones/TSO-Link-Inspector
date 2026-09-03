@@ -1095,7 +1095,8 @@
 					nonce         : tsoliinData.nonce,
 					post_id       : parseInt( tsoliinData.viewPostId, 10 ) || 0,
 					nudge         : sendNudge ? '1' : '0',
-					session_active: ( self.checkSessionActive || self.scanSessionActive ) ? '1' : '0'
+					check_session_active: self.checkSessionActive ? '1' : '0',
+					scan_session_active : self.scanSessionActive ? '1' : '0'
 				},
 				success: function ( r ) {
 					if ( ! r.success ) {

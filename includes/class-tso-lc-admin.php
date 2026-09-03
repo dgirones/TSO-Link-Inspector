@@ -3456,18 +3456,17 @@ class TSOLIIN_Admin {
 		$this->check_nonce_and_cap();
 		$view_post_id = isset( $_POST['post_id'] ) ? absint( $_POST['post_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$nudge        = isset( $_POST['nudge'] ) && '1' === sanitize_text_field( wp_unslash( $_POST['nudge'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
-		$session      = isset( $_POST['session_active'] ) && '1' === sanitize_text_field( wp_unslash( $_POST['session_active'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
-		if ( $nudge && $session && ! get_option( 'tsoliin_bg_check_running' ) && $this->db->get_pending_check_count( $view_post_id ) > 0 ) {
+		$check_session = isset( $_POST['check_session_active'] ) && '1' === sanitize_text_field( wp_unslash( $_POST['check_session_active'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		$scan_session  = isset( $_POST['scan_session_active'] ) && '1' === sanitize_text_field( wp_unslash( $_POST['scan_session_active'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		if ( $nudge && $check_session && ! get_option( 'tsoliin_bg_check_running' ) && $this->db->get_pending_check_count( $view_post_id ) > 0 ) {
 			$this->cron->start_bg_check( true, $view_post_id );
 		}
 		// Only advance heavy bg work while the admin session is actively watching (poll fallback).
-		if ( $session ) {
-			if ( get_option( 'tsoliin_bg_check_running' ) ) {
-				$this->cron->ensure_bg_check_progress();
-			}
-			if ( get_option( 'tsoliin_bg_scan_running' ) ) {
-				$this->cron->ensure_bg_scan_progress();
-			}
+		if ( $check_session && get_option( 'tsoliin_bg_check_running' ) ) {
+			$this->cron->ensure_bg_check_progress();
+		}
+		if ( $scan_session && get_option( 'tsoliin_bg_scan_running' ) ) {
+			$this->cron->ensure_bg_scan_progress();
 		}
 		$bg           = $this->cron->get_bg_progress();
 		$scan         = $this->cron->get_bg_scan_progress();
