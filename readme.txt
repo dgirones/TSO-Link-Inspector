@@ -5,7 +5,7 @@ Tags: broken links, link checker, seo, maintenance, links
 Requires at least: 5.9
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 2.4.6
+Stable tag: 2.4.5
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -127,10 +127,8 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 
 == Changelog ==
 
-= 2.4.6 =
-* Fix: Scan deduplication treats Jetpack/WordPress `?ssl=1` image URLs as the same resource as the file without that query parameter (only one row is stored).
-
 = 2.4.5 =
+* Fix: Scan deduplication treats Jetpack/WordPress `?ssl=1` image URLs as the same resource as the file without that query parameter (only one row is stored).
 * Fix: Daily automatic scan continues from the saved cursor instead of restarting at page 1.
 * Fix: Manual Scan now finishes comments, menus, terms, FSE, widgets, and ACF after posts, then starts a site-wide HTTP check.
 * Fix: Background scan/check workers use a lock, a time budget, and a recovery cron event so a PHP timeout cannot leave a job stuck.
