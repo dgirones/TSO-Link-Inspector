@@ -136,7 +136,8 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 * Fix: Background scan/check workers use a lock, a time budget, and a recovery cron event so a PHP timeout cannot leave a job stuck.
 * Fix: Stop is honored mid-batch; auto-resume uses the stored check scope, not the current list filter.
 * Fix: Opening a post's links, going back, or switching Posts/Products summary tabs no longer reloads the page during a scan or check.
-* Improvement: Discard scan / Discard check / Discard all paused buttons clear paused jobs without deleting found links or saved HTTP results (unlike Restart).
+* Fix: Sorting, filters, scope tabs, and post list navigation no longer freeze the admin UI behind a stuck loading overlay.
+* Fix: Plugin page title (and version badge) stays visible after AJAX navigation to a post's links.
 * Improvement: Admin UI day / night / auto theme (auto follows sunrise and sunset from the site timezone).
 * Fix: Editor deep-link focus no longer runs duplicate `get_link()` queries on the same request.
 

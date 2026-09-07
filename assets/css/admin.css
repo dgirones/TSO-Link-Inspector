@@ -1438,7 +1438,6 @@ a.tsoliin-stat:focus-visible {
 }
 .tsoliin-list-table-region--loading {
 	opacity: 0.55;
-	pointer-events: none;
 	transition: opacity 0.15s ease;
 }
 

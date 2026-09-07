@@ -440,10 +440,16 @@
 				return;
 			}
 			var $icon = $h1.find( '.tsoliin-title-icon' ).first();
-			if ( $icon.length ) {
-				$h1.empty().append( $icon ).append( document.createTextNode( ' ' ) ).append( $( html ) );
-			} else {
-				$h1.html( '<span class="dashicons dashicons-admin-links tsoliin-title-icon"></span> ' + html );
+			if ( ! $icon.length ) {
+				$icon = $( '<span class="dashicons dashicons-admin-links tsoliin-title-icon"></span>' );
+				$h1.prepend( $icon );
+			}
+			// Keep the dashicon; replace only the title fragment (text nodes + version badge / breadcrumbs).
+			$icon.nextAll().remove();
+			$h1.append( document.createTextNode( ' ' ) );
+			var nodes = $.parseHTML( html, document, true );
+			if ( nodes && nodes.length ) {
+				$h1.append( nodes );
 			}
 		},
 
@@ -456,25 +462,30 @@
 			if ( ! data ) {
 				return;
 			}
-			if ( data.page_title_html ) {
-				this.updatePageTitle( data.page_title_html );
-			}
-			if ( data.check_btn_label && this.$checkBtn && this.$checkBtn.length ) {
-				var $icon = this.$checkBtn.find( '.dashicons' ).first();
-				if ( $icon.length ) {
-					this.$checkBtn.empty().append( $icon ).append( document.createTextNode( ' ' + data.check_btn_label ) );
-				} else {
-					this.$checkBtn.text( data.check_btn_label );
+			try {
+				if ( data.page_title_html ) {
+					this.updatePageTitle( data.page_title_html );
 				}
+				if ( data.check_btn_label && this.$checkBtn && this.$checkBtn.length ) {
+					var $icon = this.$checkBtn.find( '.dashicons' ).first();
+					if ( $icon.length ) {
+						this.$checkBtn.empty().append( $icon ).append( document.createTextNode( ' ' + data.check_btn_label ) );
+					} else {
+						this.$checkBtn.text( data.check_btn_label );
+					}
+				}
+				if ( typeof data.view_post_id !== 'undefined' ) {
+					tsoliinData.viewPostId = parseInt( data.view_post_id, 10 ) || 0;
+					this.syncExportScope( data.view_post_id );
+				}
+				if ( data.list_view ) {
+					tsoliinData.listView = data.list_view;
+				}
+				this.refreshStats();
+			} catch ( err ) {
+				// Never leave the UI half-updated if title HTML parsing fails.
+				this.clearListNavLoading();
 			}
-			if ( typeof data.view_post_id !== 'undefined' ) {
-				tsoliinData.viewPostId = parseInt( data.view_post_id, 10 ) || 0;
-				this.syncExportScope( data.view_post_id );
-			}
-			if ( data.list_view ) {
-				tsoliinData.listView = data.list_view;
-			}
-			this.refreshStats();
 		},
 
 		/**
@@ -483,15 +494,25 @@
 		 * @param {Object} params Nav/search params.
 		 * @param {Object} opts   Callback options.
 		 */
+		/**
+		 * Clear list AJAX loading state from every possible target node.
+		 */
+		clearListNavLoading: function () {
+			$( '#tsoliin-scope-region, #tsoliin-list-form, #tsoliin-list-table-region' )
+				.removeClass( 'tsoliin-list-table-region--loading' )
+				.attr( 'aria-busy', 'false' );
+		},
+
 		fetchListRegion: function ( params, opts ) {
 			opts = opts || {};
 			var self = this;
 			var useScope = ( 'scope' === opts.region ) || ! $( '#tsoliin-list-form' ).length;
 			var $scope = $( '#tsoliin-scope-region' );
 			var $form  = $( '#tsoliin-list-form' );
-			var $target = useScope ? $scope : $form;
+			var $list  = $( '#tsoliin-list-table-region' );
+			var $target = useScope ? ( $list.length ? $list : ( $form.length ? $form : $scope ) ) : $form;
 			if ( ! $target.length ) {
-				$target = $( '#tsoliin-list-table-region' );
+				$target = $scope.length ? $scope : $( '#tsoliin-list-table-region' );
 			}
 
 			if ( ! $target.length ) {
@@ -511,6 +532,7 @@
 			self.listNavRequestId = ( self.listNavRequestId || 0 ) + 1;
 			var requestId = self.listNavRequestId;
 
+			self.clearListNavLoading();
 			$target.addClass( 'tsoliin-list-table-region--loading' );
 			$target.attr( 'aria-busy', 'true' );
 
@@ -562,6 +584,9 @@
 					if ( 'abort' === status ) {
 						return;
 					}
+					if ( requestId === self.listNavRequestId ) {
+						self.clearListNavLoading();
+					}
 					if ( opts.fallbackNavigate && params.href ) {
 						window.location.href = params.href;
 					} else {
@@ -569,11 +594,9 @@
 					}
 				},
 				complete: function () {
-					if ( requestId !== self.listNavRequestId ) {
-						return;
+					if ( self.listNavXhr === xhr || ! self.listNavXhr ) {
+						self.clearListNavLoading();
 					}
-					$target.removeClass( 'tsoliin-list-table-region--loading' );
-					$target.attr( 'aria-busy', 'false' );
 					if ( self.listNavXhr === xhr ) {
 						self.listNavXhr = null;
 					}
