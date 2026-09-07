@@ -5,7 +5,7 @@ Tags: broken links, link checker, seo, maintenance, links
 Requires at least: 5.9
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 2.4.5
+Stable tag: 2.4.6
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -126,6 +126,9 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 2. Filter tabs: All, Broken, Redirect, OK, HTTP insecure, Manual locks, Not checked.
 
 == Changelog ==
+
+= 2.4.6 =
+* Fix: Scan deduplication treats Jetpack/WordPress `?ssl=1` image URLs as the same resource as the file without that query parameter (only one row is stored).
 
 = 2.4.5 =
 * Fix: Daily automatic scan continues from the saved cursor instead of restarting at page 1.

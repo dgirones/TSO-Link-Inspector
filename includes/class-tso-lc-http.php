@@ -124,6 +124,55 @@ class TSOLIIN_HTTP {
 	}
 
 	/**
+	 * Remove tracking/noise query parameters that do not change the linked resource.
+	 *
+	 * Example: Jetpack/WordPress image URLs with ?ssl=1 vs the same file without it.
+	 *
+	 * @param string $url Raw URL.
+	 * @return string
+	 */
+	public static function strip_noise_query_params_from_url( $url ) {
+		$url = trim( str_replace( array( "\0", "\r", "\n" ), '', (string) $url ) );
+		if ( '' === $url || false === strpos( $url, '?' ) ) {
+			return $url;
+		}
+
+		$fragment = '';
+		$hash_pos = strpos( $url, '#' );
+		if ( false !== $hash_pos ) {
+			$fragment = substr( $url, $hash_pos );
+			$url      = substr( $url, 0, $hash_pos );
+		}
+
+		$query_pos = strpos( $url, '?' );
+		if ( false === $query_pos ) {
+			return $url . $fragment;
+		}
+
+		$base       = substr( $url, 0, $query_pos );
+		$query_str  = substr( $url, $query_pos + 1 );
+		parse_str( $query_str, $params );
+		if ( ! is_array( $params ) || empty( $params ) ) {
+			return $url . $fragment;
+		}
+
+		$kept = array();
+		foreach ( $params as $key => $value ) {
+			if ( self::is_noise_query_param_key( $key ) ) {
+				continue;
+			}
+			$kept[ $key ] = $value;
+		}
+
+		if ( empty( $kept ) ) {
+			return $base . $fragment;
+		}
+
+		ksort( $kept );
+		return $base . '?' . http_build_query( $kept, '', '&', PHP_QUERY_RFC3986 ) . $fragment;
+	}
+
+	/**
 	 * RFC 3986 characters that can continue a URL after a matched prefix.
 	 *
 	 * Used so `/software-download/` is not treated as `/software-download/windows8`.
@@ -3074,7 +3123,7 @@ class TSOLIIN_HTTP {
 				continue;
 			}
 			$key = strtolower( sanitize_key( (string) $key ) );
-			if ( '' === $key || $this->is_noise_query_param_key( $key ) ) {
+			if ( '' === $key || self::is_noise_query_param_key( $key ) ) {
 				continue;
 			}
 			$value = trim( (string) $value );
@@ -3558,7 +3607,7 @@ class TSOLIIN_HTTP {
 			if ( is_array( $val ) ) {
 				return false;
 			}
-			if ( ! $this->is_noise_query_param_key( $key ) ) {
+			if ( ! self::is_noise_query_param_key( $key ) ) {
 				return false;
 			}
 		}
@@ -3572,7 +3621,7 @@ class TSOLIIN_HTTP {
 	 * @param string $key Parameter name.
 	 * @return bool
 	 */
-	private function is_noise_query_param_key( $key ) {
+	public static function is_noise_query_param_key( $key ) {
 		$k = strtolower( (string) $key );
 		$k = preg_replace( '/\[[^\]]*\]$/', '', $k );
 
@@ -3581,6 +3630,7 @@ class TSOLIIN_HTTP {
 		}
 
 		$noise = array(
+			'ssl',
 			'ucbcb',
 			'cbrd',
 			'gclid',

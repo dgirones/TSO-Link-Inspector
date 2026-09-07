@@ -1129,9 +1129,7 @@ class TSOLIIN_Scanner {
 				if ( '' !== $new_anchor && '' === $old_anchor ) {
 					$out[ $idx ]['anchor'] = $item['anchor'];
 				}
-				if ( strlen( (string) $item['url'] ) > strlen( (string) $out[ $idx ]['url'] ) ) {
-					$out[ $idx ]['url'] = $item['url'];
-				}
+				$out[ $idx ]['url'] = $this->prefer_scan_url( $out[ $idx ]['url'], $item['url'] );
 				if ( ! empty( $item['source_key'] ) && empty( $out[ $idx ]['source_key'] ) ) {
 					$out[ $idx ]['source_key'] = $item['source_key'];
 				}
@@ -1141,7 +1139,8 @@ class TSOLIIN_Scanner {
 				continue;
 			}
 			$seen[ $key ] = count( $out );
-			$out[]        = $item;
+			$item['url']    = $this->prefer_stored_scan_url( $item['url'] );
+			$out[]          = $item;
 		}
 		return $out;
 	}
@@ -1447,8 +1446,61 @@ class TSOLIIN_Scanner {
 			return 'play.google.com:' . $play_id;
 		}
 		$abs = self::resolve_to_absolute_url( $url, $post_id );
-		$key = strtolower( rtrim( $abs ? $abs : $url, '/' ) );
+		$abs = $abs ? $abs : $url;
+		if ( class_exists( 'TSOLIIN_HTTP' ) ) {
+			$abs = TSOLIIN_HTTP::strip_noise_query_params_from_url( $abs );
+		}
+		$key = strtolower( rtrim( $abs, '/' ) );
 		return $key;
+	}
+
+	/**
+	 * Pick the URL spelling to store when two scan hits are the same resource.
+	 *
+	 * Prefers the form without noise-only query params (e.g. Jetpack ?ssl=1).
+	 *
+	 * @param string $existing Existing URL.
+	 * @param string $incoming Incoming URL.
+	 * @return string
+	 */
+	private function prefer_scan_url( $existing, $incoming ) {
+		$existing = $this->clean_url( (string) $existing );
+		$incoming = $this->clean_url( (string) $incoming );
+		if ( '' === $incoming ) {
+			return $existing;
+		}
+		if ( '' === $existing ) {
+			return $incoming;
+		}
+		if ( class_exists( 'TSOLIIN_HTTP' ) ) {
+			$canon_existing = TSOLIIN_HTTP::strip_noise_query_params_from_url( $existing );
+			$canon_incoming = TSOLIIN_HTTP::strip_noise_query_params_from_url( $incoming );
+			if ( 0 === strcasecmp( $canon_existing, $canon_incoming ) ) {
+				if ( 0 === strcasecmp( $existing, $canon_existing ) ) {
+					return $existing;
+				}
+				if ( 0 === strcasecmp( $incoming, $canon_incoming ) ) {
+					return $incoming;
+				}
+				return strlen( $existing ) <= strlen( $incoming ) ? $existing : $incoming;
+			}
+		}
+		return strlen( $existing ) <= strlen( $incoming ) ? $existing : $incoming;
+	}
+
+	/**
+	 * Canonicalize a scanned URL for storage when only noise query params differ.
+	 *
+	 * @param string $url Raw URL.
+	 * @return string
+	 */
+	private function prefer_stored_scan_url( $url ) {
+		$url = $this->clean_url( (string) $url );
+		if ( '' === $url || ! class_exists( 'TSOLIIN_HTTP' ) ) {
+			return $url;
+		}
+		$stripped = TSOLIIN_HTTP::strip_noise_query_params_from_url( $url );
+		return $this->prefer_scan_url( $url, $stripped );
 	}
 
 	/**
@@ -1495,9 +1547,13 @@ class TSOLIIN_Scanner {
 				if ( ! empty( $item['source_key'] ) && empty( $items[ $idx ]['source_key'] ) ) {
 					$items[ $idx ]['source_key'] = (string) $item['source_key'];
 				}
+				if ( isset( $items[ $idx ]['url'] ) ) {
+					$items[ $idx ]['url'] = $this->prefer_scan_url( $items[ $idx ]['url'], $item['url'] );
+				}
 			}
 			return;
 		}
+		$item['url'] = $this->prefer_stored_scan_url( $url );
 		$seen[ $key ] = count( $items );
 		$items[]      = $item;
 	}
@@ -2393,6 +2449,7 @@ class TSOLIIN_Scanner {
 		if ( empty( $existing ) ) {
 			return;
 		}
+		$keepers = array();
 		foreach ( $existing as $row ) {
 			$type = isset( $row->link_type ) ? (string) $row->link_type : 'link';
 			if ( ! in_array( $type, array( 'link', 'image', 'iframe', 'plain' ), true ) ) {
@@ -2407,11 +2464,48 @@ class TSOLIIN_Scanner {
 				continue;
 			}
 			$key = $this->scan_url_key( (string) $row->link_url, $post_id );
-			if ( isset( $active[ $key ] ) ) {
+			if ( ! isset( $active[ $key ] ) ) {
+				$this->db->delete_link( (int) $row->id );
 				continue;
+			}
+			if ( ! isset( $keepers[ $key ] ) ) {
+				$keepers[ $key ] = $row;
+				continue;
+			}
+			$keeper    = $keepers[ $key ];
+			$preferred = $this->prefer_scan_url( (string) $keeper->link_url, (string) $row->link_url );
+			if ( $preferred !== (string) $keeper->link_url ) {
+				$this->normalize_stored_link_url( (int) $keeper->id, $preferred );
+				$keeper->link_url = $preferred;
+				$keepers[ $key ]  = $keeper;
 			}
 			$this->db->delete_link( (int) $row->id );
 		}
+	}
+
+	/**
+	 * Update a stored link URL without resetting HTTP check state.
+	 *
+	 * @param int    $link_id Link row ID.
+	 * @param string $url     Canonical URL.
+	 */
+	private function normalize_stored_link_url( $link_id, $url ) {
+		global $wpdb;
+		$link_id = absint( $link_id );
+		$url     = trim( str_replace( array( "\0", "\r", "\n" ), '', (string) $url ) );
+		if ( $link_id <= 0 || '' === $url ) {
+			return;
+		}
+		$table = $this->db->get_table();
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+		$wpdb->update(
+			$table,
+			array( 'link_url' => $url ),
+			array( 'id' => $link_id ),
+			array( '%s' ),
+			array( '%d' )
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 	}
 
 	// -------------------------------------------------------------------------
@@ -5105,9 +5199,15 @@ class TSOLIIN_Scanner {
 			'' !== $a_abs
 			&& '' !== $b_abs
 			&& class_exists( 'TSOLIIN_HTTP' )
-			&& TSOLIIN_HTTP::is_http_same_resource_bar_www( $a_abs, $b_abs )
 		) {
-			return true;
+			if ( TSOLIIN_HTTP::is_http_same_resource_bar_www( $a_abs, $b_abs ) ) {
+				return true;
+			}
+			$a_strip = TSOLIIN_HTTP::strip_noise_query_params_from_url( $a_abs );
+			$b_strip = TSOLIIN_HTTP::strip_noise_query_params_from_url( $b_abs );
+			if ( TSOLIIN_HTTP::is_http_same_resource_bar_www( $a_strip, $b_strip ) ) {
+				return true;
+			}
 		}
 		if ( '' !== $a_abs && '' !== $b_abs ) {
 			$a_nof = $this->url_without_fragment( $a_abs );
@@ -5116,9 +5216,15 @@ class TSOLIIN_Scanner {
 				'' !== $a_nof
 				&& '' !== $b_nof
 				&& class_exists( 'TSOLIIN_HTTP' )
-				&& TSOLIIN_HTTP::is_http_same_resource_bar_www( $a_nof, $b_nof )
 			) {
-				return true;
+				if ( TSOLIIN_HTTP::is_http_same_resource_bar_www( $a_nof, $b_nof ) ) {
+					return true;
+				}
+				$a_strip = TSOLIIN_HTTP::strip_noise_query_params_from_url( $a_nof );
+				$b_strip = TSOLIIN_HTTP::strip_noise_query_params_from_url( $b_nof );
+				if ( TSOLIIN_HTTP::is_http_same_resource_bar_www( $a_strip, $b_strip ) ) {
+					return true;
+				}
 			}
 		}
 		$norm_a = $this->normalize_url_for_matching( $a );
