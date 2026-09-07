@@ -32,10 +32,10 @@
 		editPostId  : 0,
 		editLinkType: 'link',
 		previewTimer: null,
-		searchTimer   : null,
-		searchXhr     : null,
-		listNavXhr    : null,
-		lastSearchVal : '',
+		searchTimer      : null,
+		listRegionXhr    : null,
+		listNavRequestId : 0,
+		lastSearchVal    : '',
 		suggestXhr      : null,
 		suggestTrigger  : null,
 		suggestRequestId: 0,
@@ -134,10 +134,7 @@
 			if ( ( this._pendingAjax || 0 ) > 0 ) {
 				return true;
 			}
-			if ( this.searchXhr && this.searchXhr.readyState !== 4 ) {
-				return true;
-			}
-			if ( this.listNavXhr && this.listNavXhr.readyState !== 4 ) {
+			if ( this.listRegionXhr && this.listRegionXhr.readyState !== 4 ) {
 				return true;
 			}
 			if ( this.suggestXhr && this.suggestXhr.readyState !== 4 ) {
@@ -208,6 +205,7 @@
 		},
 
 		init: function () {
+			var self = this;
 			this.repositionScreenMeta();
 			this.$form         = $( '#tsoliin-list-form' );
 			this.$startBtn     = $( '#tsoliin-start-scan' );
@@ -245,6 +243,12 @@
 
 			this.bindEvents();
 			this.bindLiveSearch();
+			this.clearListNavLoading();
+			$( window ).on( 'pageshow', function ( e ) {
+				if ( e.originalEvent && e.originalEvent.persisted ) {
+					self.clearListNavLoading();
+				}
+			} );
 			this.maybeScrollToListOnLoad();
 			this.initThemeSwitcher();
 			$( document ).on( 'heartbeat-send', function ( event, data ) {
@@ -484,16 +488,11 @@
 				this.refreshStats();
 			} catch ( err ) {
 				// Never leave the UI half-updated if title HTML parsing fails.
+			} finally {
 				this.clearListNavLoading();
 			}
 		},
 
-		/**
-		 * Fetch list-table HTML without reloading the admin page.
-		 *
-		 * @param {Object} params Nav/search params.
-		 * @param {Object} opts   Callback options.
-		 */
 		/**
 		 * Clear list AJAX loading state from every possible target node.
 		 */
@@ -503,6 +502,22 @@
 				.attr( 'aria-busy', 'false' );
 		},
 
+		/**
+		 * Whether a list-region AJAX response is still the latest navigation.
+		 *
+		 * @param {number} requestId Request id captured when the call started.
+		 * @return {boolean}
+		 */
+		isActiveListRegionRequest: function ( requestId ) {
+			return requestId === this.listNavRequestId;
+		},
+
+		/**
+		 * Fetch list-table HTML without reloading the admin page.
+		 *
+		 * @param {Object} params Nav/search params.
+		 * @param {Object} opts   Callback options.
+		 */
 		fetchListRegion: function ( params, opts ) {
 			opts = opts || {};
 			var self = this;
@@ -522,11 +537,8 @@
 				return;
 			}
 
-			if ( self.listNavXhr && self.listNavXhr.readyState !== 4 ) {
-				self.listNavXhr.abort();
-			}
-			if ( self.searchXhr && self.searchXhr.readyState !== 4 ) {
-				self.searchXhr.abort();
+			if ( self.listRegionXhr && self.listRegionXhr.readyState !== 4 ) {
+				self.listRegionXhr.abort();
 			}
 
 			self.listNavRequestId = ( self.listNavRequestId || 0 ) + 1;
@@ -555,6 +567,9 @@
 					order          : params.order || tsoliinData.listOrder || 'DESC'
 				},
 				success: function ( r ) {
+					if ( ! self.isActiveListRegionRequest( requestId ) ) {
+						return;
+					}
 					if ( r.success && r.data && r.data.html ) {
 						var responseRegion = r.data.region || ( useScope ? 'scope' : 'list' );
 						if ( 'scope' === responseRegion && $scope.length ) {
@@ -572,21 +587,23 @@
 						}
 						if ( opts.updateScopeMeta ) {
 							self.applyScopeNavMeta( r.data );
+						} else {
+							self.clearListNavLoading();
 						}
 						if ( typeof opts.onSuccess === 'function' ) {
 							opts.onSuccess( r.data );
 						}
 					} else if ( opts.fallbackNavigate && params.href ) {
 						window.location.href = params.href;
+					} else {
+						self.clearListNavLoading();
 					}
 				},
 				error: function ( xhr, status ) {
-					if ( 'abort' === status ) {
+					if ( 'abort' === status || ! self.isActiveListRegionRequest( requestId ) ) {
 						return;
 					}
-					if ( requestId === self.listNavRequestId ) {
-						self.clearListNavLoading();
-					}
+					self.clearListNavLoading();
 					if ( opts.fallbackNavigate && params.href ) {
 						window.location.href = params.href;
 					} else {
@@ -594,26 +611,19 @@
 					}
 				},
 				complete: function () {
-					if ( self.listNavXhr === xhr || ! self.listNavXhr ) {
+					if ( self.listRegionXhr === xhr ) {
+						self.listRegionXhr = null;
+					}
+					if ( self.isActiveListRegionRequest( requestId ) ) {
 						self.clearListNavLoading();
 					}
-					if ( self.listNavXhr === xhr ) {
-						self.listNavXhr = null;
-					}
-					if ( self.searchXhr === xhr ) {
-						self.searchXhr = null;
-					}
-					if ( typeof opts.onComplete === 'function' ) {
+					if ( self.isActiveListRegionRequest( requestId ) && typeof opts.onComplete === 'function' ) {
 						opts.onComplete();
 					}
 				}
 			} );
 
-			if ( opts.trackAsSearch ) {
-				self.searchXhr = xhr;
-			} else {
-				self.listNavXhr = xhr;
-			}
+			self.listRegionXhr = xhr;
 		},
 
 		/**
@@ -675,7 +685,9 @@
 				}
 				e.preventDefault();
 				self.fetchListRegion( params, {
+					region          : $( '#tsoliin-list-form' ).length ? 'list' : 'scope',
 					updateUrl       : true,
+					updateScopeMeta : ! $( '#tsoliin-list-form' ).length && ( params.post_id > 0 || 'posts' === params.view || 'products' === params.view ),
 					fallbackNavigate: true,
 					onSuccess       : function () {
 						self.restoreListScroll();
@@ -2971,7 +2983,7 @@
 					paged          : 1
 				},
 				{
-					trackAsSearch: true,
+					region: 'list',
 					onSuccess: function () {
 						self.updateSearchUrl( searchTerm );
 						self.lastSearchVal = searchTerm;
