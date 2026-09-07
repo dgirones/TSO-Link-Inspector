@@ -268,6 +268,7 @@ class TSOLIIN_Cron {
 		delete_option( 'tsoliin_bg_scan_scanned' );
 		delete_option( 'tsoliin_bg_scan_started' );
 		delete_option( 'tsoliin_bg_scan_phase' );
+		delete_option( 'tsoliin_bg_scan_token' );
 	}
 
 	/**

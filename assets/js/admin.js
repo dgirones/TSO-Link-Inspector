@@ -321,7 +321,7 @@
 			}
 
 			// Live stat / filter tab counts while editing the list.
-			if ( this.$form.length ) {
+			if ( $( '.tsoliin-wrap .tsoliin-stats' ).length ) {
 				this.refreshStats();
 				var interval = parseInt( tsoliinData.refreshInterval, 10 ) || 8000;
 				if ( interval > 0 ) {
@@ -468,7 +468,11 @@
 				}
 			}
 			if ( typeof data.view_post_id !== 'undefined' ) {
+				tsoliinData.viewPostId = parseInt( data.view_post_id, 10 ) || 0;
 				this.syncExportScope( data.view_post_id );
+			}
+			if ( data.list_view ) {
+				tsoliinData.listView = data.list_view;
 			}
 			this.refreshStats();
 		},
@@ -854,10 +858,11 @@
 
 			$( '#tsoliin-diagnose' ).on( 'click', function () { self.runDiagnose(); } );
 
-			this.$form.on( 'submit', function ( e ) {
-				var action = self.$form.find( 'select[name="action"]' ).val();
+			$( document ).on( 'submit', '#tsoliin-list-form', function ( e ) {
+				var $form = $( this );
+				var action = $form.find( 'select[name="action"]' ).val();
 				if ( ! action || '-1' === action ) {
-					action = self.$form.find( 'select[name="action2"]' ).val();
+					action = $form.find( 'select[name="action2"]' ).val();
 				}
 				var managed = [ 'recheck', 'delete', 'unlink', 'not_broken', 'upgrade_https' ];
 				if ( parseInt( tsoliinData.relativeUrlTool, 10 ) === 1 ) {
@@ -865,6 +870,7 @@
 				}
 				if ( -1 !== managed.indexOf( action ) ) {
 					e.preventDefault();
+					self.$form = $form;
 					self.doBulkAction( action );
 				}
 			} );
@@ -898,6 +904,7 @@
 			this.$startBtn.show().prop( 'disabled', false ).html(
 				'<span class="dashicons dashicons-search"></span> ' + label
 			);
+			this.syncDiscardButtons();
 		},
 
 		resetCheckButton: function () {
@@ -927,7 +934,8 @@
 		},
 
 		syncDiscardButtons: function () {
-			var scanPaused = parseInt( tsoliinData.scanResumable, 10 ) === 1
+			var scanPaused = ( parseInt( tsoliinData.scanResumable, 10 ) === 1
+				|| !! tsoliinData.scanError )
 				&& ! parseInt( tsoliinData.scanRunning, 10 );
 			var checkPaused = parseInt( tsoliinData.checkPaused, 10 ) === 1
 				&& ! parseInt( tsoliinData.bgRunning, 10 );
@@ -970,6 +978,7 @@
 					if ( 'scan' === scope || 'all' === scope ) {
 						tsoliinData.scanResumable = 0;
 						tsoliinData.scanRunning = 0;
+						tsoliinData.scanError = '';
 						self.scanning = false;
 						self.scanSessionActive = false;
 						self.$stopScanBtn.hide();
@@ -1084,6 +1093,7 @@
 					self.checkSessionActive = false;
 					self.$stopBtn.hide();
 					tsoliinData.scanResumable = 0;
+					tsoliinData.scanError = '';
 					if ( typeof r.data.pct !== 'undefined' ) {
 						tsoliinData.scanPct = r.data.pct;
 						self.updateProgress( r.data.pct, r.data.message || tsoliinData.i18n.scanning );
@@ -1091,6 +1101,7 @@
 					if ( r.data.message ) {
 						self.showNotice( r.data.message, 'info' );
 					}
+					self.syncDiscardButtons();
 					self.startPolling();
 					self.scanTick();
 				},
@@ -1120,7 +1131,7 @@
 					self.$stopScanBtn.hide().prop( 'disabled', false );
 					self.resetScanButton();
 					if ( ! parseInt( tsoliinData.bgRunning, 10 ) ) {
-						self.$checkBtn.prop( 'disabled', false );
+						self.$checkBtn.prop( 'disabled', self.isScanBlockingCheck() );
 					}
 					if ( r.success && r.data ) {
 						tsoliinData.scanResumable = r.data.resumable ? 1 : 0;
@@ -1208,9 +1219,7 @@
 			tsoliinData.scanScanned = scan.scanned;
 			tsoliinData.scanTotal = scan.total;
 			tsoliinData.scanResumable = scan.resumable ? 1 : 0;
-			if ( scan.error ) {
-				tsoliinData.scanError = scan.error;
-			}
+			tsoliinData.scanError = scan.error ? scan.error : '';
 			if ( scan.error ) {
 				this.$progressBar.css( { width: '100%', background: '#cc1818' } );
 			} else {
@@ -1222,6 +1231,7 @@
 			if ( $scannedCard.length && scan.total ) {
 				$scannedCard.text( scan.scanned + ' / ' + scan.total );
 			}
+			this.syncDiscardButtons();
 			if ( scan.running ) {
 				this.scanning = true;
 				this.scanSessionActive = true;
@@ -1314,6 +1324,9 @@
 
 			var scanActive = this.isScanBlockingCheck();
 			if ( scanActive && ! this.scanChainCheck ) {
+				if ( tsoliinData.i18n.confirmCheckWhileScan ) {
+					this.showNotice( tsoliinData.i18n.confirmCheckWhileScan, 'warning' );
+				}
 				return;
 			}
 
@@ -1854,7 +1867,7 @@
 		},
 
 		refreshStats: function () {
-			if ( ! this.$form.length ) {
+			if ( ! $( '.tsoliin-wrap .tsoliin-stats' ).length ) {
 				return;
 			}
 			var self = this;
@@ -1927,7 +1940,7 @@
 		},
 
 		countListRows: function () {
-			return this.$form.find( 'tbody tr' ).not( '.tsoliin-suggest-row' ).length;
+			return $( '#tsoliin-list-form' ).find( 'tbody tr' ).not( '.tsoliin-suggest-row' ).length;
 		},
 
 		maybeReloadEmptyList: function () {

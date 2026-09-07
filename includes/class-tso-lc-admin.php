@@ -696,10 +696,10 @@ JS;
 		// Toolbar.
 		$pending_check      = (int) $this->db->get_pending_check_count( absint( $view_post_id ) );
 		$check_paused       = $this->cron->is_bg_check_paused() && $pending_check > 0;
-		$btn_check_disabled = ( $bg_scan['running'] && ! $bg['running'] ) ? ' disabled' : '';
+		$btn_check_disabled = ( $this->cron->is_bg_scan_blocking_check() && ! $bg['running'] ) ? ' disabled' : '';
 		$show_restart       = ( ! $bg['running'] && $check_paused );
 		$show_scan_restart  = ( ! $bg_scan['running'] && ! empty( $bg_scan['resumable'] ) );
-		$show_discard_scan  = ( ! $bg_scan['running'] && ! empty( $bg_scan['resumable'] ) );
+		$show_discard_scan  = ( ! $bg_scan['running'] && ( ! empty( $bg_scan['resumable'] ) || '' !== $bg_scan['error'] ) );
 		$show_discard_check = ( ! $bg['running'] && $check_paused );
 		$show_discard_all   = $show_discard_scan && $show_discard_check;
 		if ( $bg_scan['running'] ) {
