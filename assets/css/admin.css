@@ -600,6 +600,18 @@ a.tsoliin-stat:focus-visible {
 	min-width: 0;
 }
 
+.tsoliin-toolbar .tsoliin-discard-btn {
+	padding-left: 4px;
+	padding-right: 4px;
+	height: auto;
+	min-height: 0;
+	line-height: 1.4;
+}
+
+.tsoliin-toolbar .tsoliin-discard-btn--all {
+	margin-left: 4px;
+}
+
 .tsoliin-toolbar__secondary {
 	flex: 0 1 auto;
 	margin-left: auto;
