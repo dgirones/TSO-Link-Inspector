@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       TSO Link Inspector
  * Description:       Find and fix broken links across your entire WordPress site without opening each post.
- * Version:           2.4.3
+ * Version:           2.4.5
  * Requires at least: 5.9
  * Requires PHP:      7.4
  * Tested up to:       7.1
@@ -20,12 +20,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'TSOLIIN_VERSION',    '2.4.3' );
+define( 'TSOLIIN_VERSION',    '2.4.5' );
 define( 'TSOLIIN_PLUGIN_FILE', __FILE__ );
 define( 'TSOLIIN_PLUGIN_DIR',  plugin_dir_path( __FILE__ ) );
 define( 'TSOLIIN_PLUGIN_URL',  plugin_dir_url( __FILE__ ) );
 define( 'TSOLIIN_TEXT_DOMAIN', 'tso-link-inspector' );
-define( 'TSOLIIN_BATCH_SIZE',  10 );
+define( 'TSOLIIN_BATCH_SIZE',  20 );
 
 /**
  * Whether the current request is a Link Inspector admin screen or plugin AJAX call.
@@ -544,9 +544,18 @@ final class TSOLIIN_Link_Inspector {
 	/**
 	 * Resolve link focus request on post edit screens.
 	 *
+	 * Memoized for the request: block editor settings and enqueue both call this.
+	 *
 	 * @return array{link:object,post_id:int}|null
 	 */
 	private function get_editor_focus_request() {
+		static $resolved = false;
+		static $request  = null;
+		if ( $resolved ) {
+			return $request;
+		}
+		$resolved = true;
+
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- deep-link to editable content only.
 		$link_id = isset( $_GET['tsoliin_link'] ) ? absint( wp_unslash( $_GET['tsoliin_link'] ) ) : 0;
 		if ( $link_id <= 0 ) {
@@ -576,10 +585,11 @@ final class TSOLIIN_Link_Inspector {
 			return null;
 		}
 
-		return array(
+		$request = array(
 			'link'    => $link,
 			'post_id' => $post_id,
 		);
+		return $request;
 	}
 
 	/**

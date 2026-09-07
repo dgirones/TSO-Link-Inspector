@@ -89,6 +89,103 @@ class TSOLIIN_Support {
 	}
 
 	/**
+	 * Echo the day / night / auto theme toggle for admin screens.
+	 *
+	 * @return void
+	 */
+	public static function render_theme_toggle() {
+		?>
+		<button type="button" id="tsoliin-theme-toggle" class="tsoliin-theme-btn" aria-pressed="mixed" title="<?php echo esc_attr__( 'Auto mode', 'tso-link-inspector' ); ?>">
+			<span class="tsoliin-theme-icon" aria-hidden="true">🌓</span>
+			<span class="tsoliin-theme-label"><?php echo esc_html__( 'Auto mode', 'tso-link-inspector' ); ?></span>
+		</button>
+		<?php
+	}
+
+	/**
+	 * WordPress site timezone string (Settings → General).
+	 *
+	 * @return string
+	 */
+	public static function theme_timezone_string() {
+		if ( function_exists( 'wp_timezone_string' ) ) {
+			return (string) wp_timezone_string();
+		}
+		return (string) get_option( 'timezone_string', '' );
+	}
+
+	/**
+	 * Approximate lat/lng for sunrise/sunset from the site timezone.
+	 *
+	 * @return array{lat: float, lng: float}
+	 */
+	public static function theme_coords() {
+		$tz = self::theme_timezone_string();
+
+		$map = array(
+			'Europe/Madrid'                  => array( 40.42, -3.70 ),
+			'Europe/Andorra'                 => array( 42.51, 1.52 ),
+			'Atlantic/Canary'                => array( 28.29, -16.63 ),
+			'Europe/London'                  => array( 51.51, -0.13 ),
+			'Europe/Paris'                   => array( 48.86, 2.35 ),
+			'Europe/Berlin'                  => array( 52.52, 13.41 ),
+			'Europe/Rome'                    => array( 41.90, 12.50 ),
+			'Europe/Lisbon'                  => array( 38.72, -9.14 ),
+			'Europe/Brussels'                => array( 50.85, 4.35 ),
+			'Europe/Amsterdam'               => array( 52.37, 4.90 ),
+			'Europe/Zurich'                  => array( 47.37, 8.54 ),
+			'Europe/Vienna'                  => array( 48.21, 16.37 ),
+			'America/Mexico_City'            => array( 19.43, -99.13 ),
+			'America/New_York'               => array( 40.71, -74.01 ),
+			'America/Chicago'                => array( 41.88, -87.63 ),
+			'America/Denver'                 => array( 39.74, -104.99 ),
+			'America/Los_Angeles'            => array( 34.05, -118.24 ),
+			'America/Argentina/Buenos_Aires' => array( -34.60, -58.38 ),
+			'America/Sao_Paulo'              => array( -23.55, -46.63 ),
+			'America/Bogota'                 => array( 4.71, -74.07 ),
+			'America/Lima'                   => array( -12.05, -77.04 ),
+			'America/Santiago'               => array( -33.45, -70.67 ),
+			'America/Caracas'                => array( 10.48, -66.90 ),
+			'America/Guayaquil'              => array( -2.17, -79.92 ),
+			'America/Panama'                 => array( 8.98, -79.52 ),
+			'America/Costa_Rica'             => array( 9.93, -84.08 ),
+			'America/Guatemala'              => array( 14.63, -90.51 ),
+			'America/Havana'                 => array( 23.11, -82.37 ),
+			'America/Puerto_Rico'            => array( 18.47, -66.11 ),
+			'America/Santo_Domingo'          => array( 18.49, -69.93 ),
+			'Asia/Tokyo'                     => array( 35.68, 139.69 ),
+			'Australia/Sydney'               => array( -33.87, 151.21 ),
+			'UTC'                            => array( 0.0, 0.0 ),
+		);
+
+		if ( isset( $map[ $tz ] ) ) {
+			return array(
+				'lat' => (float) $map[ $tz ][0],
+				'lng' => (float) $map[ $tz ][1],
+			);
+		}
+
+		if ( 0 === strpos( $tz, 'Europe/' ) ) {
+			return array( 'lat' => 41.39, 'lng' => 2.17 );
+		}
+		if ( 0 === strpos( $tz, 'America/' ) ) {
+			return array( 'lat' => 19.43, 'lng' => -99.13 );
+		}
+		if ( 0 === strpos( $tz, 'Atlantic/' ) ) {
+			return array( 'lat' => 28.29, 'lng' => -16.63 );
+		}
+		if ( 0 === strpos( $tz, 'Asia/' ) ) {
+			return array( 'lat' => 35.68, 'lng' => 139.69 );
+		}
+		if ( 0 === strpos( $tz, 'Australia/' ) || 0 === strpos( $tz, 'Pacific/' ) ) {
+			return array( 'lat' => -33.87, 'lng' => 151.21 );
+		}
+
+		// Default: Iberian Peninsula.
+		return array( 'lat' => 41.39, 'lng' => 2.17 );
+	}
+
+	/**
 	 * Whether the optional “Convert to /path” row and bulk actions are enabled.
 	 *
 	 * @return bool

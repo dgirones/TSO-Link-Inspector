@@ -59,8 +59,11 @@ class TSOLIIN_Admin {
 		add_action( 'wp_ajax_tsoliin_not_broken',    array( $this, 'ajax_not_broken' ) );
 		add_action( 'wp_ajax_tsoliin_bulk_action',   array( $this, 'ajax_bulk_action' ) );
 		add_action( 'wp_ajax_tsoliin_start_bg_check',  array( $this, 'ajax_start_bg_check' ) );
+		add_action( 'wp_ajax_tsoliin_bg_check_tick',   array( $this, 'ajax_bg_check_tick' ) );
 		add_action( 'wp_ajax_tsoliin_stop_bg_check',   array( $this, 'ajax_stop_bg_check' ) );
 		add_action( 'wp_ajax_tsoliin_start_bg_scan',   array( $this, 'ajax_start_bg_scan' ) );
+		add_action( 'wp_ajax_tsoliin_bg_scan_tick',    array( $this, 'ajax_bg_scan_tick' ) );
+		add_action( 'wp_ajax_tsoliin_bg_keep_alive',   array( $this, 'ajax_bg_keep_alive' ) );
 		add_action( 'wp_ajax_tsoliin_stop_bg_scan',    array( $this, 'ajax_stop_bg_scan' ) );
 		add_action( 'wp_ajax_tsoliin_check_progress',  array( $this, 'ajax_check_progress' ) );
 		add_action( 'wp_ajax_tsoliin_get_stats',       array( $this, 'ajax_get_stats' ) );
@@ -99,6 +102,87 @@ class TSOLIIN_Admin {
 			$this->bg_scan_progress_cache = $this->cron->get_bg_scan_progress();
 		}
 		return $this->bg_scan_progress_cache;
+	}
+
+	/**
+	 * Inline boot script: apply saved theme before first paint (no jQuery).
+	 *
+	 * @return string
+	 */
+	private function get_theme_boot_script() {
+		return <<<'JS'
+(function () {
+	var KEY = 'tsoliin_ui_theme';
+	function readPref() {
+		var p = '';
+		try { p = localStorage.getItem(KEY) || ''; } catch (e) { p = ''; }
+		if (p === 'day' || p === 'night' || p === 'auto') {
+			return p;
+		}
+		return 'auto';
+	}
+	function resolve(pref) {
+		if (pref === 'day' || pref === 'night') {
+			return pref;
+		}
+		var h = (new Date()).getHours();
+		return (h >= 7 && h < 20) ? 'day' : 'night';
+	}
+	function apply(root) {
+		var pref = readPref();
+		var theme = resolve(pref);
+		try {
+			document.documentElement.setAttribute('data-tsoliin-theme', theme);
+			document.documentElement.setAttribute('data-tsoliin-theme-pref', pref);
+		} catch (e1) { /* ignore */ }
+		if (document.body) {
+			document.body.setAttribute('data-tsoliin-theme', theme);
+		}
+		var wraps = [];
+		if (root && root.nodeType === 1 && root.classList && root.classList.contains('tsoliin-wrap')) {
+			wraps.push(root);
+		}
+		var scope = root && root.querySelectorAll ? root : document;
+		if (scope && scope.querySelectorAll) {
+			var found = scope.querySelectorAll('.tsoliin-wrap');
+			for (var i = 0; i < found.length; i++) {
+				wraps.push(found[i]);
+			}
+		}
+		for (var j = 0; j < wraps.length; j++) {
+			wraps[j].setAttribute('data-theme', theme);
+			wraps[j].setAttribute('data-theme-pref', pref);
+		}
+	}
+	apply(document);
+	if (document.readyState === 'loading') {
+		document.addEventListener('DOMContentLoaded', function () { apply(document); });
+	}
+	if (typeof MutationObserver !== 'undefined') {
+		var mo = new MutationObserver(function (mutations) {
+			for (var i = 0; i < mutations.length; i++) {
+				var nodes = mutations[i].addedNodes;
+				for (var j = 0; j < nodes.length; j++) {
+					var n = nodes[j];
+					if (!n || n.nodeType !== 1) {
+						continue;
+					}
+					if (n.classList && n.classList.contains('tsoliin-wrap')) {
+						apply(n);
+					} else if (n.querySelector && n.querySelector('.tsoliin-wrap')) {
+						apply(n);
+					}
+				}
+			}
+		});
+		mo.observe(document.documentElement, { childList: true, subtree: true });
+		document.addEventListener('DOMContentLoaded', function () {
+			mo.disconnect();
+			apply(document);
+		});
+	}
+})();
+JS;
 	}
 
 	// =========================================================================
@@ -223,8 +307,14 @@ class TSOLIIN_Admin {
 	// =========================================================================
 
 	public function enqueue_assets( $hook ) {
-		$our_pages = array( $this->page_hook, 'tools_page_tso-link-inspector-settings', 'admin_page_tso-link-inspector-settings' );
-		if ( ! in_array( $hook, $our_pages, true ) ) {
+		$our_pages      = array( $this->page_hook, 'tools_page_tso-link-inspector-settings', 'admin_page_tso-link-inspector-settings' );
+		$is_plugin_page = in_array( $hook, $our_pages, true );
+
+		if ( current_user_can( 'manage_options' ) ) {
+			$this->enqueue_bg_worker( $is_plugin_page );
+		}
+
+		if ( ! $is_plugin_page ) {
 			return;
 		}
 		$admin_css = TSOLIIN_PLUGIN_DIR . 'assets/css/admin.css';
@@ -232,6 +322,10 @@ class TSOLIIN_Admin {
 		$css_ver   = is_readable( $admin_css ) ? (string) filemtime( $admin_css ) : TSOLIIN_VERSION;
 		$js_ver    = is_readable( $admin_js ) ? (string) filemtime( $admin_js ) : TSOLIIN_VERSION;
 		wp_enqueue_style( 'tsoliin-admin', TSOLIIN_PLUGIN_URL . 'assets/css/admin.css', array(), $css_ver );
+		// Apply saved day/night theme before first paint (avoids light flash on navigation).
+		wp_register_script( 'tsoliin-theme-boot', false, array(), TSOLIIN_VERSION, false );
+		wp_enqueue_script( 'tsoliin-theme-boot' );
+		wp_add_inline_script( 'tsoliin-theme-boot', $this->get_theme_boot_script() );
 		$scroll_head_js  = TSOLIIN_PLUGIN_DIR . 'assets/js/list-scroll-head.js';
 		$scroll_js       = TSOLIIN_PLUGIN_DIR . 'assets/js/list-scroll.js';
 		$scroll_head_ver = is_readable( $scroll_head_js ) ? (string) filemtime( $scroll_head_js ) : TSOLIIN_VERSION;
@@ -256,11 +350,15 @@ class TSOLIIN_Admin {
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$list_scope = $this->get_list_scope_from_request();
 
-		$user_id = get_current_user_id();
+		$user_id      = get_current_user_id();
+		$theme_coords = TSOLIIN_Support::theme_coords();
 
 		wp_localize_script( 'tsoliin-admin', 'tsoliinData', array(
 			'ajaxUrl'    => admin_url( 'admin-ajax.php' ),
 			'nonce'      => wp_create_nonce( 'tsoliin_action' ),
+			'timezone'   => TSOLIIN_Support::theme_timezone_string(),
+			'lat'        => $theme_coords['lat'],
+			'lng'        => $theme_coords['lng'],
 			'viewPostId' => $view_post_id,
 			'listFilter'        => $list_filter,
 			'listQualityFilter' => $list_quality,
@@ -304,6 +402,9 @@ class TSOLIIN_Admin {
 			'bgChecked'  => $bg['checked'],
 			'bgTotal'    => $bg['total'],
 			'bgPct'      => $bg['pct'],
+			'bgPostId'   => isset( $bg['post_id'] ) ? absint( $bg['post_id'] ) : 0,
+			'bgPending'  => isset( $bg['pending'] ) ? absint( $bg['pending'] ) : 0,
+			'bgComplete' => ! empty( $bg['complete'] ) ? 1 : 0,
 			'scanRunning' => $bg_scan['running'] ? 1 : 0,
 			'scanScanned' => $bg_scan['scanned'],
 			'scanTotal'   => $bg_scan['total'],
@@ -312,6 +413,7 @@ class TSOLIIN_Admin {
 			'scanError'   => isset( $bg_scan['error'] ) ? (string) $bg_scan['error'] : '',
 			// Request-cached COUNT; same key as get_bg_progress() when not filtering by post.
 			'pendingCheck' => (int) $this->db->get_pending_check_count( absint( $view_post_id ) ),
+			'checkAutoResume' => ( ! get_option( 'tsoliin_bg_check_user_stopped' ) && (int) $bg['pct'] > 0 && (int) $bg['pct'] < 100 && $this->db->get_pending_check_count( absint( isset( $bg['post_id'] ) ? $bg['post_id'] : 0 ) ) > 0 ) ? 1 : 0,
 			'refreshInterval' => 8000, // ms between stat card auto-refreshes
 			'i18n' => array(
 				'scanning'      => __( 'Scanning...', 'tso-link-inspector' ),
@@ -322,6 +424,7 @@ class TSOLIIN_Admin {
 				'checkStarted'  => __( 'Check started. You can continue browsing.', 'tso-link-inspector' ),
 				'checkResumed'  => __( 'Resuming check from where it left off. You can continue browsing.', 'tso-link-inspector' ),
 				'stopped'       => __( 'Stopped', 'tso-link-inspector' ),
+				'sessionExpired'=> __( 'Your admin session expired. Reload this page to keep monitoring the background task.', 'tso-link-inspector' ),
 				'checkPaused'   => __( 'Check paused. Click Continue check.', 'tso-link-inspector' ),
 				'scanNow'       => __( 'Scan now', 'tso-link-inspector' ),
 				'continueScan'  => __( 'Continue scan', 'tso-link-inspector' ),
@@ -428,8 +531,33 @@ class TSOLIIN_Admin {
 				'revisionSaved'     => __( 'A post revision was saved. Open the article in the editor to view or restore it under Revisions.', 'tso-link-inspector' ),
 				'searching'         => __( 'Searching...', 'tso-link-inspector' ),
 				'searchBtn'         => __( 'Search', 'tso-link-inspector' ),
+				'themeDay'          => __( 'Day mode', 'tso-link-inspector' ),
+				'themeNight'        => __( 'Night mode', 'tso-link-inspector' ),
+				'themeAuto'         => __( 'Auto mode', 'tso-link-inspector' ),
+				'themeAutoHint'     => __( 'Follows sunrise and sunset (changes with the seasons)', 'tso-link-inspector' ),
 			),
 		) );
+	}
+
+	/**
+	 * Drive scan/check from any wp-admin screen, including this plugin.
+	 *
+	 * @param bool $is_plugin_page True on Link Inspector screens (admin.js also ticks).
+	 */
+	private function enqueue_bg_worker( $is_plugin_page = false ) {
+		$js  = TSOLIIN_PLUGIN_DIR . 'assets/js/bg-worker.js';
+		$ver = is_readable( $js ) ? (string) filemtime( $js ) : TSOLIIN_VERSION;
+		wp_enqueue_script( 'tsoliin-bg-worker', TSOLIIN_PLUGIN_URL . 'assets/js/bg-worker.js', array( 'jquery' ), $ver, true );
+		wp_localize_script(
+			'tsoliin-bg-worker',
+			'tsoliinBgWorker',
+			array(
+				'ajaxUrl'    => admin_url( 'admin-ajax.php' ),
+				'nonce'      => wp_create_nonce( 'tsoliin_action' ),
+				'active'     => ( get_option( 'tsoliin_bg_scan_running' ) || get_option( 'tsoliin_bg_check_running' ) ) ? 1 : 0,
+				'hasUiTicks' => $is_plugin_page ? 1 : 0,
+			)
+		);
 	}
 
 	// =========================================================================
@@ -470,7 +598,7 @@ class TSOLIIN_Admin {
 		$scanned_posts  = $scanned_stored > 0 ? $scanned_stored : $this->db->get_scanned_post_count();
 		$date_fmt = get_option( 'date_format' ) . ' ' . get_option( 'time_format' );
 
-		echo '<div class="wrap tsoliin-wrap">';
+		echo '<div class="wrap tsoliin-wrap" data-theme="day" data-theme-pref="auto">';
 
 		echo '<div class="tsoliin-page-head">';
 		echo '<h1 class="wp-heading-inline">';
@@ -491,6 +619,7 @@ class TSOLIIN_Admin {
 		echo '</h1>';
 		echo '<div class="tsoliin-page-head__actions">';
 		echo '<div id="tsoliin-screen-meta-slot" class="tsoliin-screen-meta-slot"></div>';
+		TSOLIIN_Support::render_theme_toggle();
 		TSOLIIN_Support::render_donate_button();
 		echo '</div>';
 		echo '</div>';
@@ -546,14 +675,14 @@ class TSOLIIN_Admin {
 		$show_restart       = ( ! $bg['running'] && $pending_check > 0 );
 		$show_scan_restart  = ( ! $bg_scan['running'] && ! empty( $bg_scan['resumable'] ) );
 		if ( $bg_scan['running'] ) {
-			$btn_scan_label = __( 'Continue scan here', 'tso-link-inspector' );
+			$btn_scan_label = __( 'Scan now', 'tso-link-inspector' );
 		} elseif ( ! empty( $bg_scan['resumable'] ) ) {
 			$btn_scan_label = __( 'Continue scan', 'tso-link-inspector' );
 		} else {
 			$btn_scan_label = __( 'Scan now', 'tso-link-inspector' );
 		}
 		if ( $bg['running'] ) {
-			$btn_check_label = __( 'Continue check here', 'tso-link-inspector' );
+			$btn_check_label = __( 'Check now', 'tso-link-inspector' );
 		} elseif ( $pending_check > 0 ) {
 			$btn_check_label = $view_post_id
 				? __( 'Continue this post', 'tso-link-inspector' )
@@ -569,6 +698,8 @@ class TSOLIIN_Admin {
 		$scan_prog_pct      = $bg_scan['pct'];
 		$stop_check_style   = $bg['running'] ? '' : ' style="display:none;"';
 		$stop_scan_style    = $bg_scan['running'] ? '' : ' style="display:none;"';
+		$start_scan_style   = $bg_scan['running'] ? ' style="display:none;"' : '';
+		$start_check_style  = $bg['running'] ? ' style="display:none;"' : '';
 		$restart_style      = $show_restart ? '' : ' style="display:none;"';
 		$restart_scan_style = $show_scan_restart ? '' : ' style="display:none;"';
 		$scan_bar_style     = '';
@@ -583,7 +714,7 @@ class TSOLIIN_Admin {
 
 		echo '<div class="tsoliin-toolbar">';
 		echo '<div class="tsoliin-toolbar__primary">';
-		echo '<button type="button" id="tsoliin-start-scan" class="button button-primary" title="' . esc_attr( $scan_btn_title ) . '">';
+		echo '<button type="button" id="tsoliin-start-scan" class="button button-primary" title="' . esc_attr( $scan_btn_title ) . '"' . $start_scan_style . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		echo '<span class="dashicons dashicons-search"></span> ';
 		echo esc_html( $btn_scan_label );
 		echo '</button>';
@@ -595,7 +726,7 @@ class TSOLIIN_Admin {
 		echo '<span class="dashicons dashicons-update"></span> ';
 		echo esc_html__( 'Restart scan', 'tso-link-inspector' );
 		echo '</button>';
-		echo '<button type="button" id="tsoliin-start-check" class="button tsoliin-btn-check" title="' . esc_attr( $check_btn_title ) . '"' . $btn_check_disabled . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+		echo '<button type="button" id="tsoliin-start-check" class="button tsoliin-btn-check" title="' . esc_attr( $check_btn_title ) . '"' . $btn_check_disabled . $start_check_style . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		echo '<span class="dashicons dashicons-yes-alt"></span> ';
 		echo esc_html( $btn_check_label );
 		echo '</button>';
@@ -1519,7 +1650,7 @@ class TSOLIIN_Admin {
 			$settings_tab = 'settings';
 		}
 
-		echo '<div class="wrap tsoliin-wrap">';
+		echo '<div class="wrap tsoliin-wrap" data-theme="day" data-theme-pref="auto">';
 		echo '<div class="tsoliin-page-head">';
 		echo '<h1>';
 		echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector' ) ) . '" class="tsoliin-back-link">';
@@ -1530,7 +1661,10 @@ class TSOLIIN_Admin {
 		echo ' <span class="tsoliin-breadcrumb-sep">&#8250;</span> ';
 		echo esc_html__( 'Settings', 'tso-link-inspector' );
 		echo '</h1>';
+		echo '<div class="tsoliin-page-head__actions">';
+		TSOLIIN_Support::render_theme_toggle();
 		TSOLIIN_Support::render_donate_button();
+		echo '</div>';
 		echo '</div>';
 
 		$this->render_settings_nav_tabs( $settings_tab );
@@ -1945,9 +2079,14 @@ class TSOLIIN_Admin {
 		delete_option( 'tsoliin_bg_scan_started' );
 		delete_option( 'tsoliin_bg_scan_error' );
 		delete_option( 'tsoliin_bg_scan_complete' );
+		delete_option( 'tsoliin_bg_scan_phase' );
+		delete_option( 'tsoliin_bg_scan_token' );
 		delete_option( 'tsoliin_total_posts_scanned' );
 		delete_option( 'tsoliin_last_full_scan' );
 		$this->cron->stop_bg_check();
+		delete_option( 'tsoliin_bg_check_complete' );
+		delete_option( 'tsoliin_bg_check_token' );
+		delete_option( 'tsoliin_bg_check_last_error' );
 	}
 
 	/**
@@ -3375,8 +3514,13 @@ class TSOLIIN_Admin {
 		$this->check_nonce_and_cap();
 		$resume  = ! isset( $_POST['resume'] ) || '0' !== sanitize_text_field( wp_unslash( $_POST['resume'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$post_id = isset( $_POST['post_id'] ) ? absint( $_POST['post_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		if ( get_option( 'tsoliin_bg_scan_running' ) ) {
+			$this->cron->stop_bg_scan();
+		}
 		$pending_before = $this->db->get_pending_check_count( $post_id );
-		$this->cron->start_bg_check( $resume, $post_id );
+		if ( ! $this->cron->start_bg_check( $resume, $post_id, false ) ) {
+			wp_send_json_error( array( 'message' => __( 'Another background task is changing state. Try again in a moment.', 'tso-link-inspector' ) ) );
+		}
 		$bg = $this->cron->get_bg_progress();
 		$resumed = $resume && $pending_before > 0;
 		if ( $post_id > 0 ) {
@@ -3387,15 +3531,49 @@ class TSOLIIN_Admin {
 			$message = __( 'Check started. You can continue browsing.', 'tso-link-inspector' );
 		}
 		wp_send_json_success( array(
-			'running' => true,
+			'running' => ! empty( $bg['running'] ),
 			'checked' => $bg['checked'],
 			'total'   => $bg['total'],
 			'pct'     => $bg['pct'],
 			'post_id' => $bg['post_id'],
+			'complete'=> ! empty( $bg['complete'] ),
 			'pending' => isset( $bg['pending'] ) ? (int) $bg['pending'] : $this->db->get_pending_check_count( $post_id ),
 			'resumed' => $resumed ? 1 : 0,
 			'message' => $message,
 		) );
+	}
+
+	public function ajax_bg_check_tick() {
+		$this->check_nonce_and_cap();
+		$status = 'idle';
+		if ( get_option( 'tsoliin_bg_check_running' ) ) {
+			$status = $this->cron->run_bg_step( null, false );
+		}
+		$payload         = $this->format_check_progress_payload( $this->cron->get_bg_progress() );
+		$payload['busy'] = ( 'busy' === $status );
+		wp_send_json_success( $payload );
+	}
+
+	/**
+	 * Progress fields for the admin check bar.
+	 *
+	 * @param array $bg get_bg_progress() result.
+	 * @return array<string,mixed>
+	 */
+	private function format_check_progress_payload( $bg ) {
+		$bg   = is_array( $bg ) ? $bg : array();
+		$done = empty( $bg['running'] ) && ! empty( $bg['complete'] ) && (int) ( isset( $bg['pending'] ) ? $bg['pending'] : 0 ) <= 0;
+		if ( ! empty( $bg['running'] ) ) {
+			/* translators: 1: checked count, 2: total count */
+			$message = sprintf( __( 'Checking %1$d of %2$d...', 'tso-link-inspector' ), (int) $bg['checked'], (int) $bg['total'] );
+		} elseif ( $done ) {
+			$message = __( 'Check completed!', 'tso-link-inspector' );
+		} else {
+			$message = __( 'Stopped', 'tso-link-inspector' );
+		}
+		$bg['done']    = $done;
+		$bg['message'] = $message;
+		return $bg;
 	}
 
 	public function ajax_stop_bg_check() {
@@ -3416,8 +3594,13 @@ class TSOLIIN_Admin {
 	public function ajax_start_bg_scan() {
 		$this->check_nonce_and_cap();
 		$resume = ! isset( $_POST['resume'] ) || '0' !== sanitize_text_field( wp_unslash( $_POST['resume'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		if ( get_option( 'tsoliin_bg_check_running' ) ) {
+			$this->cron->stop_bg_check();
+		}
 		$resumable_before = $this->cron->is_bg_scan_resumable();
-		$this->cron->start_bg_scan( $resume );
+		if ( ! $this->cron->start_bg_scan( $resume, false ) ) {
+			wp_send_json_error( array( 'message' => __( 'Another background task is changing state. Try again in a moment.', 'tso-link-inspector' ) ) );
+		}
 		$scan = $this->cron->get_bg_scan_progress();
 		if ( $resume && $resumable_before ) {
 			$message = __( 'Resuming scan from where it left off. You can continue browsing.', 'tso-link-inspector' );
@@ -3435,6 +3618,69 @@ class TSOLIIN_Admin {
 				'message'   => $message,
 			)
 		);
+	}
+
+	public function ajax_bg_scan_tick() {
+		$this->check_nonce_and_cap();
+		$status = 'idle';
+		if ( get_option( 'tsoliin_bg_scan_running' ) ) {
+			$status = $this->cron->run_bg_scan_step( null, false );
+		}
+		$scan         = $this->format_scan_progress_payload( $this->cron->get_bg_scan_progress() );
+		$scan['busy'] = ( 'busy' === $status );
+		wp_send_json_success( $scan );
+	}
+
+	/**
+	 * Continue a running scan or check from any admin screen (not the plugin UI ticks).
+	 */
+	public function ajax_bg_keep_alive() {
+		$this->check_nonce_and_cap();
+		$status = 'idle';
+		if ( get_option( 'tsoliin_bg_scan_running' ) ) {
+			$status = $this->cron->run_bg_scan_step( null, false );
+		} elseif ( get_option( 'tsoliin_bg_check_running' ) ) {
+			$status = $this->cron->run_bg_step( null, false );
+		}
+		wp_send_json_success(
+			array(
+				'scan_running'  => (bool) get_option( 'tsoliin_bg_scan_running' ),
+				'check_running' => (bool) get_option( 'tsoliin_bg_check_running' ),
+				'busy'          => ( 'busy' === $status ),
+			)
+		);
+	}
+
+	/**
+	 * Progress fields for the admin scan bar.
+	 *
+	 * @param array $scan get_bg_scan_progress() result.
+	 * @return array<string,mixed>
+	 */
+	private function format_scan_progress_payload( $scan ) {
+		$scan = is_array( $scan ) ? $scan : array();
+		if ( ! empty( $scan['running'] ) ) {
+			$phase   = isset( $scan['phase'] ) ? (string) $scan['phase'] : 'posts';
+			$total   = (int) $scan['total'];
+			$scanned = (int) $scan['scanned'];
+			if ( $total > 0 && $scanned >= $total && 'posts' !== $phase && 'done' !== $phase ) {
+				$message = __( 'Posts scanned. Finishing comments, menus and other sources…', 'tso-link-inspector' );
+			} else {
+				/* translators: 1: scanned count, 2: total count */
+				$message = sprintf( __( 'Scanning %1$d of %2$d...', 'tso-link-inspector' ), $scanned, $total );
+			}
+		} elseif ( ! empty( $scan['done'] ) ) {
+			$message = __( 'Scan completed!', 'tso-link-inspector' );
+		} elseif ( ! empty( $scan['error'] ) ) {
+			$message = (string) $scan['error'];
+		} elseif ( ! empty( $scan['resumable'] ) ) {
+			/* translators: 1: scanned count, 2: total count */
+			$message = sprintf( __( 'Scan paused at %1$d of %2$d. Click Continue scan.', 'tso-link-inspector' ), (int) $scan['scanned'], (int) $scan['total'] );
+		} else {
+			$message = __( 'Stopped', 'tso-link-inspector' );
+		}
+		$scan['message'] = $message;
+		return $scan;
 	}
 
 	public function ajax_stop_bg_scan() {
@@ -3457,23 +3703,22 @@ class TSOLIIN_Admin {
 		$view_post_id = isset( $_POST['post_id'] ) ? absint( $_POST['post_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$nudge        = isset( $_POST['nudge'] ) && '1' === sanitize_text_field( wp_unslash( $_POST['nudge'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$check_session = isset( $_POST['check_session_active'] ) && '1' === sanitize_text_field( wp_unslash( $_POST['check_session_active'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
-		$scan_session  = isset( $_POST['scan_session_active'] ) && '1' === sanitize_text_field( wp_unslash( $_POST['scan_session_active'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
-		if ( $nudge && $check_session && ! get_option( 'tsoliin_bg_check_running' ) && $this->db->get_pending_check_count( $view_post_id ) > 0 ) {
-			$this->cron->start_bg_check( true, $view_post_id );
+		$stored_post_id = absint( get_option( 'tsoliin_bg_check_post_id', 0 ) );
+		if ( $nudge
+			&& $check_session
+			&& ! get_option( 'tsoliin_bg_scan_running' )
+			&& ! get_option( 'tsoliin_bg_check_running' )
+			&& ! get_option( 'tsoliin_bg_check_user_stopped' )
+			&& $this->db->get_pending_check_count( $stored_post_id ) > 0 ) {
+			$this->cron->start_bg_check( true, $stored_post_id );
 		}
-		// Only advance heavy bg work while the admin session is actively watching (poll fallback).
-		if ( $check_session && get_option( 'tsoliin_bg_check_running' ) ) {
-			$this->cron->ensure_bg_check_progress();
-		}
-		if ( $scan_session && get_option( 'tsoliin_bg_scan_running' ) ) {
-			$this->cron->ensure_bg_scan_progress();
-		}
+		// Progress poll is UI-only. Scan/check ticks, keep-alive, and cron advance the jobs.
 		$bg           = $this->cron->get_bg_progress();
 		$scan         = $this->cron->get_bg_scan_progress();
 		$post_id      = isset( $bg['post_id'] ) ? absint( $bg['post_id'] ) : 0;
 		$pending_view = $this->db->get_pending_check_count( $view_post_id );
 		$stats        = $post_id ? $this->db->get_stats_for_post( $post_id ) : $this->db->get_stats();
-		$done         = ! $bg['running'] && $bg['total'] > 0 && empty( $this->db->get_links_batch_for_check( 1, $post_id ) );
+		$done         = ! $bg['running'] && ! empty( $bg['complete'] ) && (int) $bg['pending'] <= 0;
 		if ( $bg['running'] ) {
 			/* translators: 1: checked count, 2: total count */
 			$message = sprintf( __( 'Checking %1$d of %2$d...', 'tso-link-inspector' ), $bg['checked'], $bg['total'] );
@@ -3484,8 +3729,13 @@ class TSOLIIN_Admin {
 		}
 
 		if ( $scan['running'] ) {
-			/* translators: 1: scanned count, 2: total count */
-			$scan_message = sprintf( __( 'Scanning %1$d of %2$d...', 'tso-link-inspector' ), $scan['scanned'], $scan['total'] );
+			$phase = isset( $scan['phase'] ) ? (string) $scan['phase'] : 'posts';
+			if ( (int) $scan['total'] > 0 && (int) $scan['scanned'] >= (int) $scan['total'] && 'posts' !== $phase && 'done' !== $phase ) {
+				$scan_message = __( 'Posts scanned. Finishing comments, menus and other sources…', 'tso-link-inspector' );
+			} else {
+				/* translators: 1: scanned count, 2: total count */
+				$scan_message = sprintf( __( 'Scanning %1$d of %2$d...', 'tso-link-inspector' ), $scan['scanned'], $scan['total'] );
+			}
 		} elseif ( ! empty( $scan['done'] ) ) {
 			$scan_message = __( 'Scan completed!', 'tso-link-inspector' );
 		} elseif ( '' !== $scan['error'] ) {
@@ -3509,6 +3759,8 @@ class TSOLIIN_Admin {
 				'pct'     => $bg['pct'],
 				'post_id' => $post_id,
 				'pending' => $pending_view,
+				'bg_pending' => isset( $bg['pending'] ) ? absint( $bg['pending'] ) : 0,
+				'complete'=> ! empty( $bg['complete'] ),
 				'broken'  => $stats['broken'],
 				'done'    => $done,
 				'message' => $message,

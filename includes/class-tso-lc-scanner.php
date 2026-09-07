@@ -2295,11 +2295,12 @@ class TSOLIIN_Scanner {
 	/**
 	 * Scan a batch of posts.
 	 *
-	 * @param int $page     1-based page.
-	 * @param int $per_page Batch size.
+	 * @param int  $page       1-based page.
+	 * @param int  $per_page   Batch size.
+	 * @param bool $posts_only When true, skip comments/menus/terms/FSE/widgets (handled by the BG worker phases).
 	 * @return array { scanned: int, found: int, done: bool }
 	 */
-	public function scan_batch( $page = 1, $per_page = TSOLIIN_BATCH_SIZE ) {
+	public function scan_batch( $page = 1, $per_page = TSOLIIN_BATCH_SIZE, $posts_only = false ) {
 		$ids   = $this->get_post_ids( $page, $per_page );
 		$total = $this->get_total_posts();
 		$done  = empty( $ids ) || ( $page * $per_page >= $total ) || ( count( $ids ) < $per_page );
@@ -2309,30 +2310,34 @@ class TSOLIIN_Scanner {
 			foreach ( $ids as $id ) {
 				$found += $this->scan_post( $id );
 			}
-			if ( $this->opt( 'scan_comments' ) ) {
-				$found = $this->add_scan_batch_found( $found, $this->scan_comments_batch( TSOLIIN_BATCH_SIZE * 5 ) );
-			}
-			if ( $this->opt( 'scan_menus', true ) ) {
-				$found = $this->add_scan_batch_found( $found, $this->scan_menus_batch( TSOLIIN_BATCH_SIZE * 5 ) );
-			}
-			if ( $this->opt( 'scan_terms', true ) ) {
-				$found = $this->add_scan_batch_found( $found, $this->scan_terms_batch( TSOLIIN_BATCH_SIZE * 5 ) );
-			}
-			if ( $this->opt( 'scan_fse', true ) ) {
-				$found = $this->add_scan_batch_found( $found, $this->scan_fse_batch( TSOLIIN_BATCH_SIZE * 2 ) );
-			}
-			if ( class_exists( 'TSOLIIN_Sources' ) ) {
-				$found += TSOLIIN_Sources::scan_registered_batch( $this, TSOLIIN_BATCH_SIZE * 2 );
+			if ( ! $posts_only ) {
+				if ( $this->opt( 'scan_comments' ) ) {
+					$found = $this->add_scan_batch_found( $found, $this->scan_comments_batch( TSOLIIN_BATCH_SIZE * 5 ) );
+				}
+				if ( $this->opt( 'scan_menus', true ) ) {
+					$found = $this->add_scan_batch_found( $found, $this->scan_menus_batch( TSOLIIN_BATCH_SIZE * 5 ) );
+				}
+				if ( $this->opt( 'scan_terms', true ) ) {
+					$found = $this->add_scan_batch_found( $found, $this->scan_terms_batch( TSOLIIN_BATCH_SIZE * 5 ) );
+				}
+				if ( $this->opt( 'scan_fse', true ) ) {
+					$found = $this->add_scan_batch_found( $found, $this->scan_fse_batch( TSOLIIN_BATCH_SIZE * 2 ) );
+				}
+				if ( class_exists( 'TSOLIIN_Sources' ) ) {
+					$found += TSOLIIN_Sources::scan_registered_batch( $this, TSOLIIN_BATCH_SIZE * 2 );
+				}
 			}
 		}
 
-		if ( $done && $this->is_scan_widgets_enabled() ) {
-			$found = $this->add_scan_batch_found( $found, $this->scan_all_widgets() );
-		} elseif ( ! empty( $ids ) && $this->is_scan_widgets_enabled() ) {
-			$found = $this->add_scan_batch_found( $found, $this->scan_widgets_batch( TSOLIIN_BATCH_SIZE * 3 ) );
-		}
-		if ( $done && $this->opt( 'scan_meta' ) && class_exists( 'TSOLIIN_Acf', false ) && TSOLIIN_Acf::is_plugin_active() ) {
-			$found = $this->add_scan_batch_found( $found, $this->scan_acf_options() );
+		if ( ! $posts_only ) {
+			if ( $done && $this->is_scan_widgets_enabled() ) {
+				$found = $this->add_scan_batch_found( $found, $this->scan_all_widgets() );
+			} elseif ( ! empty( $ids ) && $this->is_scan_widgets_enabled() ) {
+				$found = $this->add_scan_batch_found( $found, $this->scan_widgets_batch( TSOLIIN_BATCH_SIZE * 3 ) );
+			}
+			if ( $done && $this->opt( 'scan_meta' ) && class_exists( 'TSOLIIN_Acf', false ) && TSOLIIN_Acf::is_plugin_active() ) {
+				$found = $this->add_scan_batch_found( $found, $this->scan_acf_options() );
+			}
 		}
 		return array( 'scanned' => count( $ids ), 'found' => $found, 'done' => $done );
 	}

@@ -36,11 +36,16 @@ $tsoliin_options = array(
 	'tsoliin_last_check_batch',
 	'tsoliin_last_check_count',
 	'tsoliin_bg_check_running',
+	'tsoliin_bg_check_complete',
+	'tsoliin_bg_check_token',
+	'tsoliin_bg_check_last_error',
 	'tsoliin_bg_check_checked',
 	'tsoliin_bg_check_total',
 	'tsoliin_bg_check_started',
 	'tsoliin_bg_check_post_id',
 	'tsoliin_bg_scan_running',
+	'tsoliin_bg_scan_token',
+	'tsoliin_bg_scan_phase',
 	'tsoliin_bg_scan_page',
 	'tsoliin_bg_scan_total',
 	'tsoliin_bg_scan_scanned',
@@ -56,6 +61,7 @@ $tsoliin_options = array(
 	'tsoliin_broken_digest_last_sent',
 	'tsoliin_immediate_broken_queue',
 	'tsoliin_bg_check_empty_retries',
+	'tsoliin_bg_check_user_stopped',
 	'tsoliin_site_gate_state',
 );
 foreach ( $tsoliin_options as $tsoliin_option_name ) {
@@ -74,6 +80,9 @@ $tsoliin_transients = array(
 	'tsoliin_scan_lock_widgets',
 	'tsoliin_scan_lock_acfopt',
 	'tsoliin_immediate_queue_lock',
+	'tsoliin_bg_scan_step_lock',
+	'tsoliin_bg_check_step_lock',
+	'tsoliin_bg_lifecycle_start_lock',
 	'tsoliin_site_gate',
 );
 foreach ( $tsoliin_transients as $tsoliin_transient_name ) {

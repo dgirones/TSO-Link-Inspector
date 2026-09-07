@@ -31,6 +31,9 @@ class TSOLIIN_HTTP {
 	/** @var int Request timeout in seconds. */
 	private $timeout;
 
+	/** @var int|null Temporary timeout cap for bulk background checks. */
+	private $timeout_override = null;
+
 	/** @var bool Curl DNS pinning active for the current check_request(). */
 	private static $dns_pinning = false;
 
@@ -40,6 +43,36 @@ class TSOLIIN_HTTP {
 	public function __construct() {
 		$s             = get_option( 'tsoliin_settings', array() );
 		$this->timeout = isset( $s['timeout'] ) ? absint( $s['timeout'] ) : 15;
+	}
+
+	/**
+	 * Cap per-request wait during bulk Check now / cron so dead URLs do not stall the queue.
+	 *
+	 * Manual single rechecks keep the full settings timeout.
+	 *
+	 * @param int $seconds Upper bound in seconds.
+	 */
+	public function begin_bulk_timeout( $seconds = 8 ) {
+		$this->timeout_override = max( 3, min( absint( $seconds ), max( 3, (int) $this->timeout ) ) );
+	}
+
+	/**
+	 * Restore the configured HTTP timeout after a bulk run.
+	 */
+	public function end_bulk_timeout() {
+		$this->timeout_override = null;
+	}
+
+	/**
+	 * Timeout used by check_request().
+	 *
+	 * @return int
+	 */
+	private function get_request_timeout() {
+		if ( null !== $this->timeout_override ) {
+			return (int) $this->timeout_override;
+		}
+		return max( 3, (int) $this->timeout );
 	}
 
 	/**
@@ -1813,7 +1846,7 @@ class TSOLIIN_HTTP {
 		// Do NOT let WordPress auto-follow redirects (redirection => 0).
 		// We follow manually so we can capture the final URL of the redirect chain.
 		$args = array(
-			'timeout'             => $this->timeout,
+			'timeout'             => $this->get_request_timeout(),
 			'redirection'         => 0,
 			'reject_unsafe_urls'  => true,
 			'user-agent'          => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',

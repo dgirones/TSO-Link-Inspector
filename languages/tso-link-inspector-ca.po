@@ -2888,6 +2888,9 @@ msgstr "Atura"
 msgid "Scanning %1$d of %2$d..."
 msgstr "Escanejant %1$d de %2$d..."
 
+msgid "Posts scanned. Finishing comments, menus and other sources…"
+msgstr "Entrades escanejades. Acabant comentaris, menús i altres fonts…"
+
 msgid "Source"
 msgstr "Font"
 
@@ -3418,3 +3421,21 @@ msgstr "Cerca URL"
 
 msgid "%d unchecked"
 msgstr "%d sense comprovar"
+
+msgid "Day mode"
+msgstr "Mode dia"
+
+msgid "Night mode"
+msgstr "Mode nit"
+
+msgid "Auto mode"
+msgstr "Mode auto"
+
+msgid "Follows sunrise and sunset (changes with the seasons)"
+msgstr "Segons alba i ocàs (canvia amb l’estació)"
+
+msgid "Your admin session expired. Reload this page to keep monitoring the background task."
+msgstr "La sessió d’administració ha caducat. Torna a carregar aquesta pàgina per continuar supervisant la tasca en segon pla."
+
+msgid "Another background task is changing state. Try again in a moment."
+msgstr "Una altra tasca en segon pla està canviant d’estat. Torna-ho a provar d’aquí a un moment."

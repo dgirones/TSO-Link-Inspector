@@ -19,13 +19,15 @@ class TSOLIIN_Cron {
 	const HOOK_CHECK        = 'tsoliin_cron_check';
 	const HOOK_BG_STEP      = 'tsoliin_bg_check_step';
 	const HOOK_BG_SCAN_STEP = 'tsoliin_bg_scan_step';
-	const BG_BATCH            = 20;
-	const BG_POLL_BATCH       = 5;
-	const BG_POLL_TIME_BUDGET = 20;
-	const BG_SCAN_TIME_BUDGET = 25;
+	const BG_BATCH            = 25;
+	const BG_POLL_BATCH       = 25;
+	const BG_TICK_TIME_BUDGET = 12;
+	const BG_CRON_TIME_BUDGET = 40;
+	const BG_STEP_LOCK_TTL    = 50;
+	const BG_RECOVERY_DELAY   = 90;
 	const OPT_IMMEDIATE_QUEUE = 'tsoliin_immediate_broken_queue';
 	const OPT_EMPTY_BATCH_RETRIES = 'tsoliin_bg_check_empty_retries';
-	const MAX_EMPTY_BATCH_RETRIES = 5;
+	const OPT_USER_STOPPED_CHECK  = 'tsoliin_bg_check_user_stopped';
 
 	/** @var TSOLIIN_DB */
 	private $db;
@@ -45,6 +47,8 @@ class TSOLIIN_Cron {
 		add_action( self::HOOK_CHECK,        array( $this, 'run_check_batch' ) );
 		add_action( self::HOOK_BG_STEP,      array( $this, 'run_bg_step' ) );
 		add_action( self::HOOK_BG_SCAN_STEP, array( $this, 'run_bg_scan_step' ) );
+		add_action( 'admin_init',             array( $this, 'maybe_run_overdue_bg_workers' ), 30 );
+		add_filter( 'heartbeat_received',      array( $this, 'heartbeat_drive_bg_jobs' ), 10, 2 );
 	}
 
 	// -------------------------------------------------------------------------
@@ -70,74 +74,12 @@ class TSOLIIN_Cron {
 	// Periodic handlers
 	// -------------------------------------------------------------------------
 
-	/** Daily: scan all posts, then continue with comment batches until time budget or full comment cycle. */
+	/** Daily: resume or start the persistent background scan (never restart from page 1). */
 	public function run_scan() {
-		$page  = 1;
-		$start = microtime( true );
-		$r     = array( 'done' => false );
-		do {
-			$r = $this->scanner->scan_batch( $page, TSOLIIN_BATCH_SIZE );
-			$page++;
-			if ( ( microtime( true ) - $start ) > 55 ) {
-				break;
-			}
-		} while ( ! $r['done'] );
-
-		if ( $this->scanner->is_scan_comments_enabled() ) {
-			while ( ( microtime( true ) - $start ) < 55 ) {
-				$n = $this->scanner->scan_comments_batch( self::BG_BATCH );
-				if ( TSOLIIN_Scanner::SCAN_LOCK_BUSY === $n ) {
-					break;
-				}
-				if ( 0 === $n ) {
-					break;
-				}
-			}
+		if ( get_option( 'tsoliin_bg_check_running' ) ) {
+			return;
 		}
-
-		if ( $this->scanner->is_scan_widgets_enabled() ) {
-			$this->scanner->scan_all_widgets();
-		}
-
-		if ( $this->is_scan_setting_enabled( 'scan_meta', false ) ) {
-			$this->scanner->scan_acf_options();
-		}
-
-		$this->drain_extended_scan_batches( $start );
-
-		if ( ! empty( $r['done'] ) ) {
-			update_option( 'tsoliin_last_full_scan', current_time( 'mysql', true ), false );
-		}
-	}
-
-	/**
-	 * Continue menu/term/FSE scan cursors during daily cron (matches UI scan_batch coverage).
-	 *
-	 * @param float $start microtime( true ) when run_scan() began.
-	 * @return void
-	 */
-	private function drain_extended_scan_batches( $start ) {
-		$batches = array();
-		if ( $this->is_scan_setting_enabled( 'scan_menus', true ) ) {
-			$batches[] = array( 'scan_menus_batch', self::BG_BATCH );
-		}
-		if ( $this->is_scan_setting_enabled( 'scan_terms', true ) ) {
-			$batches[] = array( 'scan_terms_batch', self::BG_BATCH );
-		}
-		if ( $this->is_scan_setting_enabled( 'scan_fse', true ) ) {
-			$batches[] = array( 'scan_fse_batch', max( 5, (int) floor( self::BG_BATCH / 2 ) ) );
-		}
-		foreach ( $batches as $batch ) {
-			while ( ( microtime( true ) - $start ) < 55 ) {
-				$n = call_user_func( array( $this->scanner, $batch[0] ), $batch[1] );
-				if ( TSOLIIN_Scanner::SCAN_LOCK_BUSY === $n ) {
-					break;
-				}
-				if ( 0 === $n ) {
-					break;
-				}
-			}
-		}
+		$this->start_bg_scan( true );
 	}
 
 	/**
@@ -155,6 +97,22 @@ class TSOLIIN_Cron {
 
 	/** Hourly: check a batch of stale links. */
 	public function run_check_batch() {
+		if ( get_option( 'tsoliin_bg_scan_running' ) ) {
+			return;
+		}
+		// Keep an abandoned Scan→Check / Check now run going until the queue is empty.
+		$this->maybe_resume_incomplete_bg_check();
+		if ( get_option( 'tsoliin_bg_check_running' ) ) {
+			return;
+		}
+		if ( get_option( self::OPT_USER_STOPPED_CHECK ) ) {
+			$stopped_post_id = absint( get_option( 'tsoliin_bg_check_post_id', 0 ) );
+			if ( $this->db->get_pending_check_count( $stopped_post_id ) > 0 ) {
+				return;
+			}
+			delete_option( self::OPT_USER_STOPPED_CHECK );
+		}
+
 		$schedule   = TSOLIIN_Schedule::get_settings();
 		$batch      = $schedule['cron_check_batch'];
 		$links      = $this->db->get_links_for_cron_check( $batch, $schedule['recheck_days'], $schedule['broken_recheck_days'] );
@@ -168,8 +126,16 @@ class TSOLIIN_Cron {
 
 		$checked        = 0;
 		$newly_detected = array();
+		$started_at = microtime( true );
 		foreach ( $links as $link ) {
-			$check = $this->check_link_row( $link );
+			if ( ( microtime( true ) - $started_at ) >= 45 ) {
+				break;
+			}
+			try {
+				$check = $this->check_link_row( $link );
+			} catch ( \Throwable $e ) {
+				continue;
+			}
 			if ( null === $check ) {
 				continue;
 			}
@@ -197,48 +163,85 @@ class TSOLIIN_Cron {
 	 * Start or resume a full content scan.
 	 *
 	 * @param bool $resume When true, continue from the stored page cursor when the last run did not finish.
+	 * @param bool $spawn  When false, do not spawn WP-Cron (admin AJAX loop drives the batches).
 	 */
-	public function start_bg_scan( $resume = true ) {
-		$resume  = (bool) $resume;
-		$running = (int) get_option( 'tsoliin_bg_scan_running', 0 );
+	/**
+	 * Take the start lock, stealing a stale one so an explicit Scan/Check is not blocked.
+	 *
+	 * @return bool
+	 */
+	private function acquire_lifecycle_lock() {
+		if ( $this->db->acquire_transient_lock( 'tsoliin_bg_lifecycle_start_lock', 15 ) ) {
+			return true;
+		}
+		$this->db->release_transient_lock( 'tsoliin_bg_lifecycle_start_lock' );
+		return $this->db->acquire_transient_lock( 'tsoliin_bg_lifecycle_start_lock', 15 );
+	}
 
-		if ( $running && $resume ) {
-			$ts = wp_next_scheduled( self::HOOK_BG_SCAN_STEP );
-			if ( ! $ts ) {
-				wp_schedule_single_event( time(), self::HOOK_BG_SCAN_STEP );
+	public function start_bg_scan( $resume = true, $spawn = true ) {
+		if ( get_option( 'tsoliin_bg_check_running' ) ) {
+			$this->stop_bg_check();
+		}
+		if ( ! $this->acquire_lifecycle_lock() ) {
+			return false;
+		}
+		try {
+			if ( get_option( 'tsoliin_bg_check_running' ) ) {
+				$this->stop_bg_check();
+			}
+			$resume  = (bool) $resume;
+			$spawn   = (bool) $spawn;
+			$running = (int) get_option( 'tsoliin_bg_scan_running', 0 );
+
+			if ( $running && $resume ) {
+				if ( '' === (string) get_option( 'tsoliin_bg_scan_token', '' ) ) {
+					update_option( 'tsoliin_bg_scan_token', wp_generate_uuid4(), false );
+				}
+				$this->schedule_bg_scan_step_if_needed( $spawn ? 0 : self::BG_RECOVERY_DELAY );
+				if ( $spawn ) {
+					spawn_cron();
+				}
+				return true;
+			}
+
+			if ( $running && ! $resume ) {
+				$this->stop_bg_scan();
+			}
+
+			$this->db->release_transient_lock( 'tsoliin_bg_scan_step_lock' );
+
+			$total    = $this->scanner->get_total_posts();
+			$complete = (int) get_option( 'tsoliin_bg_scan_complete', 1 );
+			$page     = max( 1, (int) get_option( 'tsoliin_bg_scan_page', 1 ) );
+			$scanned  = (int) get_option( 'tsoliin_bg_scan_scanned', 0 );
+
+			if ( $resume && ! $complete ) {
+				// Keep stored post and extended-source cursors.
+			} else {
+				$this->reset_bg_scan_cursors();
+				$page    = 1;
+				$scanned = 0;
+				update_option( 'tsoliin_bg_scan_phase', 'posts', false );
+			}
+
+			delete_option( 'tsoliin_bg_scan_error' );
+			update_option( 'tsoliin_bg_scan_running', 1, false );
+			update_option( 'tsoliin_bg_scan_token', wp_generate_uuid4(), false );
+			update_option( 'tsoliin_bg_scan_page', $page, false );
+			update_option( 'tsoliin_bg_scan_total', (int) $total, false );
+			update_option( 'tsoliin_bg_scan_scanned', (int) $scanned, false );
+			update_option( 'tsoliin_bg_scan_complete', 0, false );
+			update_option( 'tsoliin_bg_scan_started', current_time( 'mysql', true ), false );
+
+			wp_clear_scheduled_hook( self::HOOK_BG_SCAN_STEP );
+			wp_schedule_single_event( time() + ( $spawn ? 0 : self::BG_RECOVERY_DELAY ), self::HOOK_BG_SCAN_STEP );
+			if ( $spawn ) {
 				spawn_cron();
 			}
-			return;
+			return true;
+		} finally {
+			$this->db->release_transient_lock( 'tsoliin_bg_lifecycle_start_lock' );
 		}
-
-		if ( $running && ! $resume ) {
-			$this->stop_bg_scan();
-		}
-
-		$total    = $this->scanner->get_total_posts();
-		$complete = (int) get_option( 'tsoliin_bg_scan_complete', 1 );
-		$page     = max( 1, (int) get_option( 'tsoliin_bg_scan_page', 1 ) );
-		$scanned  = (int) get_option( 'tsoliin_bg_scan_scanned', 0 );
-
-		if ( $resume && ! $complete && $total > 0 && $scanned > 0 && $scanned < $total ) {
-			// Keep stored page/scanned cursors.
-		} else {
-			$this->reset_bg_scan_cursors();
-			$page    = 1;
-			$scanned = 0;
-		}
-
-		delete_option( 'tsoliin_bg_scan_error' );
-		update_option( 'tsoliin_bg_scan_running', 1, false );
-		update_option( 'tsoliin_bg_scan_page', $page, false );
-		update_option( 'tsoliin_bg_scan_total', (int) $total, false );
-		update_option( 'tsoliin_bg_scan_scanned', (int) $scanned, false );
-		update_option( 'tsoliin_bg_scan_complete', 0, false );
-		update_option( 'tsoliin_bg_scan_started', current_time( 'mysql', true ), false );
-
-		wp_clear_scheduled_hook( self::HOOK_BG_SCAN_STEP );
-		wp_schedule_single_event( time(), self::HOOK_BG_SCAN_STEP );
-		spawn_cron();
 	}
 
 	/**
@@ -247,75 +250,229 @@ class TSOLIIN_Cron {
 	public function stop_bg_scan() {
 		update_option( 'tsoliin_bg_scan_running', 0, false );
 		update_option( 'tsoliin_bg_scan_complete', 0, false );
+		update_option( 'tsoliin_bg_scan_token', wp_generate_uuid4(), false );
 		wp_clear_scheduled_hook( self::HOOK_BG_SCAN_STEP );
+		$this->db->release_transient_lock( 'tsoliin_bg_scan_step_lock' );
 	}
 
 	/**
-	 * Execute one or more scan batches within a time budget (WP-Cron / spawn_cron).
+	 * Seconds of work allowed in one worker invocation.
+	 *
+	 * @param bool $spawn True for WP-Cron / spawn_cron; false for admin AJAX ticks.
+	 * @return int
 	 */
-	public function run_bg_scan_step() {
+	private function get_worker_time_budget( $spawn ) {
+		return $spawn ? self::BG_CRON_TIME_BUDGET : self::BG_TICK_TIME_BUDGET;
+	}
+
+	/**
+	 * Keep PHP working after the browser leaves the plugin screen.
+	 */
+	private function ignore_worker_abort() {
+		if ( function_exists( 'ignore_user_abort' ) ) {
+			// phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- Finish the in-flight batch after the admin leaves the screen.
+			ignore_user_abort( true );
+		}
+	}
+
+	/**
+	 * Execute scan batches until the time budget is exhausted.
+	 *
+	 * @param int|null $max_batches      Cap on post pages this tick. Null uses the time budget only.
+	 * @param bool     $spawn            When false, keep a recovery cron only (AJAX loop is driving).
+	 * @param int|null $budget_override  Seconds of work; null uses the spawn/tick default.
+	 * @return string idle|busy|ok
+	 */
+	public function run_bg_scan_step( $max_batches = null, $spawn = true, $budget_override = null ) {
 		if ( ! get_option( 'tsoliin_bg_scan_running' ) ) {
-			return;
+			return 'idle';
+		}
+		if ( ! $this->db->acquire_transient_lock( 'tsoliin_bg_scan_step_lock', self::BG_STEP_LOCK_TTL ) ) {
+			$this->schedule_bg_scan_step_if_needed( 2 );
+			return 'busy';
 		}
 
-		if ( function_exists( 'set_time_limit' ) ) {
-			// phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged, WordPress.PHP.NoSilencedErrors.Discouraged -- WP-Cron scan batch may exceed host max_execution_time.
-			@set_time_limit( 60 );
+		$this->ignore_worker_abort();
+		$run_token   = (string) get_option( 'tsoliin_bg_scan_token', '' );
+		if ( 'done' === (string) get_option( 'tsoliin_bg_scan_phase', 'posts' ) && $this->is_bg_scan_run_active( $run_token ) ) {
+			$this->finalize_bg_scan_completion( $run_token );
+			$this->db->release_transient_lock( 'tsoliin_bg_scan_step_lock' );
+			return 'ok';
 		}
+		$max_batches = null === $max_batches ? 500 : max( 1, absint( $max_batches ) );
+		$spawn       = (bool) $spawn;
+		$budget      = null !== $budget_override ? max( 1, (float) $budget_override ) : $this->get_worker_time_budget( $spawn );
+		$this->schedule_bg_scan_recovery_event();
 
-		$start = microtime( true );
-		$page  = max( 1, (int) get_option( 'tsoliin_bg_scan_page', 1 ) );
-		$total = (int) get_option( 'tsoliin_bg_scan_total', 0 );
-		if ( $total <= 0 ) {
-			$total = $this->scanner->get_total_posts();
+		try {
+			if ( function_exists( 'set_time_limit' ) ) {
+				// phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged, WordPress.PHP.NoSilencedErrors.Discouraged -- Scan tick/cron may exceed host max_execution_time.
+				@set_time_limit( max( 60, $budget + 20 ) );
+			}
+
+			$start = microtime( true );
+			$page  = max( 1, (int) get_option( 'tsoliin_bg_scan_page', 1 ) );
+			$total = max( (int) get_option( 'tsoliin_bg_scan_total', 0 ), (int) $this->scanner->get_total_posts() );
+			$phase = (string) get_option( 'tsoliin_bg_scan_phase', 'posts' );
 			update_option( 'tsoliin_bg_scan_total', (int) $total, false );
-		}
 
-		$done = false;
-		do {
-			try {
-				$result = $this->scanner->scan_batch( $page, TSOLIIN_BATCH_SIZE );
-			} catch ( \Throwable $e ) {
+			if ( 'posts' === $phase ) {
+				$batches_done = 0;
+				while ( $batches_done < $max_batches && ( microtime( true ) - $start ) < $budget ) {
+					if ( ! $this->is_bg_scan_run_active( $run_token ) ) {
+						return 'idle';
+					}
+					$result = $this->scanner->scan_batch( $page, TSOLIIN_BATCH_SIZE, true );
+					if ( ! $this->is_bg_scan_run_active( $run_token ) ) {
+						return 'idle';
+					}
+					++$page;
+					++$batches_done;
+					update_option( 'tsoliin_bg_scan_page', $page, false );
+
+					$scanned = min( ( $page - 1 ) * TSOLIIN_BATCH_SIZE, $total );
+					update_option( 'tsoliin_bg_scan_scanned', (int) $scanned, false );
+					update_option( 'tsoliin_total_posts_scanned', (int) $scanned, false );
+					update_option( 'tsoliin_bg_scan_started', current_time( 'mysql', true ), false );
+
+					if ( ! empty( $result['done'] ) ) {
+						update_option( 'tsoliin_bg_scan_phase', $this->get_first_bg_scan_extended_phase(), false );
+						break;
+					}
+				}
+			}
+
+			if ( $this->is_bg_scan_run_active( $run_token )
+				&& 'posts' !== (string) get_option( 'tsoliin_bg_scan_phase', 'posts' ) ) {
+				if ( ( microtime( true ) - $start ) >= $budget ) {
+					$start  = microtime( true );
+					$budget = (float) self::BG_TICK_TIME_BUDGET;
+				}
+				if ( $this->process_bg_scan_extended_phases( $start, $run_token, $budget ) ) {
+					$this->finalize_bg_scan_completion( $run_token );
+					return 'ok';
+				}
+			}
+
+			if ( $this->is_bg_scan_run_active( $run_token ) ) {
+				if ( $spawn ) {
+					$this->reschedule_bg_scan_step( 0 );
+				} else {
+					$this->schedule_bg_scan_recovery_event();
+				}
+			}
+			return 'ok';
+		} catch ( \Throwable $e ) {
+			if ( $this->is_bg_scan_run_active( $run_token ) ) {
 				$this->record_bg_scan_error( $e->getMessage() );
-				return;
 			}
+			return 'idle';
+		} finally {
+			$this->db->release_transient_lock( 'tsoliin_bg_scan_step_lock' );
+		}
+	}
 
-			$page++;
-			update_option( 'tsoliin_bg_scan_page', $page, false );
+	/**
+	 * Run enabled non-post sources until the time budget is exhausted.
+	 *
+	 * @param float  $started_at Worker start time.
+	 * @param string $run_token  Current scan generation.
+	 * @param float  $budget     Seconds allowed for this invocation.
+	 * @return bool True when every enabled source completed a full cycle.
+	 */
+	private function process_bg_scan_extended_phases( $started_at, $run_token, $budget = 0 ) {
+		$budget = $budget > 0 ? (float) $budget : (float) self::BG_CRON_TIME_BUDGET;
+		$phases = $this->get_bg_scan_extended_phases();
+		$phase  = (string) get_option( 'tsoliin_bg_scan_phase', $this->get_first_bg_scan_extended_phase() );
+		$index  = array_search( $phase, array_keys( $phases ), true );
+		$index  = false === $index ? 0 : (int) $index;
+		$names  = array_keys( $phases );
 
-			$scanned = min( ( $page - 1 ) * TSOLIIN_BATCH_SIZE, $total );
-			update_option( 'tsoliin_bg_scan_scanned', (int) $scanned, false );
-			update_option( 'tsoliin_total_posts_scanned', (int) $scanned, false );
-			// Heartbeat so long scans are not marked stale after 30 minutes from start.
+		while ( $index < count( $names ) && ( microtime( true ) - $started_at ) < $budget ) {
+			if ( ! $this->is_bg_scan_run_active( $run_token ) ) {
+				return false;
+			}
+			$name   = $names[ $index ];
+			$method = $phases[ $name ];
+			if ( 'registered' === $name ) {
+				if ( class_exists( 'TSOLIIN_Sources' ) ) {
+					TSOLIIN_Sources::scan_registered_batch( $this->scanner, TSOLIIN_BATCH_SIZE * 2 );
+				}
+				$result = 0;
+			} else {
+				$result = call_user_func( array( $this->scanner, $method[0] ), $method[1] );
+				if ( 'acf' === $name && TSOLIIN_Scanner::SCAN_LOCK_BUSY !== $result ) {
+					$result = 0;
+				}
+				if ( 'widgets' === $name
+					&& TSOLIIN_Scanner::SCAN_LOCK_BUSY !== $result
+					&& 0 === (int) get_option( 'tsoliin_widget_scan_after_index', 0 ) ) {
+					$result = 0;
+				}
+			}
 			update_option( 'tsoliin_bg_scan_started', current_time( 'mysql', true ), false );
-
-			if ( ! empty( $result['done'] ) ) {
-				$done = true;
-				break;
+			if ( TSOLIIN_Scanner::SCAN_LOCK_BUSY === $result ) {
+				return false;
 			}
-		} while ( ( microtime( true ) - $start ) < self::BG_SCAN_TIME_BUDGET );
-
-		if ( $done ) {
-			$this->finalize_bg_scan_completion();
-			return;
+			if ( 0 !== $result ) {
+				continue;
+			}
+			++$index;
+			update_option( 'tsoliin_bg_scan_phase', isset( $names[ $index ] ) ? $names[ $index ] : 'done', false );
 		}
 
-		// Avoid stacking duplicate step events if cron overlaps.
-		wp_clear_scheduled_hook( self::HOOK_BG_SCAN_STEP );
-		wp_schedule_single_event( time() + 2, self::HOOK_BG_SCAN_STEP );
-		spawn_cron();
+		return $index >= count( $names );
+	}
+
+	/**
+	 * Enabled extended-source phases in execution order.
+	 *
+	 * @return array<string,array{0:string,1:int}>
+	 */
+	private function get_bg_scan_extended_phases() {
+		$phases = array();
+		if ( $this->scanner->is_scan_comments_enabled() ) {
+			$phases['comments'] = array( 'scan_comments_batch', self::BG_BATCH );
+		}
+		if ( $this->is_scan_setting_enabled( 'scan_menus', true ) ) {
+			$phases['menus'] = array( 'scan_menus_batch', self::BG_BATCH );
+		}
+		if ( $this->is_scan_setting_enabled( 'scan_terms', true ) ) {
+			$phases['terms'] = array( 'scan_terms_batch', self::BG_BATCH );
+		}
+		if ( $this->is_scan_setting_enabled( 'scan_fse', true ) ) {
+			$phases['fse'] = array( 'scan_fse_batch', max( 5, (int) floor( self::BG_BATCH / 2 ) ) );
+		}
+		if ( $this->scanner->is_scan_widgets_enabled() ) {
+			$phases['widgets'] = array( 'scan_widgets_batch', self::BG_BATCH );
+		}
+		if ( $this->is_scan_setting_enabled( 'scan_meta', false ) ) {
+			$phases['acf'] = array( 'scan_acf_options', 1 );
+		}
+		$phases['registered'] = array( '', 0 );
+		return $phases;
+	}
+
+	/** @return string */
+	private function get_first_bg_scan_extended_phase() {
+		$names = array_keys( $this->get_bg_scan_extended_phases() );
+		return isset( $names[0] ) ? $names[0] : 'done';
 	}
 
 	/**
 	 * Mark a background scan complete and persist summary options.
 	 */
-	private function finalize_bg_scan_completion() {
+	private function finalize_bg_scan_completion( $run_token = '' ) {
+		if ( '' !== $run_token && ! $this->is_bg_scan_run_active( $run_token ) ) {
+			return;
+		}
 		$total = (int) get_option( 'tsoliin_bg_scan_total', 0 );
 		if ( $total <= 0 ) {
 			$total = $this->scanner->get_total_posts();
 		}
 		update_option( 'tsoliin_bg_scan_running', 0, false );
 		update_option( 'tsoliin_bg_scan_complete', 1, false );
+		update_option( 'tsoliin_bg_scan_phase', 'done', false );
 		update_option( 'tsoliin_bg_scan_scanned', (int) $total, false );
 		update_option( 'tsoliin_total_posts_scanned', (int) $total, false );
 		update_option( 'tsoliin_last_full_scan', current_time( 'mysql', true ), false );
@@ -337,6 +494,7 @@ class TSOLIIN_Cron {
 		update_option( 'tsoliin_bg_scan_error', $message, false );
 		update_option( 'tsoliin_bg_scan_running', 0, false );
 		update_option( 'tsoliin_bg_scan_complete', 0, false );
+		update_option( 'tsoliin_bg_scan_token', wp_generate_uuid4(), false );
 		wp_clear_scheduled_hook( self::HOOK_BG_SCAN_STEP );
 	}
 
@@ -363,12 +521,7 @@ class TSOLIIN_Cron {
 		if ( (int) get_option( 'tsoliin_bg_scan_complete', 1 ) ) {
 			return false;
 		}
-		$total   = (int) get_option( 'tsoliin_bg_scan_total', 0 );
-		$scanned = (int) get_option( 'tsoliin_bg_scan_scanned', 0 );
-		if ( $total <= 0 ) {
-			$total = $this->scanner->get_total_posts();
-		}
-		return $scanned > 0 && $scanned < $total;
+		return true;
 	}
 
 	/**
@@ -376,10 +529,30 @@ class TSOLIIN_Cron {
 	 *
 	 * @return void
 	 */
-	private function schedule_bg_scan_step_if_needed() {
+	private function schedule_bg_scan_step_if_needed( $delay = 0 ) {
 		if ( ! wp_next_scheduled( self::HOOK_BG_SCAN_STEP ) ) {
-			wp_schedule_single_event( time(), self::HOOK_BG_SCAN_STEP );
+			wp_schedule_single_event( time() + max( 0, absint( $delay ) ), self::HOOK_BG_SCAN_STEP );
 		}
+	}
+
+	/** Schedule a survivor event before heavy work starts. */
+	private function schedule_bg_scan_recovery_event() {
+		wp_clear_scheduled_hook( self::HOOK_BG_SCAN_STEP );
+		wp_schedule_single_event( time() + self::BG_RECOVERY_DELAY, self::HOOK_BG_SCAN_STEP );
+	}
+
+	/** @param int $delay Seconds before the next worker. */
+	private function reschedule_bg_scan_step( $delay ) {
+		wp_clear_scheduled_hook( self::HOOK_BG_SCAN_STEP );
+		wp_schedule_single_event( time() + max( 0, absint( $delay ) ), self::HOOK_BG_SCAN_STEP );
+		spawn_cron();
+	}
+
+	/** @param string $run_token Scan generation token. */
+	private function is_bg_scan_run_active( $run_token ) {
+		return get_option( 'tsoliin_bg_scan_running' )
+			&& '' !== $run_token
+			&& hash_equals( (string) get_option( 'tsoliin_bg_scan_token', '' ), (string) $run_token );
 	}
 
 	/**
@@ -387,10 +560,30 @@ class TSOLIIN_Cron {
 	 *
 	 * @return void
 	 */
-	private function schedule_bg_check_step_if_needed() {
+	private function schedule_bg_check_step_if_needed( $delay = 0 ) {
 		if ( ! wp_next_scheduled( self::HOOK_BG_STEP ) ) {
-			wp_schedule_single_event( time(), self::HOOK_BG_STEP );
+			wp_schedule_single_event( time() + max( 0, absint( $delay ) ), self::HOOK_BG_STEP );
 		}
+	}
+
+	/** Schedule a survivor event before HTTP work starts. */
+	private function schedule_bg_check_recovery_event() {
+		wp_clear_scheduled_hook( self::HOOK_BG_STEP );
+		wp_schedule_single_event( time() + self::BG_RECOVERY_DELAY, self::HOOK_BG_STEP );
+	}
+
+	/** @param int $delay Seconds before the next worker. */
+	private function reschedule_bg_check_step( $delay ) {
+		wp_clear_scheduled_hook( self::HOOK_BG_STEP );
+		wp_schedule_single_event( time() + max( 0, absint( $delay ) ), self::HOOK_BG_STEP );
+		spawn_cron();
+	}
+
+	/** @param string $run_token Check generation token. */
+	private function is_bg_check_run_active( $run_token ) {
+		return get_option( 'tsoliin_bg_check_running' )
+			&& '' !== $run_token
+			&& hash_equals( (string) get_option( 'tsoliin_bg_check_token', '' ), (string) $run_token );
 	}
 
 	/**
@@ -405,31 +598,25 @@ class TSOLIIN_Cron {
 		$complete = (bool) get_option( 'tsoliin_bg_scan_complete', 1 );
 		$started  = (string) get_option( 'tsoliin_bg_scan_started', '' );
 		$error    = (string) get_option( 'tsoliin_bg_scan_error', '' );
+		$phase    = (string) get_option( 'tsoliin_bg_scan_phase', 'posts' );
 
 		if ( $total <= 0 ) {
 			$total = $this->scanner->get_total_posts();
 		}
 
-		if ( $running && '' !== $started && ( time() - (int) strtotime( $started ) ) > 1800 ) {
-			$work_remaining = $scanned > 0 && $scanned < $total;
-			if ( $work_remaining ) {
-				// Work remains — reschedule without faking a successful batch heartbeat.
-				$this->schedule_bg_scan_step_if_needed();
-			} else {
-				$running = false;
-				update_option( 'tsoliin_bg_scan_running', 0, false );
-				wp_clear_scheduled_hook( self::HOOK_BG_SCAN_STEP );
-				if ( '' === $error ) {
-					$error = __( 'Scan timed out or was interrupted. Use Continue scan to resume.', 'tso-link-inspector' );
-					update_option( 'tsoliin_bg_scan_error', $error, false );
-				}
-			}
+		if ( $running && '' !== $started && ( time() - (int) strtotime( $started ) ) > 20 ) {
+			// Extra sources after 205/205 still need a worker; WP-Cron loopback often never fires.
+			$this->schedule_bg_scan_step_if_needed( 0 );
+			spawn_cron();
 		}
 
 		if ( $scanned > $total ) {
 			$scanned = $total;
 		}
 		$pct = ( $total > 0 ) ? min( 100, (int) round( ( $scanned / $total ) * 100 ) ) : 0;
+		if ( ! $complete && $pct >= 100 ) {
+			$pct = 99;
+		}
 
 		$resumable = $this->is_bg_scan_resumable();
 		// complete=1 after finalize; also treat total=0 as done so empty sites do not poll forever.
@@ -443,6 +630,7 @@ class TSOLIIN_Cron {
 			'complete'  => $complete,
 			'resumable' => $resumable,
 			'error'     => $error,
+			'phase'     => $phase,
 			'done'      => $done,
 		);
 	}
@@ -459,57 +647,92 @@ class TSOLIIN_Cron {
 	 *
 	 * @param bool $resume  Whether to resume partial progress when possible.
 	 * @param int  $post_id When > 0, only check links from this post.
+	 * @param bool $spawn   When false, do not spawn WP-Cron (admin AJAX loop drives the batches).
 	 */
-	public function start_bg_check( $resume = true, $post_id = 0 ) {
-		$resume  = (bool) $resume;
-		$post_id = absint( $post_id );
-		$running = (int) get_option( 'tsoliin_bg_check_running', 0 );
-
-		if ( $running && $resume ) {
-			$current_post_id = absint( get_option( 'tsoliin_bg_check_post_id', 0 ) );
-			if ( $current_post_id === $post_id ) {
-				$ts = wp_next_scheduled( self::HOOK_BG_STEP );
-				if ( ! $ts ) {
-					wp_schedule_single_event( time(), self::HOOK_BG_STEP );
-					spawn_cron();
-				}
-				return;
+	public function start_bg_check( $resume = true, $post_id = 0, $spawn = true ) {
+		if ( ! $this->acquire_lifecycle_lock() ) {
+			return false;
+		}
+		try {
+			if ( get_option( 'tsoliin_bg_scan_running' ) ) {
+				return false;
 			}
-			$this->stop_bg_check();
-			$running = 0;
-		}
+			$resume  = (bool) $resume;
+			$spawn   = (bool) $spawn;
+			$post_id = absint( $post_id );
+			$running = (int) get_option( 'tsoliin_bg_check_running', 0 );
 
-		if ( $running && ! $resume ) {
-			$this->stop_bg_check();
-		}
+			if ( $running && $resume ) {
+				$current_post_id = absint( get_option( 'tsoliin_bg_check_post_id', 0 ) );
+				if ( $current_post_id === $post_id ) {
+					if ( '' === (string) get_option( 'tsoliin_bg_check_token', '' ) ) {
+						update_option( 'tsoliin_bg_check_token', wp_generate_uuid4(), false );
+					}
+					$this->schedule_bg_check_step_if_needed( $spawn ? 0 : self::BG_RECOVERY_DELAY );
+					if ( $spawn ) {
+						spawn_cron();
+					}
+					return true;
+				}
+				$this->stop_bg_check();
+				$running = 0;
+			}
 
-		if ( $post_id > 0 ) {
-			$total = (int) $this->db->get_stats_for_post( $post_id )['total'];
-		} else {
-			$total = (int) $this->db->get_stats()['total'];
-		}
+			if ( $running && ! $resume ) {
+				$this->stop_bg_check();
+			}
 
-		$pending = $this->db->get_pending_check_count( $post_id );
-		if ( $resume && $pending > 0 ) {
-			$checked = max( 0, $total - $pending );
-		} else {
-			$this->db->reset_for_recheck( $post_id );
-			$checked = 0;
-		}
+			if ( $post_id > 0 ) {
+				$total = (int) $this->db->get_stats_for_post( $post_id )['total'];
+			} else {
+				$total = (int) $this->db->get_stats()['total'];
+			}
 
-		update_option( 'tsoliin_bg_check_running', 1, false );
-		update_option( 'tsoliin_bg_check_post_id', $post_id, false );
-		update_option( 'tsoliin_bg_check_total', (int) $total, false );
-		update_option( 'tsoliin_bg_check_checked', (int) $checked, false );
-		update_option( 'tsoliin_bg_check_started', current_time( 'mysql', true ), false );
-		$this->flush_immediate_broken_queue();
+			$pending = $this->db->get_pending_check_count( $post_id );
+			if ( $resume && $pending <= 0 ) {
+				update_option( 'tsoliin_bg_check_post_id', $post_id, false );
+				update_option( 'tsoliin_bg_check_total', (int) $total, false );
+				update_option( 'tsoliin_bg_check_checked', (int) $total, false );
+				update_option( 'tsoliin_bg_check_running', 1, false );
+				update_option( 'tsoliin_bg_check_token', wp_generate_uuid4(), false );
+				$this->finalize_bg_check_completion();
+				return true;
+			}
+			if ( $resume ) {
+				$checked = max( 0, $total - $pending );
+			} else {
+				$this->db->reset_for_recheck( $post_id );
+				$checked = 0;
+				if ( $post_id > 0 ) {
+					$total = (int) $this->db->get_stats_for_post( $post_id )['total'];
+				} else {
+					$total = (int) $this->db->get_stats()['total'];
+				}
+			}
 
-		$ts = wp_next_scheduled( self::HOOK_BG_STEP );
-		if ( $ts ) {
-			wp_unschedule_event( $ts, self::HOOK_BG_STEP );
+			update_option( 'tsoliin_bg_check_running', 1, false );
+			update_option( 'tsoliin_bg_check_complete', 0, false );
+			update_option( 'tsoliin_bg_check_token', wp_generate_uuid4(), false );
+			update_option( 'tsoliin_bg_check_post_id', $post_id, false );
+			update_option( 'tsoliin_bg_check_total', (int) $total, false );
+			update_option( 'tsoliin_bg_check_checked', (int) $checked, false );
+			update_option( 'tsoliin_bg_check_started', current_time( 'mysql', true ), false );
+			delete_option( self::OPT_USER_STOPPED_CHECK );
+			delete_option( self::OPT_EMPTY_BATCH_RETRIES );
+			$this->flush_immediate_broken_queue();
+
+			$ts = wp_next_scheduled( self::HOOK_BG_STEP );
+			if ( $ts ) {
+				wp_unschedule_event( $ts, self::HOOK_BG_STEP );
+			}
+			wp_schedule_single_event( time() + ( $spawn ? 0 : self::BG_RECOVERY_DELAY ), self::HOOK_BG_STEP );
+			if ( $spawn ) {
+				spawn_cron();
+			}
+			return true;
+		} finally {
+			$this->db->release_transient_lock( 'tsoliin_bg_lifecycle_start_lock' );
 		}
-		wp_schedule_single_event( time(), self::HOOK_BG_STEP );
-		spawn_cron();
 	}
 
 	/**
@@ -520,56 +743,127 @@ class TSOLIIN_Cron {
 	 */
 	public function stop_bg_check() {
 		update_option( 'tsoliin_bg_check_running', 0, false );
+		update_option( 'tsoliin_bg_check_complete', 0, false );
+		update_option( 'tsoliin_bg_check_token', wp_generate_uuid4(), false );
+		update_option( self::OPT_USER_STOPPED_CHECK, 1, false );
 		wp_clear_scheduled_hook( self::HOOK_BG_STEP );
+		$this->db->release_transient_lock( 'tsoliin_bg_check_step_lock' );
 	}
 
 	/**
-	 * Execute one BG check step (called by cron or admin poll fallback).
+	 * Execute HTTP checks until the time budget is exhausted.
 	 *
-	 * @param int|null $batch_size Optional batch size (admin poll uses a smaller budget).
+	 * @param int|null $batch_size       Links fetched per inner query. Null uses BG_BATCH.
+	 * @param bool     $spawn            When false, keep a recovery cron only (AJAX loop is driving).
+	 * @param int|null $budget_override  Seconds of work; null uses the spawn/tick default.
+	 * @return string idle|busy|ok
 	 */
-	public function run_bg_step( $batch_size = null ) {
+	public function run_bg_step( $batch_size = null, $spawn = true, $budget_override = null ) {
 		if ( ! get_option( 'tsoliin_bg_check_running' ) ) {
-			return;
+			return 'idle';
+		}
+		if ( ! $this->db->acquire_transient_lock( 'tsoliin_bg_check_step_lock', self::BG_STEP_LOCK_TTL ) ) {
+			$this->schedule_bg_check_step_if_needed( 2 );
+			return 'busy';
 		}
 
-		if ( function_exists( 'set_time_limit' ) ) {
-			// phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged, WordPress.PHP.NoSilencedErrors.Discouraged -- WP-Cron check batch may exceed host max_execution_time.
-			@set_time_limit( 120 );
-		}
+		$this->ignore_worker_abort();
+		$run_token = (string) get_option( 'tsoliin_bg_check_token', '' );
+		$spawn     = (bool) $spawn;
+		$budget    = null !== $budget_override ? max( 1, (float) $budget_override ) : $this->get_worker_time_budget( $spawn );
+		$this->schedule_bg_check_recovery_event();
 
-		$batch_size   = null === $batch_size ? self::BG_BATCH : max( 1, absint( $batch_size ) );
-		$time_budget  = ( $batch_size <= self::BG_POLL_BATCH ) ? self::BG_POLL_TIME_BUDGET : 0;
-		$started_at   = microtime( true );
-		$post_id      = absint( get_option( 'tsoliin_bg_check_post_id', 0 ) );
-		$links        = $this->db->get_links_batch_for_check( $batch_size, $post_id );
-		if ( empty( $links ) ) {
-			if ( $this->maybe_reschedule_bg_check( $post_id ) ) {
-				return;
+		try {
+			if ( function_exists( 'set_time_limit' ) ) {
+				// phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged, WordPress.PHP.NoSilencedErrors.Discouraged -- Check tick/cron may exceed host max_execution_time.
+				@set_time_limit( max( 60, $budget + 20 ) );
 			}
-			$this->finalize_bg_check_completion();
-			return;
+
+			$this->http->begin_bulk_timeout( 8 );
+			$batch_size = null === $batch_size ? self::BG_BATCH : max( 1, absint( $batch_size ) );
+			$started_at = microtime( true );
+			$post_id    = absint( get_option( 'tsoliin_bg_check_post_id', 0 ) );
+			$processed  = 0;
+
+			while ( ( microtime( true ) - $started_at ) < $budget ) {
+				if ( ! $this->is_bg_check_run_active( $run_token ) ) {
+					return 'idle';
+				}
+				$links = $this->db->get_links_batch_for_check( $batch_size, $post_id );
+				if ( empty( $links ) ) {
+					if ( $this->maybe_reschedule_bg_check( $post_id, $run_token, $spawn ) ) {
+						return 'ok';
+					}
+					$this->finalize_bg_check_completion( $run_token );
+					return 'ok';
+				}
+
+				foreach ( $links as $link ) {
+					if ( ! $this->is_bg_check_run_active( $run_token )
+						|| ( microtime( true ) - $started_at ) >= $budget ) {
+						break 2;
+					}
+					$check = $this->check_link_row( $link, $run_token );
+					if ( null === $check ) {
+						continue;
+					}
+					++$processed;
+					$item = $this->build_new_hard_broken_item( $check['link'], $check['result'], $check['prev_failures'] );
+					if ( ! empty( $item ) ) {
+						$this->queue_immediate_broken_item( $item );
+					}
+				}
+
+				if ( $processed > 0 ) {
+					delete_option( self::OPT_EMPTY_BATCH_RETRIES );
+				}
+				$this->persist_bg_check_progress( $post_id );
+			}
+
+			if ( ! $this->is_bg_check_run_active( $run_token ) ) {
+				return 'idle';
+			}
+			if ( $processed > 0 ) {
+				delete_option( self::OPT_EMPTY_BATCH_RETRIES );
+			}
+			$this->persist_bg_check_progress( $post_id );
+
+			$more = $this->db->get_links_batch_for_check( 1, $post_id );
+			if ( ! empty( $more ) ) {
+				if ( $spawn ) {
+					$this->reschedule_bg_check_step( 0 );
+				} else {
+					$this->schedule_bg_check_recovery_event();
+				}
+			} elseif ( ! $this->maybe_reschedule_bg_check( $post_id, $run_token, $spawn ) ) {
+				$this->finalize_bg_check_completion( $run_token );
+			}
+			return 'ok';
+		} catch ( \Throwable $e ) {
+			if ( $this->is_bg_check_run_active( $run_token ) ) {
+				update_option( 'tsoliin_bg_check_last_error', sanitize_text_field( $e->getMessage() ), false );
+				if ( $spawn ) {
+					$this->reschedule_bg_check_step( 5 );
+				} else {
+					$this->schedule_bg_check_recovery_event();
+				}
+			}
+			return 'ok';
+		} finally {
+			$this->http->end_bulk_timeout();
+			$this->db->release_transient_lock( 'tsoliin_bg_check_step_lock' );
 		}
-		$processed = 0;
-		foreach ( $links as $link ) {
-			if ( $time_budget > 0 && ( microtime( true ) - $started_at ) >= $time_budget ) {
-				break;
-			}
-			$check = $this->check_link_row( $link );
-			if ( null === $check ) {
-				continue;
-			}
-			++$processed;
-			$item = $this->build_new_hard_broken_item( $check['link'], $check['result'], $check['prev_failures'] );
-			if ( ! empty( $item ) ) {
-				$this->queue_immediate_broken_item( $item );
-			}
-		}
-		if ( $processed > 0 ) {
-			delete_option( self::OPT_EMPTY_BATCH_RETRIES );
-		}
-		$total     = (int) get_option( 'tsoliin_bg_check_total', 0 );
-		$pending   = $this->db->get_pending_check_count( $post_id );
+	}
+
+	/**
+	 * Refresh checked/total counters for the running background check.
+	 *
+	 * @param int $post_id Scope (0 = site-wide).
+	 */
+	private function persist_bg_check_progress( $post_id ) {
+		$post_id = absint( $post_id );
+		$total   = (int) get_option( 'tsoliin_bg_check_total', 0 );
+		$pending = $this->db->get_pending_check_count( $post_id );
 		if ( $post_id > 0 ) {
 			$live_total = (int) $this->db->get_stats_for_post( $post_id )['total'];
 		} else {
@@ -578,97 +872,204 @@ class TSOLIIN_Cron {
 		$total = max( $total, $live_total );
 		update_option( 'tsoliin_bg_check_total', $total, false );
 		update_option( 'tsoliin_bg_check_checked', max( 0, $total - $pending ), false );
-
-		// Heartbeat so long checks are not marked stale after 30 minutes from start.
 		update_option( 'tsoliin_bg_check_started', current_time( 'mysql', true ), false );
-
-		$more = $this->db->get_links_batch_for_check( 1, $post_id );
-		if ( ! empty( $more ) ) {
-			wp_clear_scheduled_hook( self::HOOK_BG_STEP );
-			wp_schedule_single_event( time() + 2, self::HOOK_BG_STEP );
-			spawn_cron();
-		} elseif ( $this->maybe_reschedule_bg_check( $post_id ) ) {
-			return;
-		} else {
-			$this->finalize_bg_check_completion();
-		}
 	}
 
 	/**
 	 * When the batch query is empty but pending rows remain, reschedule instead of finalizing.
 	 *
+	 * Never abandons unchecked links: a full Check now / Scan→Check run must reach 100%.
+	 *
 	 * @param int $post_id Scope (0 = site-wide).
 	 * @return bool True when a follow-up step was scheduled.
 	 */
-	private function maybe_reschedule_bg_check( $post_id ) {
+	private function maybe_reschedule_bg_check( $post_id, $run_token = '', $spawn = true ) {
 		$post_id = absint( $post_id );
+		if ( '' !== $run_token && ! $this->is_bg_check_run_active( $run_token ) ) {
+			return false;
+		}
 		TSOLIIN_DB::clear_stats_cache();
 		$pending = $this->db->get_pending_check_count( $post_id );
 		if ( $pending <= 0 ) {
 			delete_option( self::OPT_EMPTY_BATCH_RETRIES );
 			return false;
 		}
+
+		$delay = 0;
 		if ( empty( $this->db->get_links_batch_for_check( 1, $post_id ) ) ) {
 			$retries = (int) get_option( self::OPT_EMPTY_BATCH_RETRIES, 0 ) + 1;
 			update_option( self::OPT_EMPTY_BATCH_RETRIES, $retries, false );
-			if ( $retries >= self::MAX_EMPTY_BATCH_RETRIES ) {
-				delete_option( self::OPT_EMPTY_BATCH_RETRIES );
-				return false;
-			}
+			// Keep trying with backoff — do not finalize while pending remains.
+			$delay = min( 120, 5 * max( 1, $retries ) );
 		} else {
 			delete_option( self::OPT_EMPTY_BATCH_RETRIES );
 		}
-		wp_clear_scheduled_hook( self::HOOK_BG_STEP );
-		wp_schedule_single_event( time() + 2, self::HOOK_BG_STEP );
-		spawn_cron();
+
+		if ( $spawn ) {
+			$this->reschedule_bg_check_step( $delay );
+		} else {
+			$this->schedule_bg_check_recovery_event();
+		}
 		update_option( 'tsoliin_bg_check_started', current_time( 'mysql', true ), false );
 		return true;
 	}
 
 	/**
-	 * Advance a running background check when WP-Cron missed a step (admin poll fallback).
+	 * Resume a full background check that stopped before the unchecked queue was empty.
+	 * Skips runs the admin explicitly stopped.
 	 *
-	 * @return bool True when a batch was executed inline.
+	 * @return void
+	 */
+	private function maybe_resume_incomplete_bg_check() {
+		if ( get_option( self::OPT_USER_STOPPED_CHECK ) ) {
+			return;
+		}
+
+		$running = (int) get_option( 'tsoliin_bg_check_running', 0 );
+		$total   = (int) get_option( 'tsoliin_bg_check_total', 0 );
+		$checked = (int) get_option( 'tsoliin_bg_check_checked', 0 );
+		$post_id = absint( get_option( 'tsoliin_bg_check_post_id', 0 ) );
+
+		TSOLIIN_DB::clear_stats_cache();
+		$pending = $this->db->get_pending_check_count( $post_id );
+
+		if ( $pending <= 0 ) {
+			return;
+		}
+
+		if ( $running ) {
+			$this->schedule_bg_check_step_if_needed();
+			spawn_cron();
+			return;
+		}
+
+		// Abandoned mid-run (cron missed steps / premature finalize): finish the queue.
+		if ( $total > 0 && $checked > 0 && $checked < $total ) {
+			$this->start_bg_check( true, $post_id );
+		}
+	}
+
+	/**
+	 * Run a due/overdue background scan or check when WP-Cron did not fire
+	 * (DISABLE_WP_CRON, failed loopback, or a delayed single event).
+	 *
+	 * Skips admin-ajax so the plugin tick/poll owns those requests.
+	 */
+	public function maybe_run_overdue_bg_workers() {
+		if ( wp_doing_ajax() || wp_doing_cron() ) {
+			return;
+		}
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+		if ( get_option( 'tsoliin_bg_scan_running' ) ) {
+			$phase      = (string) get_option( 'tsoliin_bg_scan_phase', 'posts' );
+			$posts_done = ( (int) get_option( 'tsoliin_bg_scan_total', 0 ) > 0
+				&& (int) get_option( 'tsoliin_bg_scan_scanned', 0 ) >= (int) get_option( 'tsoliin_bg_scan_total', 0 )
+				&& 'posts' !== $phase );
+			if ( $this->is_cron_event_overdue( self::HOOK_BG_SCAN_STEP )
+				|| $this->is_bg_heartbeat_stale( 'tsoliin_bg_scan_started', 8 ) ) {
+				$this->clear_hook_events( self::HOOK_BG_SCAN_STEP );
+				$this->run_bg_scan_step( null, false, $posts_done ? 10 : 3 );
+			}
+		}
+		if ( get_option( 'tsoliin_bg_check_running' )
+			&& ( $this->is_cron_event_overdue( self::HOOK_BG_STEP ) || $this->is_bg_heartbeat_stale( 'tsoliin_bg_check_started', 8 ) ) ) {
+			$this->clear_hook_events( self::HOOK_BG_STEP );
+			$this->run_bg_step( null, false, 3 );
+		}
+	}
+
+	/**
+	 * @param string $option_key Option holding a MySQL UTC datetime.
+	 * @param int    $seconds    Stale after this many seconds.
+	 * @return bool
+	 */
+	private function is_bg_heartbeat_stale( $option_key, $seconds = 8 ) {
+		$started = (string) get_option( $option_key, '' );
+		if ( '' === $started ) {
+			return true;
+		}
+		$ts = strtotime( $started . ' UTC' );
+		if ( false === $ts ) {
+			$ts = strtotime( $started );
+		}
+		if ( false === $ts ) {
+			return true;
+		}
+		return ( time() - (int) $ts ) >= max( 1, absint( $seconds ) );
+	}
+
+	/**
+	 * Advance a running job from WordPress Heartbeat on any admin screen.
+	 *
+	 * @param array $response Heartbeat response.
+	 * @param array $data     Heartbeat payload from the browser.
+	 * @return array
+	 */
+	public function heartbeat_drive_bg_jobs( $response, $data ) {
+		if ( ! is_array( $data ) || empty( $data['tsoliin_bg'] ) || ! current_user_can( 'manage_options' ) ) {
+			return $response;
+		}
+		if ( get_option( 'tsoliin_bg_scan_running' ) ) {
+			$this->run_bg_scan_step( null, false, 4 );
+		} elseif ( get_option( 'tsoliin_bg_check_running' ) ) {
+			$this->run_bg_step( null, false, 4 );
+		}
+		if ( ! is_array( $response ) ) {
+			$response = array();
+		}
+		$response['tsoliin_bg'] = array(
+			'scan_running'  => (bool) get_option( 'tsoliin_bg_scan_running' ),
+			'check_running' => (bool) get_option( 'tsoliin_bg_check_running' ),
+		);
+		return $response;
+	}
+
+	/**
+	 * @param string $hook Cron hook.
+	 * @return bool True when the next event is missing or already due.
+	 */
+	private function is_cron_event_overdue( $hook ) {
+		$ts = wp_next_scheduled( $hook );
+		return ( ! $ts || (int) $ts <= time() );
+	}
+
+	/**
+	 * @param string $hook Cron hook.
+	 */
+	private function clear_hook_events( $hook ) {
+		wp_clear_scheduled_hook( $hook );
+	}
+
+	/**
+	 * Advance a running background check from the admin poll.
+	 *
+	 * A future recovery cron event must not block this: WP-Cron loopback is
+	 * often delayed, and the recovery delay is minutes, not seconds.
+	 *
+	 * @return bool True when a batch was attempted.
 	 */
 	public function ensure_bg_check_progress() {
 		if ( ! get_option( 'tsoliin_bg_check_running' ) ) {
 			return false;
 		}
 
-		$ts = wp_next_scheduled( self::HOOK_BG_STEP );
-		// Scheduled and not overdue — let WP-Cron handle it.
-		if ( $ts && $ts > time() - 15 ) {
-			return false;
-		}
-
-		if ( $ts ) {
-			wp_unschedule_event( $ts, self::HOOK_BG_STEP );
-		}
-
-		$this->run_bg_step( self::BG_POLL_BATCH );
+		$this->run_bg_step( null, false );
 		return true;
 	}
 
 	/**
-	 * Advance a running background scan when WP-Cron missed a step (admin poll fallback).
+	 * Advance a running background scan from the admin poll.
 	 *
-	 * @return bool True when a scan step was executed inline.
+	 * @return bool True when a scan step was attempted.
 	 */
 	public function ensure_bg_scan_progress() {
 		if ( ! get_option( 'tsoliin_bg_scan_running' ) ) {
 			return false;
 		}
 
-		$ts = wp_next_scheduled( self::HOOK_BG_SCAN_STEP );
-		if ( $ts && $ts > time() - 15 ) {
-			return false;
-		}
-
-		if ( $ts ) {
-			wp_unschedule_event( $ts, self::HOOK_BG_SCAN_STEP );
-		}
-
-		$this->run_bg_scan_step();
+		$this->run_bg_scan_step( null, false );
 		return true;
 	}
 
@@ -693,11 +1094,28 @@ class TSOLIIN_Cron {
 	 *
 	 * @return void
 	 */
-	private function finalize_bg_check_completion() {
+	private function finalize_bg_check_completion( $run_token = '' ) {
+		if ( '' !== $run_token && ! $this->is_bg_check_run_active( $run_token ) ) {
+			return;
+		}
+		$post_id = absint( get_option( 'tsoliin_bg_check_post_id', 0 ) );
+		TSOLIIN_DB::clear_stats_cache();
+		$pending = $this->db->get_pending_check_count( $post_id );
+		if ( $pending > 0 ) {
+			// Never mark complete while unchecked links remain.
+			update_option( 'tsoliin_bg_check_running', 1, false );
+			$this->maybe_reschedule_bg_check( $post_id, $run_token );
+			return;
+		}
+
 		$this->flush_immediate_broken_queue();
 		delete_option( self::OPT_EMPTY_BATCH_RETRIES );
+		delete_option( self::OPT_USER_STOPPED_CHECK );
 		update_option( 'tsoliin_bg_check_running', 0, false );
+		update_option( 'tsoliin_bg_check_complete', 1, false );
 		update_option( 'tsoliin_last_check_batch', current_time( 'mysql', true ), false );
+		delete_option( 'tsoliin_bg_check_last_error' );
+		wp_clear_scheduled_hook( self::HOOK_BG_STEP );
 		$this->db->maybe_cleanup_transparent_redirects();
 		$this->db->cleanup_action_url_rows();
 		$this->db->cleanup_blocked_dns_rows();
@@ -712,6 +1130,7 @@ class TSOLIIN_Cron {
 	 */
 	public function get_bg_progress() {
 		$running = (bool) get_option( 'tsoliin_bg_check_running', 0 );
+		$complete = (bool) get_option( 'tsoliin_bg_check_complete', 0 );
 		$checked = (int)  get_option( 'tsoliin_bg_check_checked', 0 );
 		$total   = (int)  get_option( 'tsoliin_bg_check_total',   0 );
 		$started = (string) get_option( 'tsoliin_bg_check_started', '' );
@@ -725,12 +1144,11 @@ class TSOLIIN_Cron {
 				if ( $stale_pending > 0 ) {
 					// Work remains — reschedule without faking a successful batch heartbeat.
 					$this->schedule_bg_check_step_if_needed();
+					spawn_cron();
 				} else {
-					$running = false;
-					$this->flush_immediate_broken_queue();
-					update_option( 'tsoliin_bg_check_running', 0, false );
-					update_option( 'tsoliin_bg_check_post_id', 0, false );
-					wp_clear_scheduled_hook( self::HOOK_BG_STEP );
+					$this->finalize_bg_check_completion();
+					$running  = false;
+					$complete = true;
 				}
 			}
 		}
@@ -749,6 +1167,9 @@ class TSOLIIN_Cron {
 		}
 
 		$pct = ( $total > 0 ) ? min( 100, (int) round( ( $checked / $total ) * 100 ) ) : 0;
+		if ( $pending > 0 && $pct >= 100 ) {
+			$pct = 99;
+		}
 
 		return array(
 			'running' => $running,
@@ -757,6 +1178,7 @@ class TSOLIIN_Cron {
 			'pct'     => $pct,
 			'post_id' => $post_id,
 			'pending' => $pending,
+			'complete'=> $complete,
 		);
 	}
 
@@ -831,16 +1253,23 @@ class TSOLIIN_Cron {
 	/**
 	 * HTTP-check one row; resync from WordPress only when the stored URL is missing from its source.
 	 *
-	 * @param object $link DB row.
+	 * @param object $link      DB row.
+	 * @param string $run_token Optional background-check generation token.
 	 * @return array{ link: object, result: array, prev_failures: int }|null Null when the row was removed.
 	 */
-	private function check_link_row( $link ) {
+	private function check_link_row( $link, $run_token = '' ) {
+		if ( '' !== $run_token && ! $this->is_bg_check_run_active( $run_token ) ) {
+			return null;
+		}
 		$link = $this->prepare_link_for_http_check( $link );
 		if ( ! $link ) {
 			return null;
 		}
 		$prev_failures = isset( $link->consecutive_failures ) ? (int) $link->consecutive_failures : 0;
 		$r             = $this->http->check( $link->link_url, (int) $link->post_id );
+		if ( '' !== $run_token && ! $this->is_bg_check_run_active( $run_token ) ) {
+			return null;
+		}
 		$this->db->update_check_result(
 			(int) $link->id,
 			$r['status_code'],

@@ -5,7 +5,7 @@ Tags: broken links, link checker, seo, maintenance, links
 Requires at least: 5.9
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 2.4.3
+Stable tag: 2.4.5
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -127,6 +127,15 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 
 == Changelog ==
 
+= 2.4.5 =
+* Fix: Daily automatic scan continues from the saved cursor instead of restarting at page 1.
+* Fix: Manual Scan now finishes comments, menus, terms, FSE, widgets, and ACF after posts, then starts a site-wide HTTP check.
+* Fix: Background scan/check workers use a lock, a time budget, and a recovery cron event so a PHP timeout cannot leave a job stuck.
+* Fix: Stop is honored mid-batch; auto-resume uses the stored check scope, not the current list filter.
+* Fix: Reloading the admin page keeps scan/check monitoring active when WP-Cron is delayed.
+* Improvement: Admin UI day / night / auto theme (auto follows sunrise and sunset from the site timezone).
+* Fix: Editor deep-link focus no longer runs duplicate `get_link()` queries on the same request.
+
 = 2.4.3 =
 * Fix: Opening Link Inspector no longer triggers heavy inline scan/check batches on the first progress poll (session fallback only after you click Scan/Continue/Check).
 * Fix: Legacy table cleanup and routine schema checks run on Link Inspector screens only, not on every wp-admin page load.
@@ -177,6 +186,12 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 See changelog.txt in the plugin folder for older versions
 
 == Upgrade Notice ==
+
+= 2.4.5 =
+Recommended. Automatic and manual scans/checks now finish instead of stopping at 99% or restarting from page 1.
+
+= 2.4.4 =
+Recommended. Day/night/auto admin theme and night-mode readability fixes.
 
 = 2.4.3 =
 Recommended. Lighter Link Inspector admin load on staging sites; scan/check poll fallback only when you explicitly resume a run.

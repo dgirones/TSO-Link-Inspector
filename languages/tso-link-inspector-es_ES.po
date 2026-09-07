@@ -1143,6 +1143,9 @@ msgstr "Nueva URL:"
 msgid "Scanning %1$d of %2$d..."
 msgstr "Escaneando %1$d de %2$d..."
 
+msgid "Posts scanned. Finishing comments, menus and other sources…"
+msgstr "Entradas escaneadas. Terminando comentarios, menús y otras fuentes…"
+
 msgid "Invalid data."
 msgstr "Datos incorrectos."
 
@@ -3597,3 +3600,21 @@ msgstr "Buscar URL"
 
 msgid "%d unchecked"
 msgstr "%d sin comprobar"
+
+msgid "Day mode"
+msgstr "Modo día"
+
+msgid "Night mode"
+msgstr "Modo noche"
+
+msgid "Auto mode"
+msgstr "Modo auto"
+
+msgid "Follows sunrise and sunset (changes with the seasons)"
+msgstr "Según amanecer y ocaso (cambia con la estación)"
+
+msgid "Your admin session expired. Reload this page to keep monitoring the background task."
+msgstr "La sesión de administración ha caducado. Recarga esta página para continuar supervisando la tarea en segundo plano."
+
+msgid "Another background task is changing state. Try again in a moment."
+msgstr "Otra tarea en segundo plano está cambiando de estado. Inténtalo de nuevo en un momento."

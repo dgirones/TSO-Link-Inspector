@@ -1,8 +1,8 @@
 /**
  * TSO Link Inspector – Admin JS v1.0.6
  *
- * Background scan/check: server-side WP-Cron, browser only polls every 5s.
- * Navigating away does NOT interrupt scan or check.
+ * Background scan/check: AJAX ticks on this screen (full time budget, no pause
+ * between batches). Other wp-admin pages keep the job alive via bg-worker.js.
  */
 /* global tsoliinData */
 ( function ( $ ) {
@@ -16,12 +16,16 @@
 		scanning       : false,
 		scanAborted    : false,
 		scanCompleted  : false,
+		scanStartPending : false,
+		checkStartPending: false,
 		polling        : false,
 		pollTimer      : null,
 		statsTimer     : null,
 		completed      : false,   // Guard: prevents check reload loop
 		checkSessionActive : false,
 		scanSessionActive  : false,
+		scanTickBusy       : false,
+		checkTickBusy      : false,
 		nudgePending   : false,
 		editLinkId  : 0,
 		editOldUrl  : '',
@@ -231,13 +235,19 @@
 			this.bindEvents();
 			this.bindLiveSearch();
 			this.maybeScrollToListOnLoad();
+			this.initThemeSwitcher();
+			$( document ).on( 'heartbeat-send', function ( event, data ) {
+				if ( data ) {
+					data.tsoliin_bg = 1;
+				}
+			} );
 
 			var scanRunning = parseInt( tsoliinData.scanRunning, 10 ) === 1;
 			var checkRunning = parseInt( tsoliinData.bgRunning, 10 ) === 1;
 
 			if ( scanRunning ) {
-				// Monitor only until the user explicitly clicks Continue scan here.
 				this.scanning = true;
+				this.scanSessionActive = true;
 				this.$progress.show();
 				this.$startBtn.prop( 'disabled', false );
 				this.$stopScanBtn.show();
@@ -262,6 +272,7 @@
 			}
 
 			if ( checkRunning ) {
+				this.checkSessionActive = true;
 				this.$checkProg.show();
 				this.$checkBtn.prop( 'disabled', false );
 				this.$restartBtn.hide();
@@ -272,7 +283,13 @@
 				var pctOnLoad     = parseInt( tsoliinData.bgPct, 10 ) || 0;
 				if ( pendingOnLoad > 0 && pctOnLoad > 0 && pctOnLoad < 100 ) {
 					this.$checkProg.show();
-					this.updateCheckProgress( pctOnLoad, tsoliinData.i18n.checkPaused || tsoliinData.i18n.stopped );
+					// Incomplete Check now / Scan→Check (not a manual Stop): finish automatically.
+					if ( parseInt( tsoliinData.checkAutoResume, 10 ) === 1 ) {
+						this.updateCheckProgress( pctOnLoad, tsoliinData.i18n.checking );
+						this.startBgCheck( true, true, parseInt( tsoliinData.bgPostId, 10 ) || 0 );
+					} else {
+						this.updateCheckProgress( pctOnLoad, tsoliinData.i18n.checkPaused || tsoliinData.i18n.stopped );
+					}
 				} else {
 					this.$checkProg.hide();
 				}
@@ -280,6 +297,12 @@
 
 			if ( scanRunning || checkRunning ) {
 				this.startPolling();
+			}
+			if ( scanRunning ) {
+				this.scanTick();
+			}
+			if ( checkRunning ) {
+				this.checkTick();
 			}
 
 			// Live stat / filter tab counts while editing the list.
@@ -335,6 +358,7 @@
 			tsoliinData.listFilter = params.filter || 'all';
 			tsoliinData.listQualityFilter = params.quality_filter || '';
 			tsoliinData.listScope = params.scope || 'all';
+			tsoliinData.viewPostId = parseInt( params.post_id, 10 ) || 0;
 			if ( params.orderby ) {
 				tsoliinData.listOrderby = params.orderby;
 			}
@@ -506,9 +530,11 @@
 
 			this.$startBtn.on( 'click', function () {
 				if ( self.scanning && parseInt( tsoliinData.scanRunning, 10 ) === 1 ) {
+					self.scanAborted = false;
 					self.scanSessionActive = true;
 					self.$startBtn.prop( 'disabled', true );
 					self.startPolling();
+					self.scanTick();
 					return;
 				}
 				if ( self.scanning ) { return; }
@@ -732,7 +758,7 @@
 			var label = parseInt( tsoliinData.scanResumable, 10 ) === 1
 				? tsoliinData.i18n.continueScan
 				: tsoliinData.i18n.scanNow;
-			this.$startBtn.prop( 'disabled', false ).html(
+			this.$startBtn.show().prop( 'disabled', false ).html(
 				'<span class="dashicons dashicons-search"></span> ' + label
 			);
 		},
@@ -761,10 +787,21 @@
 			);
 		},
 
-		startScan: function ( skipConfirm, resume ) {
+		startScan: function ( skipConfirm, resume, isRetry ) {
 			var self = this;
-			if ( self.scanning ) {
+			var forceRestart = ( false === resume );
+			if ( self.scanning && ! forceRestart ) {
+				self.scanAborted = false;
+				self.scanSessionActive = true;
+				self.startPolling();
+				self.scanTick();
 				return;
+			}
+			if ( self.scanning && forceRestart ) {
+				self.scanAborted = true;
+				self.scanSessionActive = false;
+				self.scanTickBusy = false;
+				self.scanning = false;
 			}
 			var willResume = ( typeof resume === 'undefined' )
 				? ( parseInt( tsoliinData.scanResumable, 10 ) === 1 )
@@ -773,9 +810,10 @@
 			self.scanning       = true;
 			self.scanAborted    = false;
 			self.scanCompleted  = false;
+			self.scanStartPending = true;
 			self.scanSessionActive = true;
 			tsoliinData.scanError = '';
-			self.$startBtn.prop( 'disabled', true );
+			self.$startBtn.hide().prop( 'disabled', true );
 			self.$stopScanBtn.show();
 			if ( self.$restartScanBtn && self.$restartScanBtn.length ) {
 				self.$restartScanBtn.hide();
@@ -798,10 +836,23 @@
 				},
 				success: function ( r ) {
 					if ( ! r.success ) {
+						if ( ! isRetry ) {
+							self.scanning = false;
+							self.scanStartPending = false;
+							setTimeout( function () {
+								self.startScan( skipConfirm, resume, true );
+							}, 400 );
+							return;
+						}
+						self.scanStartPending = false;
 						self.scanError( r.data ? r.data.message : tsoliinData.i18n.error );
 						return;
 					}
+					self.scanStartPending = false;
 					tsoliinData.scanRunning = 1;
+					tsoliinData.bgRunning = 0;
+					self.checkSessionActive = false;
+					self.$stopBtn.hide();
 					tsoliinData.scanResumable = 0;
 					if ( typeof r.data.pct !== 'undefined' ) {
 						tsoliinData.scanPct = r.data.pct;
@@ -811,9 +862,15 @@
 						self.showNotice( r.data.message, 'info' );
 					}
 					self.startPolling();
+					self.scanTick();
 				},
 				error: function ( xhr ) {
-					self.scanError( self.formatAjaxError( xhr, tsoliinData.i18n.scanFailed ) );
+					// The server may have accepted the start before the response was lost.
+					// Reconcile through the progress endpoint instead of showing a false stop.
+					tsoliinData.scanRunning = 1;
+					self.showNotice( self.formatAjaxError( xhr, tsoliinData.i18n.scanFailed ), 'error' );
+					self.startPolling();
+					self.scanTick();
 				}
 			} );
 		},
@@ -822,6 +879,7 @@
 			var self = this;
 			self.scanAborted = true;
 			self.scanSessionActive = false;
+			self.$stopScanBtn.prop( 'disabled', true );
 			$.ajax( {
 				url    : tsoliinData.ajaxUrl,
 				method : 'POST',
@@ -829,7 +887,7 @@
 				success: function ( r ) {
 					self.scanning = false;
 					tsoliinData.scanRunning = 0;
-					self.$stopScanBtn.hide();
+					self.$stopScanBtn.hide().prop( 'disabled', false );
 					self.resetScanButton();
 					if ( ! parseInt( tsoliinData.bgRunning, 10 ) ) {
 						self.$checkBtn.prop( 'disabled', false );
@@ -850,11 +908,63 @@
 					}
 				},
 				error: function () {
-					self.scanning = false;
-					tsoliinData.scanRunning = 0;
-					self.$stopScanBtn.hide();
-					self.resetScanButton();
-					self.updateProgress( 0, tsoliinData.i18n.scanStopped );
+					self.scanAborted = false;
+					self.scanSessionActive = true;
+					self.$stopScanBtn.prop( 'disabled', false );
+					self.showNotice( tsoliinData.i18n.error, 'error' );
+					if ( ! self.polling ) {
+						self.startPolling();
+					}
+				}
+			} );
+		},
+
+		scanTick: function () {
+			var self = this;
+			if ( self.scanTickBusy || self.scanAborted || ! self.scanSessionActive ) {
+				return;
+			}
+			self.scanTickBusy = true;
+			$.ajax( {
+				url    : tsoliinData.ajaxUrl,
+				method : 'POST',
+				data   : {
+					action : 'tsoliin_bg_scan_tick',
+					nonce  : tsoliinData.nonce
+				},
+				success: function ( r ) {
+					self.scanTickBusy = false;
+					if ( ! r.success ) {
+						self.scanError( r.data ? r.data.message : tsoliinData.i18n.error );
+						return;
+					}
+					var scan = r.data || {};
+					if ( scan.error ) {
+						self.scanError( scan.error );
+						return;
+					}
+					self.applyScanProgress( scan );
+					if ( scan.done ) {
+						self.scanFinished();
+						return;
+					}
+					if ( scan.running && ! self.scanAborted && self.scanSessionActive ) {
+						setTimeout( function () {
+							self.scanTick();
+						}, scan.busy ? 150 : 0 );
+					}
+				},
+				error: function ( xhr ) {
+					self.scanTickBusy = false;
+					if ( xhr && ( xhr.status === 401 || xhr.status === 403 ) ) {
+						self.scanError( tsoliinData.i18n.sessionExpired || tsoliinData.i18n.error );
+						return;
+					}
+					if ( ! self.scanAborted && self.scanSessionActive ) {
+						setTimeout( function () {
+							self.scanTick();
+						}, 400 );
+					}
 				}
 			} );
 		},
@@ -883,8 +993,8 @@
 			}
 			if ( scan.running ) {
 				this.scanning = true;
-				// Keep the explicit "Continue scan here" action available until selected.
-				this.$startBtn.prop( 'disabled', this.scanSessionActive );
+				this.scanSessionActive = true;
+				this.$startBtn.hide().prop( 'disabled', true );
 				this.$stopScanBtn.show();
 				if ( this.$restartScanBtn && this.$restartScanBtn.length ) {
 					this.$restartScanBtn.hide();
@@ -928,7 +1038,7 @@
 				self.$checkProg.hide();
 				self.$checkBar.css( 'width', '0%' );
 				self.$checkLbl.text( '' );
-				self.startBgCheck( true, true );
+				self.startBgCheck( true, false, 0 );
 			}, 800 );
 		},
 
@@ -954,9 +1064,11 @@
 		// ---------------------------------------------------------------
 		// Background check – server does the work, browser just polls
 		// ---------------------------------------------------------------
-		startBgCheck: function ( skipConfirm, resume ) {
+		startBgCheck: function ( skipConfirm, resume, postIdOverride ) {
 			var self = this;
-			var postId = parseInt( tsoliinData.viewPostId, 10 ) || 0;
+			var postId = ( typeof postIdOverride !== 'undefined' )
+				? ( parseInt( postIdOverride, 10 ) || 0 )
+				: ( parseInt( tsoliinData.viewPostId, 10 ) || 0 );
 			var pending = parseInt( tsoliinData.pendingCheck, 10 ) || 0;
 			var willResume = ( typeof resume === 'undefined' ) ? ( pending > 0 ) : !! resume;
 
@@ -964,6 +1076,7 @@
 				this.checkSessionActive = true;
 				this.$checkBtn.prop( 'disabled', true );
 				this.startPolling();
+				this.checkTick();
 				return;
 			}
 
@@ -977,6 +1090,7 @@
 
 			this.completed = false;
 			this.checkSessionActive = true;
+			this.checkStartPending = true;
 
 			this.$checkBtn.prop( 'disabled', true );
 			if ( this.$restartBtn && this.$restartBtn.length ) {
@@ -1001,7 +1115,13 @@
 				},
 				success: function ( r ) {
 					if ( r.success ) {
+						self.checkStartPending = false;
 						tsoliinData.bgRunning = 1;
+						tsoliinData.scanRunning = 0;
+						self.scanning = false;
+						self.scanSessionActive = false;
+						self.$stopScanBtn.hide();
+						tsoliinData.bgPostId = parseInt( r.data.post_id, 10 ) || 0;
 						if ( typeof r.data.pct !== 'undefined' ) {
 							tsoliinData.bgPct = r.data.pct;
 							self.updateCheckProgress( r.data.pct, tsoliinData.i18n.checking );
@@ -1018,7 +1138,9 @@
 							'success'
 						);
 						self.startPolling();
+						self.checkTick();
 					} else {
+						self.checkStartPending = false;
 						self.resetCheckButton();
 						self.$startBtn.prop( 'disabled', false );
 						self.$stopBtn.hide();
@@ -1026,10 +1148,12 @@
 					}
 				},
 				error: function () {
-					self.resetCheckButton();
-					self.$startBtn.prop( 'disabled', false );
-					self.$stopBtn.hide();
-					alert( tsoliinData.i18n.error );
+					// The start request has an indeterminate result; polling is the source
+					// of truth and will reveal whether the server created the job.
+					tsoliinData.bgRunning = 1;
+					self.showNotice( tsoliinData.i18n.error, 'error' );
+					self.startPolling();
+					self.checkTick();
 				}
 			} );
 		},
@@ -1037,13 +1161,7 @@
 		stopBgCheck: function () {
 			var self = this;
 			this.checkSessionActive = false;
-			this.stopPolling();
-			tsoliinData.bgRunning = 0;
-			if ( this.$restartBtn && this.$restartBtn.length ) {
-				this.$restartBtn.hide();
-			}
-			this.$startBtn.prop( 'disabled', false );
-			this.$stopBtn.hide();
+			this.$stopBtn.prop( 'disabled', true );
 			$.ajax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
@@ -1053,10 +1171,23 @@
 					post_id: parseInt( tsoliinData.viewPostId, 10 ) || 0
 				},
 				success: function ( r ) {
-					if ( r && r.success && r.data && typeof r.data.pending !== 'undefined' ) {
+					if ( ! r || ! r.success ) {
+						self.$stopBtn.prop( 'disabled', false );
+						self.showNotice( tsoliinData.i18n.error, 'error' );
+						return;
+					}
+					self.checkSessionActive = false;
+					self.stopPolling();
+					tsoliinData.bgRunning = 0;
+					if ( self.$restartBtn && self.$restartBtn.length ) {
+						self.$restartBtn.hide();
+					}
+					self.$startBtn.prop( 'disabled', false );
+					self.$stopBtn.hide().prop( 'disabled', false );
+					if ( r.data && typeof r.data.pending !== 'undefined' ) {
 						tsoliinData.pendingCheck = r.data.pending;
 					}
-					if ( r && r.success && r.data && typeof r.data.pct !== 'undefined' ) {
+					if ( r.data && typeof r.data.pct !== 'undefined' ) {
 						tsoliinData.bgPct = r.data.pct;
 					}
 					self.resetCheckButton();
@@ -1066,7 +1197,11 @@
 					}, 2500 );
 				},
 				error: function () {
-					self.resetCheckButton();
+					self.$stopBtn.prop( 'disabled', false );
+					self.showNotice( tsoliinData.i18n.error, 'error' );
+					if ( ! self.polling ) {
+						self.startPolling();
+					}
 				}
 			} );
 		},
@@ -1090,7 +1225,7 @@
 			var self = this;
 			var needsNudge = this.checkSessionActive
 				&& ! parseInt( tsoliinData.bgRunning, 10 )
-				&& ( parseInt( tsoliinData.pendingCheck, 10 ) || 0 ) > 0
+				&& ( parseInt( tsoliinData.bgPending, 10 ) || 0 ) > 0
 				&& ! this.completed;
 			var sendNudge = needsNudge && ! this.nudgePending;
 			if ( sendNudge ) {
@@ -1111,31 +1246,46 @@
 				success: function ( r ) {
 					if ( ! r.success ) {
 						self.nudgePending = false;
-						if ( parseInt( tsoliinData.scanRunning, 10 ) === 1 ) {
-							self.scanError( r.data ? r.data.message : tsoliinData.i18n.error );
-						} else if ( parseInt( tsoliinData.bgRunning, 10 ) === 1 && ! self.completed ) {
-							self.stopPolling();
-							tsoliinData.bgRunning = 0;
-							self.$stopBtn.hide();
-							self.resetCheckButton();
-							self.$checkBtn.prop( 'disabled', false );
-							self.$startBtn.prop( 'disabled', false );
-							self.showNotice( tsoliinData.i18n.error, 'error' );
-						} else {
-							self.stopPolling();
-						}
+						self.stopPolling();
+						self.$stopBtn.prop( 'disabled', true );
+						self.$stopScanBtn.prop( 'disabled', true );
+						self.showNotice(
+							( r.data && r.data.message ) || tsoliinData.i18n.sessionExpired || tsoliinData.i18n.error,
+							'error'
+						);
 						return;
 					}
 					var d = r.data;
+					tsoliinData.bgPostId = parseInt( d.post_id, 10 ) || 0;
+					if ( typeof d.bg_pending !== 'undefined' ) {
+						tsoliinData.bgPending = d.bg_pending;
+					}
+					var runPending = ( typeof d.bg_pending !== 'undefined' )
+						? ( parseInt( d.bg_pending, 10 ) || 0 )
+						: ( parseInt( d.pending, 10 ) || 0 );
 					var scanWasRunning = parseInt( tsoliinData.scanRunning, 10 ) === 1;
 					var checkWasRunning = parseInt( tsoliinData.bgRunning, 10 ) === 1;
 
 					if ( d.scan ) {
 						if ( d.scan.running ) {
+							self.scanStartPending = false;
 							tsoliinData.scanRunning = 1;
+							self.scanning = true;
+							self.scanAborted = false;
+							self.scanSessionActive = true;
 							self.applyScanProgress( d.scan );
+							if ( ! self.scanTickBusy ) {
+								self.scanTick();
+							}
 						} else if ( scanWasRunning ) {
-							if ( d.scan.error ) {
+							if ( self.scanStartPending ) {
+								self.scanStartPending = false;
+								tsoliinData.scanRunning = 0;
+								self.scanning = false;
+								self.scanSessionActive = false;
+								self.$stopScanBtn.hide();
+								self.resetScanButton();
+							} else if ( d.scan.error ) {
 								self.scanError( d.scan.error );
 							} else if ( d.scan.done && ! self.scanCompleted ) {
 								self.scanCompleted = true;
@@ -1161,7 +1311,10 @@
 					}
 
 					if ( d.running ) {
+						self.checkStartPending = false;
 						tsoliinData.bgRunning = 1;
+						self.checkSessionActive = true;
+						self.completed = false;
 						self.updateCheckProgress( d.pct, d.message );
 						if ( typeof d.pending !== 'undefined' ) {
 							tsoliinData.pendingCheck = d.pending;
@@ -1171,6 +1324,9 @@
 						}
 						if ( d.queue ) {
 							self.updateQueueChip( d.queue );
+						}
+						if ( ! self.checkTickBusy ) {
+							self.checkTick();
 						}
 					} else if ( ( checkWasRunning || self.checkSessionActive ) && ! self.completed ) {
 						if ( typeof d.pending !== 'undefined' ) {
@@ -1182,12 +1338,19 @@
 						if ( d.queue ) {
 							self.updateQueueChip( d.queue );
 						}
-						if ( d.done ) {
+						if ( self.checkStartPending ) {
+							self.checkStartPending = false;
+							tsoliinData.bgRunning = 0;
+							self.checkSessionActive = false;
+							self.$stopBtn.hide();
+							self.resetCheckButton();
+							self.$startBtn.prop( 'disabled', parseInt( tsoliinData.scanRunning, 10 ) === 1 );
+						} else if ( d.done ) {
 							self.completed = true;
 							self.checkSessionActive = false;
 							self.nudgePending = false;
 							self.checkDone();
-						} else if ( d.pending > 0 ) {
+						} else if ( runPending > 0 ) {
 							tsoliinData.bgRunning = d.running ? 1 : 0;
 							if ( d.running ) {
 								self.nudgePending = false;
@@ -1212,17 +1375,88 @@
 						|| ( d.scan && d.scan.running )
 						|| parseInt( tsoliinData.scanRunning, 10 ) === 1
 						|| parseInt( tsoliinData.bgRunning, 10 ) === 1
-						|| ( self.checkSessionActive && d.pending > 0 && ! self.completed );
+						|| ( self.checkSessionActive && runPending > 0 && ! self.completed );
 					if ( stillActive && ! self.completed ) {
-						self.pollTimer = setTimeout( function () { self.pollProgress(); }, 5000 );
+						var pollMs = self.scanSessionActive ? 2000 : 5000;
+						self.pollTimer = setTimeout( function () { self.pollProgress(); }, pollMs );
 					} else {
 						self.stopPolling();
 					}
 				},
-				error: function () {
+				error: function ( xhr ) {
 					self.nudgePending = false;
+					if ( xhr && ( xhr.status === 401 || xhr.status === 403 ) ) {
+						self.stopPolling();
+						self.$stopBtn.prop( 'disabled', true );
+						self.$stopScanBtn.prop( 'disabled', true );
+						self.showNotice( tsoliinData.i18n.sessionExpired || tsoliinData.i18n.error, 'error' );
+						return;
+					}
 					if ( self.polling ) {
 						self.pollTimer = setTimeout( function () { self.pollProgress(); }, 10000 );
+					}
+				}
+			} );
+		},
+
+		checkTick: function () {
+			var self = this;
+			if ( self.checkTickBusy || ! self.checkSessionActive || self.completed ) {
+				return;
+			}
+			self.checkTickBusy = true;
+			$.ajax( {
+				url    : tsoliinData.ajaxUrl,
+				method : 'POST',
+				data   : {
+					action : 'tsoliin_bg_check_tick',
+					nonce  : tsoliinData.nonce
+				},
+				success: function ( r ) {
+					self.checkTickBusy = false;
+					if ( ! r.success ) {
+						self.showNotice( r.data ? r.data.message : tsoliinData.i18n.error, 'error' );
+						return;
+					}
+					var d = r.data || {};
+					if ( typeof d.pending !== 'undefined' ) {
+						tsoliinData.pendingCheck = d.pending;
+					}
+					if ( typeof d.pct !== 'undefined' ) {
+						tsoliinData.bgPct = d.pct;
+					}
+					if ( d.running ) {
+						tsoliinData.bgRunning = 1;
+						self.updateCheckProgress( d.pct, d.message || tsoliinData.i18n.checking );
+						if ( self.checkSessionActive && ! self.completed ) {
+							setTimeout( function () {
+								self.checkTick();
+							}, d.busy ? 150 : 0 );
+						}
+						return;
+					}
+					tsoliinData.bgRunning = 0;
+					if ( d.done && ! self.completed ) {
+						self.completed = true;
+						self.checkSessionActive = false;
+						self.checkDone();
+						return;
+					}
+					self.updateCheckProgress(
+						d.pct,
+						d.message || tsoliinData.i18n.checkPaused || tsoliinData.i18n.stopped
+					);
+				},
+				error: function ( xhr ) {
+					self.checkTickBusy = false;
+					if ( xhr && ( xhr.status === 401 || xhr.status === 403 ) ) {
+						self.showNotice( tsoliinData.i18n.sessionExpired || tsoliinData.i18n.error, 'error' );
+						return;
+					}
+					if ( self.checkSessionActive && ! self.completed ) {
+						setTimeout( function () {
+							self.checkTick();
+						}, 400 );
 					}
 				}
 			} );
@@ -2694,8 +2928,302 @@
 					self._diagXhr = null;
 				}
 			} );
+		},
+
+		// ---------------------------------------------------------------
+		// Theme switcher (auto by sunrise/sunset / day / night)
+		// ---------------------------------------------------------------
+		_themeAutoTimer: null,
+		_themeDayMs: 86400000,
+		_themeJ1970: 2440588,
+		_themeJ2000: 2451545,
+		_themeRad: Math.PI / 180,
+		_themeE: ( Math.PI / 180 ) * 23.4397,
+
+		_themeTzCoords: {
+			'Europe/Madrid': [ 40.42, -3.70 ],
+			'Europe/Andorra': [ 42.51, 1.52 ],
+			'Atlantic/Canary': [ 28.29, -16.63 ],
+			'Europe/London': [ 51.51, -0.13 ],
+			'Europe/Paris': [ 48.86, 2.35 ],
+			'Europe/Berlin': [ 52.52, 13.41 ],
+			'Europe/Rome': [ 41.90, 12.50 ],
+			'Europe/Lisbon': [ 38.72, -9.14 ],
+			'Europe/Brussels': [ 50.85, 4.35 ],
+			'Europe/Amsterdam': [ 52.37, 4.90 ],
+			'America/Mexico_City': [ 19.43, -99.13 ],
+			'America/New_York': [ 40.71, -74.01 ],
+			'America/Chicago': [ 41.88, -87.63 ],
+			'America/Denver': [ 39.74, -104.99 ],
+			'America/Los_Angeles': [ 34.05, -118.24 ],
+			'America/Argentina/Buenos_Aires': [ -34.60, -58.38 ],
+			'America/Sao_Paulo': [ -23.55, -46.63 ],
+			'America/Bogota': [ 4.71, -74.07 ],
+			'America/Lima': [ -12.05, -77.04 ],
+			'America/Santiago': [ -33.45, -70.67 ],
+			'America/Caracas': [ 10.48, -66.90 ],
+			'Asia/Tokyo': [ 35.68, 139.69 ],
+			'Australia/Sydney': [ -33.87, 151.21 ],
+			'UTC': [ 0, 0 ]
+		},
+
+		readThemePreference: function () {
+			var theme = localStorage.getItem( 'tsoliin_ui_theme' );
+			if ( theme === 'day' || theme === 'night' || theme === 'auto' ) {
+				return theme;
+			}
+			return 'auto';
+		},
+
+		getThemeCoords: function () {
+			if ( typeof tsoliinData !== 'undefined' ) {
+				var wpLat = parseFloat( tsoliinData.lat );
+				var wpLng = parseFloat( tsoliinData.lng );
+				if ( ! isNaN( wpLat ) && ! isNaN( wpLng ) ) {
+					return { lat: wpLat, lng: wpLng, source: 'wordpress' };
+				}
+			}
+
+			try {
+				var raw = localStorage.getItem( 'tsoliin_theme_coords' );
+				if ( raw ) {
+					var parsed = JSON.parse( raw );
+					if ( parsed && typeof parsed.lat === 'number' && typeof parsed.lng === 'number' ) {
+						return parsed;
+					}
+				}
+			} catch ( e ) { /* ignore */ }
+
+			var tz = '';
+			if ( typeof tsoliinData !== 'undefined' && tsoliinData.timezone ) {
+				tz = String( tsoliinData.timezone );
+			}
+			if ( ! tz && typeof Intl !== 'undefined' && Intl.DateTimeFormat ) {
+				try {
+					tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+				} catch ( e2 ) { /* ignore */ }
+			}
+
+			if ( tz && this._themeTzCoords[ tz ] ) {
+				return { lat: this._themeTzCoords[ tz ][0], lng: this._themeTzCoords[ tz ][1], source: 'timezone' };
+			}
+
+			return { lat: 41.39, lng: 2.17, source: 'default' };
+		},
+
+		themeToJulian: function ( date ) {
+			return date.valueOf() / this._themeDayMs - 0.5 + this._themeJ1970;
+		},
+
+		themeFromJulian: function ( j ) {
+			return new Date( ( j + 0.5 - this._themeJ1970 ) * this._themeDayMs );
+		},
+
+		themeToDays: function ( date ) {
+			return this.themeToJulian( date ) - this._themeJ2000;
+		},
+
+		themeRightAscension: function ( l, b ) {
+			return Math.atan2( Math.sin( l ) * Math.cos( this._themeE ) - Math.tan( b ) * Math.sin( this._themeE ), Math.cos( l ) );
+		},
+
+		themeDeclination: function ( l, b ) {
+			return Math.asin( Math.sin( b ) * Math.cos( this._themeE ) + Math.cos( b ) * Math.sin( this._themeE ) * Math.sin( l ) );
+		},
+
+		themeSolarMeanAnomaly: function ( d ) {
+			return this._themeRad * ( 357.5291 + 0.98560028 * d );
+		},
+
+		themeEclipticLongitude: function ( M ) {
+			var C = this._themeRad * ( 1.9148 * Math.sin( M ) + 0.02 * Math.sin( 2 * M ) + 0.0003 * Math.sin( 3 * M ) );
+			var P = this._themeRad * 102.9372;
+			return M + C + P + Math.PI;
+		},
+
+		themeSunCoords: function ( d ) {
+			var M = this.themeSolarMeanAnomaly( d );
+			var L = this.themeEclipticLongitude( M );
+			return {
+				dec: this.themeDeclination( L, 0 ),
+				ra: this.themeRightAscension( L, 0 )
+			};
+		},
+
+		themeJulianCycle: function ( d, lw ) {
+			return Math.round( d - 0.0009 - lw / ( 2 * Math.PI ) );
+		},
+
+		themeApproxTransit: function ( Ht, lw, n ) {
+			return 0.0009 + ( Ht + lw ) / ( 2 * Math.PI ) + n;
+		},
+
+		themeSolarTransitJ: function ( ds, M, L ) {
+			return this._themeJ2000 + ds + 0.0053 * Math.sin( M ) - 0.0069 * Math.sin( 2 * L );
+		},
+
+		themeHourAngle: function ( h, phi, d ) {
+			return Math.acos( ( Math.sin( h ) - Math.sin( phi ) * Math.sin( d ) ) / ( Math.cos( phi ) * Math.cos( d ) ) );
+		},
+
+		themeGetSetJ: function ( h, lw, phi, dec, n, M, L ) {
+			var w = this.themeHourAngle( h, phi, dec );
+			var a = this.themeApproxTransit( w, lw, n );
+			return this.themeSolarTransitJ( a, M, L );
+		},
+
+		getSunTimes: function ( date, lat, lng ) {
+			try {
+				var lw = this._themeRad * -lng;
+				var phi = this._themeRad * lat;
+				var d = this.themeToDays( date );
+				var n = this.themeJulianCycle( d, lw );
+				var ds = this.themeApproxTransit( 0, lw, n );
+				var M = this.themeSolarMeanAnomaly( ds );
+				var L = this.themeEclipticLongitude( M );
+				var dec = this.themeSunCoords( ds ).dec;
+				var Jnoon = this.themeSolarTransitJ( ds, M, L );
+				var Jset = this.themeGetSetJ( -0.833 * this._themeRad, lw, phi, dec, n, M, L );
+				var Jrise = Jnoon - ( Jset - Jnoon );
+				var sunrise = this.themeFromJulian( Jrise );
+				var sunset = this.themeFromJulian( Jset );
+				if ( isNaN( sunrise.getTime() ) || isNaN( sunset.getTime() ) ) {
+					return null;
+				}
+				return { sunrise: sunrise, sunset: sunset };
+			} catch ( e ) {
+				return null;
+			}
+		},
+
+		formatThemeClock: function ( date ) {
+			try {
+				return date.toLocaleTimeString( [], { hour: '2-digit', minute: '2-digit' } );
+			} catch ( e ) {
+				var h = date.getHours();
+				var m = date.getMinutes();
+				return ( h < 10 ? '0' : '' ) + h + ':' + ( m < 10 ? '0' : '' ) + m;
+			}
+		},
+
+		themeFromSolar: function () {
+			var coords = this.getThemeCoords();
+			var now = new Date();
+			var times = this.getSunTimes( now, coords.lat, coords.lng );
+			if ( ! times ) {
+				var hour = now.getHours();
+				return ( hour >= 7 && hour < 20 ) ? 'day' : 'night';
+			}
+			return ( now >= times.sunrise && now < times.sunset ) ? 'day' : 'night';
+		},
+
+		resolveTheme: function ( preference ) {
+			if ( preference === 'day' || preference === 'night' ) {
+				return preference;
+			}
+			return this.themeFromSolar();
+		},
+
+		themeUiText: function ( key, fallback ) {
+			if ( typeof tsoliinData !== 'undefined' && tsoliinData.i18n && tsoliinData.i18n[ key ] ) {
+				return tsoliinData.i18n[ key ];
+			}
+			return fallback;
+		},
+
+		applyTheme: function ( preference ) {
+			var self = this;
+			if ( preference !== 'day' && preference !== 'night' && preference !== 'auto' ) {
+				preference = 'auto';
+			}
+			localStorage.setItem( 'tsoliin_ui_theme', preference );
+
+			var resolved = this.resolveTheme( preference );
+			var $wrap = $( '.tsoliin-wrap' );
+			$wrap.attr( 'data-theme', resolved );
+			$wrap.attr( 'data-theme-pref', preference );
+			try {
+				document.documentElement.setAttribute( 'data-tsoliin-theme', resolved );
+				document.documentElement.setAttribute( 'data-tsoliin-theme-pref', preference );
+				if ( document.body ) {
+					document.body.setAttribute( 'data-tsoliin-theme', resolved );
+				}
+			} catch ( e ) { /* ignore */ }
+
+			var $btn = $( '#tsoliin-theme-toggle' );
+			var labelKey = preference === 'auto' ? 'themeAuto' : ( preference === 'day' ? 'themeDay' : 'themeNight' );
+			var labelFallback = preference === 'auto' ? 'Auto mode' : ( preference === 'day' ? 'Day mode' : 'Night mode' );
+			var icon = preference === 'auto' ? '🌓' : ( resolved === 'night' ? '🌙' : '☀️' );
+			var label = this.themeUiText( labelKey, labelFallback );
+			var title = label;
+			if ( preference === 'auto' ) {
+				title = label + ' — ' + this.themeUiText( 'themeAutoHint', 'Follows sunrise and sunset (changes with the seasons)' );
+				var coords = this.getThemeCoords();
+				var times = this.getSunTimes( new Date(), coords.lat, coords.lng );
+				if ( times ) {
+					title += ' · ' + this.formatThemeClock( times.sunrise ) + '–' + this.formatThemeClock( times.sunset );
+				}
+			}
+
+			$btn.attr( 'aria-pressed', preference === 'auto' ? 'mixed' : ( resolved === 'night' ? 'true' : 'false' ) );
+			$btn.attr( 'title', title );
+			$btn.find( '.tsoliin-theme-icon' ).text( icon );
+			$btn.find( '.tsoliin-theme-label' ).text( label );
+
+			if ( this._themeAutoTimer ) {
+				clearInterval( this._themeAutoTimer );
+				this._themeAutoTimer = null;
+			}
+			if ( preference === 'auto' ) {
+				this._themeAutoTimer = setInterval( function () {
+					if ( self.readThemePreference() !== 'auto' ) {
+						return;
+					}
+					var nextResolved = self.themeFromSolar();
+					if ( $( '.tsoliin-wrap' ).attr( 'data-theme' ) !== nextResolved ) {
+						self.applyTheme( 'auto' );
+					}
+				}, 60000 );
+			}
+		},
+
+		nextThemePreference: function ( current ) {
+			if ( current === 'auto' ) {
+				return 'day';
+			}
+			if ( current === 'day' ) {
+				return 'night';
+			}
+			return 'auto';
+		},
+
+		initThemeSwitcher: function () {
+			var self = this;
+			this.applyTheme( this.readThemePreference() );
+			$( document ).on( 'click', '#tsoliin-theme-toggle', function () {
+				self.applyTheme( self.nextThemePreference( self.readThemePreference() ) );
+			} );
 		}
 	};
+
+	// Apply stored/auto theme ASAP when the wrap is already in the DOM.
+	( function () {
+		var wrap = document.querySelector( '.tsoliin-wrap' );
+		if ( ! wrap || typeof LC === 'undefined' || ! LC.resolveTheme || ! LC.readThemePreference ) {
+			return;
+		}
+		var pref = LC.readThemePreference();
+		var resolved = LC.resolveTheme( pref );
+		wrap.setAttribute( 'data-theme', resolved );
+		wrap.setAttribute( 'data-theme-pref', pref );
+		try {
+			document.documentElement.setAttribute( 'data-tsoliin-theme', resolved );
+			document.documentElement.setAttribute( 'data-tsoliin-theme-pref', pref );
+			if ( document.body ) {
+				document.body.setAttribute( 'data-tsoliin-theme', resolved );
+			}
+		} catch ( e ) { /* ignore */ }
+	} )();
 
 	$( document ).ready( function () { LC.init(); } );
 
