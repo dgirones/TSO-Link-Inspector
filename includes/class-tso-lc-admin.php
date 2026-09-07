@@ -2287,6 +2287,18 @@ JS;
 			return;
 		}
 
+		$this->render_list_form_region( $table, $list_ctx );
+	}
+
+	/**
+	 * Links list GET form + table only (filters, sort, pagination AJAX).
+	 *
+	 * @param TSOLIIN_List_Table|null $table    Prepared list table.
+	 * @param array<string,mixed>     $list_ctx Context from resolve_main_list_context().
+	 * @return void
+	 */
+	private function render_list_form_region( $table, array $list_ctx ) {
+		$view_post_id = (int) $list_ctx['view_post_id'];
 		echo '<form id="tsoliin-list-form" method="get">';
 		echo '<div id="tsoliin-list-table-region" class="tsoliin-list-table-region">';
 		if ( $table instanceof TSOLIIN_List_Table ) {
@@ -2410,6 +2422,11 @@ JS;
 		$orderby = isset( $_POST['orderby'] ) ? sanitize_key( wp_unslash( $_POST['orderby'] ) ) : 'date_found';
 		// phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$order   = isset( $_POST['order'] ) ? sanitize_key( wp_unslash( $_POST['order'] ) ) : 'DESC';
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing
+		$region  = isset( $_POST['region'] ) ? sanitize_key( wp_unslash( $_POST['region'] ) ) : 'list';
+		if ( ! in_array( $region, array( 'list', 'scope' ), true ) ) {
+			$region = 'list';
+		}
 
 		$_REQUEST['s']              = $search;
 		$_REQUEST['filter']         = $filter;
@@ -2441,13 +2458,20 @@ JS;
 		if ( empty( $list_ctx['summary_view'] ) ) {
 			$table = new TSOLIIN_List_Table( $this->db, $this->http );
 			$table->prepare_items();
+		} elseif ( 'list' === $region ) {
+			$region = 'scope';
 		}
 
 		ob_start();
-		$this->render_scope_region( $table, $list_ctx );
+		if ( 'scope' === $region ) {
+			$this->render_scope_region( $table, $list_ctx );
+		} else {
+			$this->render_list_form_region( $table, $list_ctx );
+		}
 		wp_send_json_success(
 			array(
 				'html'             => ob_get_clean(),
+				'region'           => $region,
 				'total'            => ( $table instanceof TSOLIIN_List_Table ) ? (int) $table->get_pagination_arg( 'total_items' ) : 0,
 				'view_post_id'     => (int) $list_ctx['view_post_id'],
 				'list_view'        => (string) $list_ctx['list_view'],

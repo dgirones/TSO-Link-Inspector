@@ -486,10 +486,15 @@
 		fetchListRegion: function ( params, opts ) {
 			opts = opts || {};
 			var self = this;
+			var useScope = ( 'scope' === opts.region ) || ! $( '#tsoliin-list-form' ).length;
 			var $scope = $( '#tsoliin-scope-region' );
-			var $region = $scope.length ? $scope : $( '#tsoliin-list-table-region' );
+			var $form  = $( '#tsoliin-list-form' );
+			var $target = useScope ? $scope : $form;
+			if ( ! $target.length ) {
+				$target = $( '#tsoliin-list-table-region' );
+			}
 
-			if ( ! $region.length ) {
+			if ( ! $target.length ) {
 				if ( opts.fallbackNavigate && params.href ) {
 					window.location.href = params.href;
 				}
@@ -503,8 +508,11 @@
 				self.searchXhr.abort();
 			}
 
-			$region.addClass( 'tsoliin-list-table-region--loading' );
-			$region.attr( 'aria-busy', 'true' );
+			self.listNavRequestId = ( self.listNavRequestId || 0 ) + 1;
+			var requestId = self.listNavRequestId;
+
+			$target.addClass( 'tsoliin-list-table-region--loading' );
+			$target.attr( 'aria-busy', 'true' );
 
 			var xhr = $.ajax( {
 				url    : tsoliinData.ajaxUrl,
@@ -513,6 +521,7 @@
 				data   : {
 					action         : 'tsoliin_search_list',
 					nonce          : tsoliinData.nonce,
+					region         : useScope ? 'scope' : 'list',
 					s              : params.s || '',
 					filter         : params.filter || tsoliinData.listFilter || 'all',
 					quality_filter : params.quality_filter !== undefined ? params.quality_filter : ( tsoliinData.listQualityFilter || '' ),
@@ -525,10 +534,15 @@
 				},
 				success: function ( r ) {
 					if ( r.success && r.data && r.data.html ) {
-						if ( $scope.length ) {
+						var responseRegion = r.data.region || ( useScope ? 'scope' : 'list' );
+						if ( 'scope' === responseRegion && $scope.length ) {
+							$scope.html( r.data.html );
+						} else if ( $form.length ) {
+							$form.replaceWith( r.data.html );
+						} else if ( $scope.length ) {
 							$scope.html( r.data.html );
 						} else {
-							$region.html( r.data.html );
+							$target.html( r.data.html );
 						}
 						self.refreshDomRefs();
 						if ( opts.updateUrl && params.href ) {
@@ -555,8 +569,11 @@
 					}
 				},
 				complete: function () {
-					$region.removeClass( 'tsoliin-list-table-region--loading' );
-					$region.attr( 'aria-busy', 'false' );
+					if ( requestId !== self.listNavRequestId ) {
+						return;
+					}
+					$target.removeClass( 'tsoliin-list-table-region--loading' );
+					$target.attr( 'aria-busy', 'false' );
 					if ( self.listNavXhr === xhr ) {
 						self.listNavXhr = null;
 					}
@@ -592,13 +609,18 @@
 		 *
 		 * @param {string} href Target admin URL.
 		 */
-		loadListNav: function ( href ) {
+		loadListNav: function ( href, opts ) {
+			opts = opts || {};
 			var params = this.parseListNavLink( href );
 			if ( ! params ) {
 				window.location.href = href;
 				return;
 			}
+			if ( opts.region ) {
+				params.region = opts.region;
+			}
 			this.fetchListRegion( params, {
+				region          : opts.region || 'scope',
 				updateUrl       : true,
 				updateScopeMeta : true,
 				fallbackNavigate: true,
@@ -613,7 +635,8 @@
 		// ---------------------------------------------------------------
 		bindEvents: function () {
 			var self = this;
-			var listNavSelector = '.tsoliin-wrap .pagination-links a, .tsoliin-wrap .tablenav-pages a, .tsoliin-wrap .tsoliin-filter-tabs a, .tsoliin-wrap .tsoliin-quality-tabs a, .tsoliin-wrap .tsoliin-scope-tabs a, .tsoliin-wrap a.tsoliin-stat[href], .tsoliin-wrap .wp-list-table thead th a[href], .tsoliin-wrap .tsoliin-section-tabs a';
+			var listNavSelector = '.tsoliin-wrap .pagination-links a, .tsoliin-wrap .tablenav-pages a, .tsoliin-wrap .tsoliin-filter-tabs a, .tsoliin-wrap .tsoliin-quality-tabs a, .tsoliin-wrap .tsoliin-scope-tabs a, .tsoliin-wrap a.tsoliin-stat[href], .tsoliin-wrap .wp-list-table thead th a[href]';
+			var scopeNavSelector = '.tsoliin-wrap .tsoliin-section-tabs a';
 
 			$( document ).on( 'click', listNavSelector, function ( e ) {
 				if ( e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || 2 === e.which ) {
@@ -623,11 +646,32 @@
 				if ( ! href || ! $( '#tsoliin-scope-region, #tsoliin-list-table-region' ).length ) {
 					return;
 				}
+				var params = self.parseListNavLink( href );
+				if ( ! params ) {
+					return;
+				}
+				e.preventDefault();
+				self.fetchListRegion( params, {
+					updateUrl       : true,
+					fallbackNavigate: true,
+					onSuccess       : function () {
+						self.restoreListScroll();
+					}
+				} );
+			} );
+
+			$( document ).on( 'click', scopeNavSelector, function ( e ) {
+				if ( e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || 2 === e.which ) {
+					return;
+				}
+				var href = $( this ).attr( 'href' );
+				if ( ! href || ! $( '#tsoliin-scope-region' ).length ) {
+					return;
+				}
 				if ( ! self.parseListNavLink( href ) ) {
 					return;
 				}
 				e.preventDefault();
-				self.restoreListScroll();
 				self.loadListNav( href );
 			} );
 
@@ -1555,8 +1599,8 @@
 								if ( d.scan.resumable && self.$restartScanBtn && self.$restartScanBtn.length ) {
 									self.$restartScanBtn.show();
 								}
-								if ( ! parseInt( tsoliinData.bgRunning, 10 ) && ! self.isScanBlockingCheck() ) {
-									self.$checkBtn.prop( 'disabled', false );
+								if ( ! parseInt( tsoliinData.bgRunning, 10 ) ) {
+									self.$checkBtn.prop( 'disabled', self.isScanBlockingCheck() );
 								}
 								self.applyScanProgress( d.scan );
 							}
