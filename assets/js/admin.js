@@ -341,6 +341,11 @@
 				if ( url.searchParams.get( 'page' ) !== 'tso-link-inspector' ) {
 					return null;
 				}
+				var postId = parseInt( url.searchParams.get( 'post_id' ), 10 ) || 0;
+				var view   = url.searchParams.get( 'view' ) || 'links';
+				if ( postId > 0 ) {
+					view = 'links';
+				}
 				return {
 					href           : url.toString(),
 					filter         : url.searchParams.get( 'filter' ) || 'all',
@@ -348,7 +353,8 @@
 					scope          : url.searchParams.get( 'scope' ) || 'all',
 					paged          : Math.max( 1, parseInt( url.searchParams.get( 'paged' ), 10 ) || 1 ),
 					s              : url.searchParams.has( 's' ) ? ( url.searchParams.get( 's' ) || '' ) : '',
-					post_id        : parseInt( url.searchParams.get( 'post_id' ), 10 ) || 0,
+					post_id        : postId,
+					view           : view,
 					orderby        : url.searchParams.get( 'orderby' ) || '',
 					order          : url.searchParams.get( 'order' ) || ''
 				};
@@ -368,6 +374,7 @@
 			tsoliinData.listQualityFilter = params.quality_filter || '';
 			tsoliinData.listScope = params.scope || 'all';
 			tsoliinData.viewPostId = parseInt( params.post_id, 10 ) || 0;
+			tsoliinData.listView = params.view || 'links';
 			if ( params.orderby ) {
 				tsoliinData.listOrderby = params.orderby;
 			}
@@ -385,6 +392,82 @@
 		},
 
 		/**
+		 * Re-bind list form refs after AJAX scope navigation replaces the region.
+		 */
+		refreshDomRefs: function () {
+			this.$form = $( '#tsoliin-list-form' );
+		},
+
+		/**
+		 * Keep export toolbar forms aligned with the active post scope.
+		 *
+		 * @param {number} postId Active post_id (0 = all links).
+		 */
+		syncExportScope: function ( postId ) {
+			postId = parseInt( postId, 10 ) || 0;
+			$( '.tsoliin-export-form' ).each( function () {
+				var $form  = $( this );
+				var $field = $form.find( 'input[name="post_id"]' );
+				if ( postId > 0 ) {
+					if ( $field.length ) {
+						$field.val( postId );
+					} else {
+						$form.append( '<input type="hidden" name="post_id" value="' + postId + '" />' );
+					}
+				} else {
+					$field.remove();
+				}
+			} );
+		},
+
+		/**
+		 * Update the page heading after AJAX scope navigation.
+		 *
+		 * @param {string} html Title HTML returned by the server.
+		 */
+		updatePageTitle: function ( html ) {
+			if ( ! html ) {
+				return;
+			}
+			var $h1 = $( '.tsoliin-page-head h1.wp-heading-inline' );
+			if ( ! $h1.length ) {
+				return;
+			}
+			var $icon = $h1.find( '.tsoliin-title-icon' ).first();
+			if ( $icon.length ) {
+				$h1.empty().append( $icon ).append( document.createTextNode( ' ' ) ).append( $( html ) );
+			} else {
+				$h1.html( '<span class="dashicons dashicons-admin-links tsoliin-title-icon"></span> ' + html );
+			}
+		},
+
+		/**
+		 * Apply AJAX scope metadata (title, check button, exports).
+		 *
+		 * @param {Object} data AJAX response data.
+		 */
+		applyScopeNavMeta: function ( data ) {
+			if ( ! data ) {
+				return;
+			}
+			if ( data.page_title_html ) {
+				this.updatePageTitle( data.page_title_html );
+			}
+			if ( data.check_btn_label && this.$checkBtn && this.$checkBtn.length ) {
+				var $icon = this.$checkBtn.find( '.dashicons' ).first();
+				if ( $icon.length ) {
+					this.$checkBtn.empty().append( $icon ).append( document.createTextNode( ' ' + data.check_btn_label ) );
+				} else {
+					this.$checkBtn.text( data.check_btn_label );
+				}
+			}
+			if ( typeof data.view_post_id !== 'undefined' ) {
+				this.syncExportScope( data.view_post_id );
+			}
+			this.refreshStats();
+		},
+
+		/**
 		 * Fetch list-table HTML without reloading the admin page.
 		 *
 		 * @param {Object} params Nav/search params.
@@ -393,7 +476,8 @@
 		fetchListRegion: function ( params, opts ) {
 			opts = opts || {};
 			var self = this;
-			var $region = $( '#tsoliin-list-table-region' );
+			var $scope = $( '#tsoliin-scope-region' );
+			var $region = $scope.length ? $scope : $( '#tsoliin-list-table-region' );
 
 			if ( ! $region.length ) {
 				if ( opts.fallbackNavigate && params.href ) {
@@ -424,15 +508,24 @@
 					quality_filter : params.quality_filter !== undefined ? params.quality_filter : ( tsoliinData.listQualityFilter || '' ),
 					scope          : params.scope || tsoliinData.listScope || 'all',
 					post_id        : params.post_id !== undefined ? params.post_id : ( parseInt( tsoliinData.viewPostId, 10 ) || 0 ),
+					view           : params.view || tsoliinData.listView || 'links',
 					paged          : params.paged || 1,
 					orderby        : params.orderby || tsoliinData.listOrderby || 'date_found',
 					order          : params.order || tsoliinData.listOrder || 'DESC'
 				},
 				success: function ( r ) {
 					if ( r.success && r.data && r.data.html ) {
-						$region.html( r.data.html );
+						if ( $scope.length ) {
+							$scope.html( r.data.html );
+						} else {
+							$region.html( r.data.html );
+						}
+						self.refreshDomRefs();
 						if ( opts.updateUrl && params.href ) {
 							self.updateListNavState( params, params.href );
+						}
+						if ( opts.updateScopeMeta ) {
+							self.applyScopeNavMeta( r.data );
 						}
 						if ( typeof opts.onSuccess === 'function' ) {
 							opts.onSuccess( r.data );
@@ -477,7 +570,8 @@
 		 * Align the link list with the viewport after AJAX navigation.
 		 */
 		restoreListScroll: function () {
-			var el = document.getElementById( 'tsoliin-list-table-region' );
+			var el = document.getElementById( 'tsoliin-list-table-region' )
+				|| document.getElementById( 'tsoliin-scope-region' );
 			if ( el ) {
 				el.scrollIntoView( { block: 'start', behavior: 'auto' } );
 			}
@@ -496,6 +590,7 @@
 			}
 			this.fetchListRegion( params, {
 				updateUrl       : true,
+				updateScopeMeta : true,
 				fallbackNavigate: true,
 				onSuccess       : function () {
 					LC.restoreListScroll();
@@ -508,14 +603,14 @@
 		// ---------------------------------------------------------------
 		bindEvents: function () {
 			var self = this;
-			var listNavSelector = '.tsoliin-wrap .pagination-links a, .tsoliin-wrap .tsoliin-filter-tabs a, .tsoliin-wrap .tsoliin-quality-tabs a, .tsoliin-wrap .tsoliin-scope-tabs a, .tsoliin-wrap a.tsoliin-stat[href], .tsoliin-wrap .wp-list-table thead th a[href]';
+			var listNavSelector = '.tsoliin-wrap .pagination-links a, .tsoliin-wrap .tablenav-pages a, .tsoliin-wrap .tsoliin-filter-tabs a, .tsoliin-wrap .tsoliin-quality-tabs a, .tsoliin-wrap .tsoliin-scope-tabs a, .tsoliin-wrap a.tsoliin-stat[href], .tsoliin-wrap .wp-list-table thead th a[href], .tsoliin-wrap .tsoliin-section-tabs a';
 
 			$( document ).on( 'click', listNavSelector, function ( e ) {
 				if ( e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || 2 === e.which ) {
 					return;
 				}
 				var href = $( this ).attr( 'href' );
-				if ( ! href || ! $( '#tsoliin-list-table-region' ).length ) {
+				if ( ! href || ! $( '#tsoliin-scope-region, #tsoliin-list-table-region' ).length ) {
 					return;
 				}
 				if ( ! self.parseListNavLink( href ) ) {
@@ -533,7 +628,15 @@
 					if ( e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || 2 === e.which ) {
 						return;
 					}
-					self.markScrollBeforePostNav();
+					var href = $( this ).attr( 'href' );
+					if ( ! href || ! $( '#tsoliin-scope-region' ).length ) {
+						return;
+					}
+					if ( ! self.parseListNavLink( href ) ) {
+						return;
+					}
+					e.preventDefault();
+					self.loadListNav( href );
 				}
 			);
 
@@ -2638,7 +2741,7 @@
 			var $btn    = $( '.tsoliin-search-submit' ).first();
 			var focusPos = $input.length ? $input[0].selectionStart : null;
 
-			if ( ! $( '#tsoliin-list-table-region' ).length ) {
+			if ( ! $( '#tsoliin-scope-region, #tsoliin-list-table-region' ).length ) {
 				if ( $( '#tsoliin-list-form' ).length ) {
 					$( '#tsoliin-list-form' )[0].submit();
 				}

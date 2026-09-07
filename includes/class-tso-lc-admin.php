@@ -340,6 +340,12 @@ JS;
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$view_post_id = isset( $_GET['post_id'] ) ? absint( $_GET['post_id'] ) : 0;
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$list_view_raw = isset( $_GET['view'] ) ? sanitize_key( wp_unslash( $_GET['view'] ) ) : 'links';
+		$list_view     = in_array( $list_view_raw, array( 'links', 'posts', 'products' ), true ) ? $list_view_raw : 'links';
+		if ( $view_post_id > 0 ) {
+			$list_view = 'links';
+		}
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$list_filter  = isset( $_GET['filter'] ) ? sanitize_key( wp_unslash( $_GET['filter'] ) ) : 'all';
 		if ( in_array( $list_filter, $this->get_allowed_quality_filters(), true ) ) {
 			$list_filter = 'all';
@@ -360,6 +366,7 @@ JS;
 			'lat'        => $theme_coords['lat'],
 			'lng'        => $theme_coords['lng'],
 			'viewPostId' => $view_post_id,
+			'listView'   => $list_view,
 			'listFilter'        => $list_filter,
 			'listQualityFilter' => $list_quality,
 			'listScope'         => $list_scope,
@@ -817,47 +824,34 @@ JS;
 		echo '</div>';
 		echo '</div><!-- .tsoliin-hero -->';
 
-		if ( ! $view_post ) {
-			$this->render_main_section_nav( $posts_view, $products_view );
-		}
-
 		$this->render_scan_coverage_notices();
 		$this->render_onboarding_banner();
 
 		echo '<div id="tsoliin-diagnose-panel" class="tsoliin-diagnose-panel" style="display:none;"></div>';
 
-		if ( $view_post ) {
-			echo '<div class="tsoliin-action-bar">';
-			echo '<div class="tsoliin-action-bar__left">';
-			echo '<a href="' . esc_url( (string) get_edit_post_link( $view_post_id ) ) . '" class="button button-secondary" target="_blank">' . esc_html__( 'Edit post', 'tso-link-inspector' ) . '</a> ';
-			echo '<a href="' . esc_url( (string) get_permalink( $view_post_id ) ) . '" class="button button-secondary" target="_blank">' . esc_html__( 'View post', 'tso-link-inspector' ) . '</a> ';
-			echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector' ) ) . '" class="button button-secondary tsoliin-post-scope-link tsoliin-post-scope-link--back">&#8592; ' . esc_html__( 'Back', 'tso-link-inspector' ) . '</a>';
-			echo '</div>';
-			echo '</div>';
+		$scope_val  = $this->get_scope_from_request();
+		$filter_val = isset( $_REQUEST['filter'] ) ? sanitize_key( wp_unslash( $_REQUEST['filter'] ) ) : 'all'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		if ( in_array( $filter_val, $this->get_allowed_quality_filters(), true ) ) {
+			$filter_val = 'all';
+		} elseif ( ! in_array( $filter_val, $this->get_allowed_status_filters(), true ) ) {
+			$filter_val = 'all';
 		}
+		$list_ctx = $this->resolve_main_list_context(
+			$view_post_id,
+			$list_view,
+			$filter_val,
+			$scope_val,
+			$this->get_list_quality_filter_from_request(),
+			isset( $_REQUEST['paged'] ) ? max( 1, absint( $_REQUEST['paged'] ) ) : 1,
+			isset( $_REQUEST['orderby'] ) ? sanitize_key( wp_unslash( $_REQUEST['orderby'] ) ) : 'date_found',
+			isset( $_REQUEST['order'] ) ? sanitize_key( wp_unslash( $_REQUEST['order'] ) ) : 'DESC',
+			isset( $_REQUEST['s'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['s'] ) ) : ''
+		);
+		echo '<div id="tsoliin-scope-region">';
+		$this->render_scope_region( $table, $list_ctx );
+		echo '</div>';
 
-		if ( $posts_view ) {
-			$this->render_content_summary_view( 'posts' );
-		} elseif ( $products_view ) {
-			$this->render_content_summary_view( 'products' );
-		} else {
-			$scope_val = $this->get_scope_from_request();
-			// phpcs:ignore WordPress.Security.NonceVerification.Recommended
-			$filter_val = isset( $_REQUEST['filter'] ) ? sanitize_key( wp_unslash( $_REQUEST['filter'] ) ) : 'all';
-			if ( in_array( $filter_val, $this->get_allowed_quality_filters(), true ) ) {
-				$filter_val = 'all';
-			} elseif ( ! in_array( $filter_val, $this->get_allowed_status_filters(), true ) ) {
-				$filter_val = 'all';
-			}
-			echo '<form id="tsoliin-list-form" method="get">';
-			echo '<div id="tsoliin-list-table-region" class="tsoliin-list-table-region">';
-			$this->render_list_table_region( $table, $view_post_id, $filter_val, $scope_val );
-			echo '</div>';
-			echo '</form>';
-		}
-
-		// Edit modal (links list only).
-		if ( ! $summary_view ) {
+		// Edit modal (always in DOM so AJAX scope navigation can open it).
 		echo '<div id="tsoliin-modal" class="tsoliin-modal" style="display:none;" role="dialog" aria-modal="true">';
 		echo '<div class="tsoliin-modal__overlay"></div>';
 		echo '<div class="tsoliin-modal__content">';
@@ -890,7 +884,6 @@ JS;
 		echo '</div>';
 		echo '<div id="tsoliin-modal-feedback" class="tsoliin-modal__feedback"></div>';
 		echo '</div></div>';
-		}
 
 		echo '</div>';
 	}
@@ -2183,12 +2176,158 @@ JS;
 	}
 
 	/**
+	 * Normalize main-page list/summary context from request parameters.
+	 *
+	 * @param int    $view_post_id   Optional post scope.
+	 * @param string $list_view      links|posts|products.
+	 * @param string $filter_val     Status filter.
+	 * @param string $scope_val      Internal/external scope.
+	 * @param string $quality_filter Quality filter.
+	 * @param int    $paged          Current page.
+	 * @param string $orderby        List orderby column.
+	 * @param string $order          ASC|DESC.
+	 * @param string $search         Search term.
+	 * @return array<string,mixed>
+	 */
+	private function resolve_main_list_context( $view_post_id, $list_view, $filter_val, $scope_val, $quality_filter, $paged, $orderby, $order, $search ) {
+		$view_post_id = absint( $view_post_id );
+		$list_view    = sanitize_key( (string) $list_view );
+		if ( ! in_array( $list_view, array( 'links', 'posts', 'products' ), true ) ) {
+			$list_view = 'links';
+		}
+		if ( $view_post_id > 0 ) {
+			$list_view = 'links';
+		}
+		$posts_view    = ( 'posts' === $list_view && ! $view_post_id );
+		$products_view = ( 'products' === $list_view && ! $view_post_id && class_exists( 'TSOLIIN_WooCommerce', false ) && TSOLIIN_WooCommerce::is_scan_enabled() );
+		if ( 'products' === $list_view && ! $products_view ) {
+			$list_view = 'links';
+		}
+		$summary_view = $posts_view || $products_view;
+
+		return array(
+			'view_post_id'   => $view_post_id,
+			'view_post'      => $view_post_id ? get_post( $view_post_id ) : null,
+			'list_view'      => $list_view,
+			'posts_view'     => $posts_view,
+			'products_view'  => $products_view,
+			'summary_view'   => $summary_view,
+			'filter_val'     => $filter_val,
+			'scope_val'      => $scope_val,
+			'quality_filter' => $quality_filter,
+			'paged'          => max( 1, absint( $paged ) ),
+			'orderby'        => $orderby,
+			'order'          => $order,
+			'search'         => $search,
+		);
+	}
+
+	/**
+	 * Section nav, post action bar, summary tables, or the links list form.
+	 *
+	 * @param TSOLIIN_List_Table|null $table    Prepared list table (links view only).
+	 * @param array<string,mixed>     $list_ctx Context from resolve_main_list_context().
+	 * @return void
+	 */
+	private function render_scope_region( $table, array $list_ctx ) {
+		$view_post_id  = (int) $list_ctx['view_post_id'];
+		$view_post     = $list_ctx['view_post'];
+		$posts_view    = ! empty( $list_ctx['posts_view'] );
+		$products_view = ! empty( $list_ctx['products_view'] );
+
+		if ( ! $view_post ) {
+			$this->render_main_section_nav( $posts_view, $products_view );
+		}
+
+		if ( $view_post ) {
+			echo '<div class="tsoliin-action-bar">';
+			echo '<div class="tsoliin-action-bar__left">';
+			echo '<a href="' . esc_url( (string) get_edit_post_link( $view_post_id ) ) . '" class="button button-secondary" target="_blank">' . esc_html__( 'Edit post', 'tso-link-inspector' ) . '</a> ';
+			echo '<a href="' . esc_url( (string) get_permalink( $view_post_id ) ) . '" class="button button-secondary" target="_blank">' . esc_html__( 'View post', 'tso-link-inspector' ) . '</a> ';
+			echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector' ) ) . '" class="button button-secondary tsoliin-post-scope-link tsoliin-post-scope-link--back">&#8592; ' . esc_html__( 'Back', 'tso-link-inspector' ) . '</a>';
+			echo '</div>';
+			echo '</div>';
+		}
+
+		if ( $posts_view ) {
+			$_REQUEST['paged'] = max( 1, (int) $list_ctx['paged'] );
+			$this->render_content_summary_view( 'posts' );
+			return;
+		}
+		if ( $products_view ) {
+			$_REQUEST['paged'] = max( 1, (int) $list_ctx['paged'] );
+			$this->render_content_summary_view( 'products' );
+			return;
+		}
+
+		echo '<form id="tsoliin-list-form" method="get">';
+		echo '<div id="tsoliin-list-table-region" class="tsoliin-list-table-region">';
+		if ( $table instanceof TSOLIIN_List_Table ) {
+			$this->render_list_table_region( $table, $view_post_id, (string) $list_ctx['filter_val'], (string) $list_ctx['scope_val'] );
+		}
+		echo '</div>';
+		echo '</form>';
+	}
+
+	/**
+	 * Page title markup (after the dashicon) for AJAX scope navigation.
+	 *
+	 * @param array<string,mixed> $list_ctx Context from resolve_main_list_context().
+	 * @return string
+	 */
+	private function get_main_page_title_inner_html( array $list_ctx ) {
+		$view_post     = $list_ctx['view_post'];
+		$posts_view    = ! empty( $list_ctx['posts_view'] );
+		$products_view = ! empty( $list_ctx['products_view'] );
+
+		ob_start();
+		if ( $view_post ) {
+			$this->render_plugin_title_with_version( false );
+		} elseif ( $products_view ) {
+			$this->render_plugin_title_with_version( true );
+			echo ' <span class="tsoliin-breadcrumb-sep">&#8250;</span> ';
+			echo esc_html__( 'Products with issues', 'tso-link-inspector' );
+		} elseif ( $posts_view ) {
+			$this->render_plugin_title_with_version( true );
+			echo ' <span class="tsoliin-breadcrumb-sep">&#8250;</span> ';
+			echo esc_html__( 'Posts with issues', 'tso-link-inspector' );
+		} else {
+			$this->render_plugin_title_with_version( false );
+		}
+		return (string) ob_get_clean();
+	}
+
+	/**
+	 * Toolbar check-button label for the current post scope.
+	 *
+	 * @param int $view_post_id Optional post filter.
+	 * @return string
+	 */
+	private function get_check_button_label_for_scope( $view_post_id ) {
+		$view_post_id  = absint( $view_post_id );
+		$bg            = $this->get_cached_bg_progress();
+		$pending_check = (int) $this->db->get_pending_check_count( $view_post_id );
+
+		if ( $bg['running'] ) {
+			return __( 'Check now', 'tso-link-inspector' );
+		}
+		if ( $pending_check > 0 ) {
+			return $view_post_id
+				? __( 'Continue this post', 'tso-link-inspector' )
+				: __( 'Continue check', 'tso-link-inspector' );
+		}
+		if ( $view_post_id ) {
+			return __( 'Check this post', 'tso-link-inspector' );
+		}
+		return __( 'Check now', 'tso-link-inspector' );
+	}
+
+	/**
 	 * Hidden filters + list table markup (main page and live search AJAX).
 	 *
 	 * @param TSOLIIN_List_Table $table        Prepared list table.
 	 * @param int                $view_post_id Optional post filter.
 	 * @param string             $filter_val   Active status filter.
-	 * @param string             $scope_val    Internal/external scope.
 	 * @param string             $scope_val    Internal/external scope.
 	 * @return void
 	 */
@@ -2236,32 +2375,57 @@ JS;
 		// phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$post_id = isset( $_POST['post_id'] ) ? absint( $_POST['post_id'] ) : 0;
 		// phpcs:ignore WordPress.Security.NonceVerification.Missing
+		$list_view = isset( $_POST['view'] ) ? sanitize_key( wp_unslash( $_POST['view'] ) ) : 'links';
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$paged   = isset( $_POST['paged'] ) ? max( 1, absint( $_POST['paged'] ) ) : 1;
 		// phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$orderby = isset( $_POST['orderby'] ) ? sanitize_key( wp_unslash( $_POST['orderby'] ) ) : 'date_found';
 		// phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$order   = isset( $_POST['order'] ) ? sanitize_key( wp_unslash( $_POST['order'] ) ) : 'DESC';
 
-		$_REQUEST['s']       = $search;
+		$_REQUEST['s']              = $search;
 		$_REQUEST['filter']         = $filter;
 		$_REQUEST['quality_filter'] = $quality;
-		$_REQUEST['scope']   = $scope;
-		$_REQUEST['paged']   = $paged;
-		$_REQUEST['orderby'] = $orderby;
-		$_REQUEST['order']   = $order;
+		$_REQUEST['scope']          = $scope;
+		$_REQUEST['paged']          = $paged;
+		$_REQUEST['orderby']        = $orderby;
+		$_REQUEST['order']          = $order;
+		unset( $_REQUEST['post_id'], $_REQUEST['view'] );
 		if ( $post_id ) {
 			$_REQUEST['post_id'] = $post_id;
+		} elseif ( in_array( $list_view, array( 'posts', 'products' ), true ) ) {
+			$_REQUEST['view'] = $list_view;
 		}
 
-		$table = new TSOLIIN_List_Table( $this->db, $this->http );
-		$table->prepare_items();
+		$list_ctx = $this->resolve_main_list_context(
+			$post_id,
+			$list_view,
+			$filter,
+			$scope,
+			$quality,
+			$paged,
+			$orderby,
+			$order,
+			$search
+		);
+
+		$table = null;
+		if ( empty( $list_ctx['summary_view'] ) ) {
+			$table = new TSOLIIN_List_Table( $this->db, $this->http );
+			$table->prepare_items();
+		}
 
 		ob_start();
-		$this->render_list_table_region( $table, $post_id, $filter, $scope );
+		$this->render_scope_region( $table, $list_ctx );
 		wp_send_json_success(
 			array(
-				'html'  => ob_get_clean(),
-				'total' => (int) $table->get_pagination_arg( 'total_items' ),
+				'html'             => ob_get_clean(),
+				'total'            => ( $table instanceof TSOLIIN_List_Table ) ? (int) $table->get_pagination_arg( 'total_items' ) : 0,
+				'view_post_id'     => (int) $list_ctx['view_post_id'],
+				'list_view'        => (string) $list_ctx['list_view'],
+				'summary_view'     => ! empty( $list_ctx['summary_view'] ),
+				'page_title_html'  => $this->get_main_page_title_inner_html( $list_ctx ),
+				'check_btn_label'  => $this->get_check_button_label_for_scope( (int) $list_ctx['view_post_id'] ),
 			)
 		);
 	}

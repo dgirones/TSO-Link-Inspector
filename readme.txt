@@ -135,7 +135,7 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 * Fix: Manual Scan now finishes comments, menus, terms, FSE, widgets, and ACF after posts, then starts a site-wide HTTP check.
 * Fix: Background scan/check workers use a lock, a time budget, and a recovery cron event so a PHP timeout cannot leave a job stuck.
 * Fix: Stop is honored mid-batch; auto-resume uses the stored check scope, not the current list filter.
-* Fix: Reloading the admin page keeps scan/check monitoring active when WP-Cron is delayed.
+* Fix: Opening a post's links, going back, or switching Posts/Products summary tabs no longer reloads the page during a scan or check.
 * Improvement: Admin UI day / night / auto theme (auto follows sunrise and sunset from the site timezone).
 * Fix: Editor deep-link focus no longer runs duplicate `get_link()` queries on the same request.
 
