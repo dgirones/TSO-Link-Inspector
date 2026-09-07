@@ -116,10 +116,7 @@
 		 * @return {boolean}
 		 */
 		shouldDeferCheckReload: function ( started, maxWaitMs ) {
-			if ( this.scanning ) {
-				return true;
-			}
-			if ( this.scanning || parseInt( tsoliinData.scanRunning, 10 ) === 1 ) {
+			if ( this.isScanBlockingCheck() ) {
 				return true;
 			}
 			if ( this.polling || parseInt( tsoliinData.bgRunning, 10 ) === 1 ) {
@@ -147,6 +144,17 @@
 				return true;
 			}
 			return false;
+		},
+
+		/**
+		 * Whether scan work is active or paused mid-run (HTTP check must wait).
+		 *
+		 * @return {boolean}
+		 */
+		isScanBlockingCheck: function () {
+			return this.scanning
+				|| parseInt( tsoliinData.scanRunning, 10 ) === 1
+				|| parseInt( tsoliinData.scanResumable, 10 ) === 1;
 		},
 
 		// ---------------------------------------------------------------
@@ -281,7 +289,7 @@
 			} else {
 				var pendingOnLoad = parseInt( tsoliinData.pendingCheck, 10 ) || 0;
 				var pctOnLoad     = parseInt( tsoliinData.bgPct, 10 ) || 0;
-				var scanActive    = scanRunning || parseInt( tsoliinData.scanResumable, 10 ) === 1;
+				var scanActive    = this.isScanBlockingCheck();
 				if ( pendingOnLoad > 0 && pctOnLoad > 0 && pctOnLoad < 100 ) {
 					this.$checkProg.show();
 					// Incomplete Check now / Scan→Check (not a manual Stop): finish automatically.
@@ -1082,8 +1090,7 @@
 				return;
 			}
 
-			var scanActive = parseInt( tsoliinData.scanRunning, 10 ) === 1
-				|| parseInt( tsoliinData.scanResumable, 10 ) === 1;
+			var scanActive = this.isScanBlockingCheck();
 			if ( scanActive && ! this.scanChainCheck ) {
 				return;
 			}
@@ -1275,6 +1282,7 @@
 						: ( parseInt( d.pending, 10 ) || 0 );
 					var scanWasRunning = parseInt( tsoliinData.scanRunning, 10 ) === 1;
 					var checkWasRunning = parseInt( tsoliinData.bgRunning, 10 ) === 1;
+					var scanBlocking = self.isScanBlockingCheck();
 
 					if ( d.scan ) {
 						if ( d.scan.running ) {
@@ -1312,7 +1320,7 @@
 								if ( d.scan.resumable && self.$restartScanBtn && self.$restartScanBtn.length ) {
 									self.$restartScanBtn.show();
 								}
-								if ( ! parseInt( tsoliinData.bgRunning, 10 ) ) {
+								if ( ! parseInt( tsoliinData.bgRunning, 10 ) && ! self.isScanBlockingCheck() ) {
 									self.$checkBtn.prop( 'disabled', false );
 								}
 								self.applyScanProgress( d.scan );
@@ -1320,7 +1328,7 @@
 						}
 					}
 
-					if ( d.running ) {
+					if ( d.running && ! scanBlocking ) {
 						self.checkStartPending = false;
 						tsoliinData.bgRunning = 1;
 						self.checkSessionActive = true;
@@ -1338,7 +1346,7 @@
 						if ( ! self.checkTickBusy ) {
 							self.checkTick();
 						}
-					} else if ( ( checkWasRunning || self.checkSessionActive ) && ! self.completed ) {
+					} else if ( ! scanBlocking && ( checkWasRunning || self.checkSessionActive ) && ! self.completed ) {
 						if ( typeof d.pending !== 'undefined' ) {
 							tsoliinData.pendingCheck = d.pending;
 						}
@@ -1662,6 +1670,10 @@
 			self.listReloadTimer = window.setTimeout( function () {
 				self.listReloadTimer = null;
 				var wait = function () {
+					if ( self.isScanBlockingCheck() || parseInt( tsoliinData.bgRunning, 10 ) === 1 ) {
+						self.listReloadTimer = window.setTimeout( wait, 500 );
+						return;
+					}
 					if ( self.$modal && self.$modal.is( ':visible' ) ) {
 						self.listReloadTimer = window.setTimeout( wait, 500 );
 						return;

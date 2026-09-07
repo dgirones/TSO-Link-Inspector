@@ -97,7 +97,7 @@ class TSOLIIN_Cron {
 
 	/** Hourly: check a batch of stale links. */
 	public function run_check_batch() {
-		if ( get_option( 'tsoliin_bg_scan_running' ) ) {
+		if ( $this->is_bg_scan_blocking_check() ) {
 			return;
 		}
 		// Keep an abandoned Scan→Check / Check now run going until the queue is empty.
@@ -525,6 +525,18 @@ class TSOLIIN_Cron {
 	}
 
 	/**
+	 * Whether an in-progress or paused scan must finish before HTTP checks run.
+	 *
+	 * @return bool
+	 */
+	public function is_bg_scan_blocking_check() {
+		if ( get_option( 'tsoliin_bg_scan_running' ) ) {
+			return true;
+		}
+		return $this->is_bg_scan_resumable();
+	}
+
+	/**
 	 * Schedule the next background scan cron step when none is pending.
 	 *
 	 * @return void
@@ -654,7 +666,7 @@ class TSOLIIN_Cron {
 			return false;
 		}
 		try {
-			if ( get_option( 'tsoliin_bg_scan_running' ) ) {
+			if ( $this->is_bg_scan_blocking_check() ) {
 				return false;
 			}
 			$resume  = (bool) $resume;
@@ -922,6 +934,9 @@ class TSOLIIN_Cron {
 	 */
 	private function maybe_resume_incomplete_bg_check() {
 		if ( get_option( self::OPT_USER_STOPPED_CHECK ) ) {
+			return;
+		}
+		if ( $this->is_bg_scan_blocking_check() ) {
 			return;
 		}
 

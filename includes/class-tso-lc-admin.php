@@ -414,9 +414,7 @@ JS;
 			// Request-cached COUNT; same key as get_bg_progress() when not filtering by post.
 			'pendingCheck' => (int) $this->db->get_pending_check_count( absint( $view_post_id ) ),
 			'checkAutoResume' => (
-				! get_option( 'tsoliin_bg_scan_running' )
-				&& empty( $bg_scan['running'] )
-				&& empty( $bg_scan['resumable'] )
+				! $this->cron->is_bg_scan_blocking_check()
 				&& ! get_option( 'tsoliin_bg_check_user_stopped' )
 				&& (int) $bg['pct'] > 0
 				&& (int) $bg['pct'] < 100
@@ -3523,7 +3521,7 @@ JS;
 		$resume  = ! isset( $_POST['resume'] ) || '0' !== sanitize_text_field( wp_unslash( $_POST['resume'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$post_id = isset( $_POST['post_id'] ) ? absint( $_POST['post_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$scan    = $this->cron->get_bg_scan_progress();
-		if ( get_option( 'tsoliin_bg_scan_running' ) || ! empty( $scan['running'] ) || ! empty( $scan['resumable'] ) ) {
+		if ( $this->cron->is_bg_scan_blocking_check() ) {
 			wp_send_json_error(
 				array(
 					'message' => __( 'A scan is still in progress. Wait for it to finish (or stop it) before checking links.', 'tso-link-inspector' ),
@@ -3720,9 +3718,7 @@ JS;
 		$scan         = $this->cron->get_bg_scan_progress();
 		if ( $nudge
 			&& $check_session
-			&& ! get_option( 'tsoliin_bg_scan_running' )
-			&& empty( $scan['running'] )
-			&& empty( $scan['resumable'] )
+			&& ! $this->cron->is_bg_scan_blocking_check()
 			&& ! get_option( 'tsoliin_bg_check_running' )
 			&& ! get_option( 'tsoliin_bg_check_user_stopped' )
 			&& $this->db->get_pending_check_count( $stored_post_id ) > 0 ) {
