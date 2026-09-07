@@ -129,6 +129,7 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 
 = 2.4.5 =
 * Fix: Scan deduplication treats Jetpack/WordPress `?ssl=1` image URLs as the same resource as the file without that query parameter (only one row is stored).
+* Fix: Sorting the link list or reloading the page during a scan no longer auto-starts an HTTP check or stops the scan at partial progress.
 * Fix: Daily automatic scan continues from the saved cursor instead of restarting at page 1.
 * Fix: Manual Scan now finishes comments, menus, terms, FSE, widgets, and ACF after posts, then starts a site-wide HTTP check.
 * Fix: Background scan/check workers use a lock, a time budget, and a recovery cron event so a PHP timeout cannot leave a job stuck.

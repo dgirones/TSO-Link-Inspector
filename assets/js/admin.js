@@ -26,7 +26,7 @@
 		scanSessionActive  : false,
 		scanTickBusy       : false,
 		checkTickBusy      : false,
-		nudgePending   : false,
+		scanChainCheck     : false,
 		editLinkId  : 0,
 		editOldUrl  : '',
 		editPostId  : 0,
@@ -281,10 +281,11 @@
 			} else {
 				var pendingOnLoad = parseInt( tsoliinData.pendingCheck, 10 ) || 0;
 				var pctOnLoad     = parseInt( tsoliinData.bgPct, 10 ) || 0;
+				var scanActive    = scanRunning || parseInt( tsoliinData.scanResumable, 10 ) === 1;
 				if ( pendingOnLoad > 0 && pctOnLoad > 0 && pctOnLoad < 100 ) {
 					this.$checkProg.show();
 					// Incomplete Check now / Scan→Check (not a manual Stop): finish automatically.
-					if ( parseInt( tsoliinData.checkAutoResume, 10 ) === 1 ) {
+					if ( ! scanActive && parseInt( tsoliinData.checkAutoResume, 10 ) === 1 ) {
 						this.updateCheckProgress( pctOnLoad, tsoliinData.i18n.checking );
 						this.startBgCheck( true, true, parseInt( tsoliinData.bgPostId, 10 ) || 0 );
 					} else {
@@ -499,7 +500,7 @@
 		// ---------------------------------------------------------------
 		bindEvents: function () {
 			var self = this;
-			var listNavSelector = '.tsoliin-wrap .pagination-links a, .tsoliin-wrap .tsoliin-filter-tabs a, .tsoliin-wrap .tsoliin-quality-tabs a, .tsoliin-wrap .tsoliin-scope-tabs a, .tsoliin-wrap a.tsoliin-stat[href]';
+			var listNavSelector = '.tsoliin-wrap .pagination-links a, .tsoliin-wrap .tsoliin-filter-tabs a, .tsoliin-wrap .tsoliin-quality-tabs a, .tsoliin-wrap .tsoliin-scope-tabs a, .tsoliin-wrap a.tsoliin-stat[href], .tsoliin-wrap .wp-list-table thead th a[href]';
 
 			$( document ).on( 'click', listNavSelector, function ( e ) {
 				if ( e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || 2 === e.which ) {
@@ -1038,6 +1039,7 @@
 				self.$checkProg.hide();
 				self.$checkBar.css( 'width', '0%' );
 				self.$checkLbl.text( '' );
+				self.scanChainCheck = true;
 				self.startBgCheck( true, false, 0 );
 			}, 800 );
 		},
@@ -1080,6 +1082,12 @@
 				return;
 			}
 
+			var scanActive = parseInt( tsoliinData.scanRunning, 10 ) === 1
+				|| parseInt( tsoliinData.scanResumable, 10 ) === 1;
+			if ( scanActive && ! this.scanChainCheck ) {
+				return;
+			}
+
 			// Resume ("Continue check") starts immediately — the button label already states intent.
 			// Only ask before a full site-wide recheck from zero.
 			if ( ! skipConfirm && ! willResume && postId <= 0 && tsoliinData.i18n.confirmFullCheck ) {
@@ -1114,6 +1122,7 @@
 					post_id  : postId
 				},
 				success: function ( r ) {
+					self.scanChainCheck = false;
 					if ( r.success ) {
 						self.checkStartPending = false;
 						tsoliinData.bgRunning = 1;
@@ -1148,6 +1157,7 @@
 					}
 				},
 				error: function () {
+					self.scanChainCheck = false;
 					// The start request has an indeterminate result; polling is the source
 					// of truth and will reveal whether the server created the job.
 					tsoliinData.bgRunning = 1;

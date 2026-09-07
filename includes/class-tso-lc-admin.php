@@ -413,7 +413,15 @@ JS;
 			'scanError'   => isset( $bg_scan['error'] ) ? (string) $bg_scan['error'] : '',
 			// Request-cached COUNT; same key as get_bg_progress() when not filtering by post.
 			'pendingCheck' => (int) $this->db->get_pending_check_count( absint( $view_post_id ) ),
-			'checkAutoResume' => ( ! get_option( 'tsoliin_bg_check_user_stopped' ) && (int) $bg['pct'] > 0 && (int) $bg['pct'] < 100 && $this->db->get_pending_check_count( absint( isset( $bg['post_id'] ) ? $bg['post_id'] : 0 ) ) > 0 ) ? 1 : 0,
+			'checkAutoResume' => (
+				! get_option( 'tsoliin_bg_scan_running' )
+				&& empty( $bg_scan['running'] )
+				&& empty( $bg_scan['resumable'] )
+				&& ! get_option( 'tsoliin_bg_check_user_stopped' )
+				&& (int) $bg['pct'] > 0
+				&& (int) $bg['pct'] < 100
+				&& $this->db->get_pending_check_count( absint( isset( $bg['post_id'] ) ? $bg['post_id'] : 0 ) ) > 0
+			) ? 1 : 0,
 			'refreshInterval' => 8000, // ms between stat card auto-refreshes
 			'i18n' => array(
 				'scanning'      => __( 'Scanning...', 'tso-link-inspector' ),
@@ -3514,8 +3522,13 @@ JS;
 		$this->check_nonce_and_cap();
 		$resume  = ! isset( $_POST['resume'] ) || '0' !== sanitize_text_field( wp_unslash( $_POST['resume'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$post_id = isset( $_POST['post_id'] ) ? absint( $_POST['post_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
-		if ( get_option( 'tsoliin_bg_scan_running' ) ) {
-			$this->cron->stop_bg_scan();
+		$scan    = $this->cron->get_bg_scan_progress();
+		if ( get_option( 'tsoliin_bg_scan_running' ) || ! empty( $scan['running'] ) || ! empty( $scan['resumable'] ) ) {
+			wp_send_json_error(
+				array(
+					'message' => __( 'A scan is still in progress. Wait for it to finish (or stop it) before checking links.', 'tso-link-inspector' ),
+				)
+			);
 		}
 		$pending_before = $this->db->get_pending_check_count( $post_id );
 		if ( ! $this->cron->start_bg_check( $resume, $post_id, false ) ) {
@@ -3704,9 +3717,12 @@ JS;
 		$nudge        = isset( $_POST['nudge'] ) && '1' === sanitize_text_field( wp_unslash( $_POST['nudge'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$check_session = isset( $_POST['check_session_active'] ) && '1' === sanitize_text_field( wp_unslash( $_POST['check_session_active'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$stored_post_id = absint( get_option( 'tsoliin_bg_check_post_id', 0 ) );
+		$scan         = $this->cron->get_bg_scan_progress();
 		if ( $nudge
 			&& $check_session
 			&& ! get_option( 'tsoliin_bg_scan_running' )
+			&& empty( $scan['running'] )
+			&& empty( $scan['resumable'] )
 			&& ! get_option( 'tsoliin_bg_check_running' )
 			&& ! get_option( 'tsoliin_bg_check_user_stopped' )
 			&& $this->db->get_pending_check_count( $stored_post_id ) > 0 ) {
@@ -3714,7 +3730,6 @@ JS;
 		}
 		// Progress poll is UI-only. Scan/check ticks, keep-alive, and cron advance the jobs.
 		$bg           = $this->cron->get_bg_progress();
-		$scan         = $this->cron->get_bg_scan_progress();
 		$post_id      = isset( $bg['post_id'] ) ? absint( $bg['post_id'] ) : 0;
 		$pending_view = $this->db->get_pending_check_count( $view_post_id );
 		$stats        = $post_id ? $this->db->get_stats_for_post( $post_id ) : $this->db->get_stats();
