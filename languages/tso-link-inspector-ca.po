@@ -3226,6 +3226,39 @@ msgstr "Continua l’escaneig"
 msgid "Restart scan"
 msgstr "Reinicia l’escaneig"
 
+msgid "Discard scan"
+msgstr "Descarta l’escaneig"
+
+msgid "Discard check"
+msgstr "Descarta la comprovació"
+
+msgid "Discard all paused"
+msgstr "Descarta tot en pausa"
+
+msgid ""
+"Discard this paused scan? Links already found stay in the list; only scan "
+"progress is cleared. You can run Scan now again later."
+msgstr ""
+"Vols descartar aquest escaneig en pausa? Els enllaços ja trobats romandran "
+"a la llista; només s’esborra el progrés de l’escaneig. Pots tornar a fer "
+"Escanejar ara més tard."
+
+msgid ""
+"Discard this paused check? HTTP results already saved are kept; the progress "
+"bar is cleared. Unchecked links remain for a future Check now."
+msgstr ""
+"Vols descartar aquesta comprovació en pausa? Es conserven els resultats HTTP "
+"ja guardats; s’esborra la barra de progrés. Els enllaços sense comprovar "
+"queden per un futur Comprovar ara."
+
+msgid ""
+"Discard all paused scan and check tasks? Found links and saved HTTP results "
+"are kept; progress bars are cleared."
+msgstr ""
+"Vols descartar totes les tasques d’escaneig i comprovació en pausa? Es "
+"conserven els enllaços trobats i els resultats HTTP guardats; s’esborren "
+"les barres de progrés."
+
 msgid "Scan started. You can continue browsing."
 msgstr "Escaneig iniciat. Pots continuar navegant."
 

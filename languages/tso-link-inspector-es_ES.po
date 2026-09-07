@@ -3404,6 +3404,39 @@ msgstr "Continuar escaneo"
 msgid "Restart scan"
 msgstr "Reiniciar escaneo"
 
+msgid "Discard scan"
+msgstr "Descartar escaneo"
+
+msgid "Discard check"
+msgstr "Descartar comprobación"
+
+msgid "Discard all paused"
+msgstr "Descartar todo en pausa"
+
+msgid ""
+"Discard this paused scan? Links already found stay in the list; only scan "
+"progress is cleared. You can run Scan now again later."
+msgstr ""
+"¿Descartar este escaneo en pausa? Los enlaces ya encontrados permanecen en "
+"la lista; solo se borra el progreso del escaneo. Puedes usar Escanear ahora "
+"más tarde."
+
+msgid ""
+"Discard this paused check? HTTP results already saved are kept; the progress "
+"bar is cleared. Unchecked links remain for a future Check now."
+msgstr ""
+"¿Descartar esta comprobación en pausa? Se conservan los resultados HTTP ya "
+"guardados; se borra la barra de progreso. Los enlaces sin comprobar quedan "
+"para un futuro Comprobar ahora."
+
+msgid ""
+"Discard all paused scan and check tasks? Found links and saved HTTP results "
+"are kept; progress bars are cleared."
+msgstr ""
+"¿Descartar todas las tareas de escaneo y comprobación en pausa? Se "
+"conservan los enlaces encontrados y los resultados HTTP guardados; se "
+"borran las barras de progreso."
+
 msgid "Scan started. You can continue browsing."
 msgstr "Escaneo iniciado. Puedes continuar navegando."
 
