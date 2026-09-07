@@ -256,6 +256,40 @@ class TSOLIIN_Cron {
 	}
 
 	/**
+	 * Abandon a paused scan without deleting links already found.
+	 *
+	 * @return void
+	 */
+	public function discard_bg_scan() {
+		$this->stop_bg_scan();
+		update_option( 'tsoliin_bg_scan_complete', 1, false );
+		delete_option( 'tsoliin_bg_scan_error' );
+		delete_option( 'tsoliin_bg_scan_page' );
+		delete_option( 'tsoliin_bg_scan_scanned' );
+		delete_option( 'tsoliin_bg_scan_started' );
+		delete_option( 'tsoliin_bg_scan_phase' );
+	}
+
+	/**
+	 * Whether a background check was paused and can be resumed or discarded.
+	 *
+	 * @return bool
+	 */
+	public function is_bg_check_paused() {
+		if ( get_option( 'tsoliin_bg_check_running' ) ) {
+			return false;
+		}
+		if ( get_option( self::OPT_USER_STOPPED_CHECK ) ) {
+			return true;
+		}
+		$total = (int) get_option( 'tsoliin_bg_check_total', 0 );
+		if ( $total <= 0 ) {
+			return false;
+		}
+		return ! (bool) get_option( 'tsoliin_bg_check_complete', 0 );
+	}
+
+	/**
 	 * Seconds of work allowed in one worker invocation.
 	 *
 	 * @param bool $spawn True for WP-Cron / spawn_cron; false for admin AJAX ticks.
@@ -760,6 +794,24 @@ class TSOLIIN_Cron {
 		update_option( self::OPT_USER_STOPPED_CHECK, 1, false );
 		wp_clear_scheduled_hook( self::HOOK_BG_STEP );
 		$this->db->release_transient_lock( 'tsoliin_bg_check_step_lock' );
+	}
+
+	/**
+	 * Abandon a paused check without resetting saved HTTP results.
+	 *
+	 * @return void
+	 */
+	public function discard_bg_check() {
+		$this->stop_bg_check();
+		delete_option( self::OPT_USER_STOPPED_CHECK );
+		delete_option( self::OPT_EMPTY_BATCH_RETRIES );
+		update_option( 'tsoliin_bg_check_complete', 1, false );
+		delete_option( 'tsoliin_bg_check_total' );
+		delete_option( 'tsoliin_bg_check_checked' );
+		delete_option( 'tsoliin_bg_check_started' );
+		delete_option( 'tsoliin_bg_check_post_id' );
+		delete_option( 'tsoliin_bg_check_token' );
+		delete_option( 'tsoliin_bg_check_last_error' );
 	}
 
 	/**

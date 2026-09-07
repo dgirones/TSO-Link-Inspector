@@ -213,6 +213,9 @@
 			this.$startBtn     = $( '#tsoliin-start-scan' );
 			this.$stopScanBtn  = $( '#tsoliin-stop-scan' );
 			this.$restartScanBtn = $( '#tsoliin-restart-scan' );
+			this.$discardScanBtn = $( '#tsoliin-discard-scan' );
+			this.$discardCheckBtn = $( '#tsoliin-discard-check' );
+			this.$discardAllBtn = $( '#tsoliin-discard-all' );
 			this.$checkBtn     = $( '#tsoliin-start-check' );
 			this.$restartBtn   = $( '#tsoliin-restart-check' );
 			this.$stopBtn      = $( '#tsoliin-stop-check' );
@@ -290,7 +293,8 @@
 				var pendingOnLoad = parseInt( tsoliinData.pendingCheck, 10 ) || 0;
 				var pctOnLoad     = parseInt( tsoliinData.bgPct, 10 ) || 0;
 				var scanActive    = this.isScanBlockingCheck();
-				if ( pendingOnLoad > 0 && pctOnLoad > 0 && pctOnLoad < 100 ) {
+				var checkPaused   = parseInt( tsoliinData.checkPaused, 10 ) === 1;
+				if ( checkPaused && pctOnLoad > 0 && pctOnLoad < 100 ) {
 					this.$checkProg.show();
 					// Incomplete Check now / Scan→Check (not a manual Stop): finish automatically.
 					if ( ! scanActive && parseInt( tsoliinData.checkAutoResume, 10 ) === 1 ) {
@@ -303,6 +307,8 @@
 					this.$checkProg.hide();
 				}
 			}
+
+			this.syncDiscardButtons();
 
 			if ( scanRunning || checkRunning ) {
 				this.startPolling();
@@ -670,6 +676,25 @@
 				} );
 			}
 
+			if ( this.$discardScanBtn && this.$discardScanBtn.length ) {
+				this.$discardScanBtn.on( 'click', function () {
+					if ( $( this ).is( ':hidden' ) ) { return; }
+					self.discardBgJobs( 'scan' );
+				} );
+			}
+			if ( this.$discardCheckBtn && this.$discardCheckBtn.length ) {
+				this.$discardCheckBtn.on( 'click', function () {
+					if ( $( this ).is( ':hidden' ) ) { return; }
+					self.discardBgJobs( 'check' );
+				} );
+			}
+			if ( this.$discardAllBtn && this.$discardAllBtn.length ) {
+				this.$discardAllBtn.on( 'click', function () {
+					if ( $( this ).is( ':hidden' ) ) { return; }
+					self.discardBgJobs( 'all' );
+				} );
+			}
+
 			this.$checkBtn.on( 'click', function () {
 				if ( $( this ).prop( 'disabled' ) ) { return; }
 				if ( parseInt( tsoliinData.bgRunning, 10 ) === 1 ) {
@@ -878,8 +903,9 @@
 		resetCheckButton: function () {
 			var postId = parseInt( tsoliinData.viewPostId, 10 ) || 0;
 			var pending = parseInt( tsoliinData.pendingCheck, 10 ) || 0;
+			var checkPaused = parseInt( tsoliinData.checkPaused, 10 ) === 1;
 			var label;
-			if ( pending > 0 ) {
+			if ( checkPaused && pending > 0 ) {
 				label = postId > 0
 					? ( tsoliinData.i18n.continueThisPost || tsoliinData.i18n.checkThisPost )
 					: ( tsoliinData.i18n.continueCheck || tsoliinData.i18n.checkNow );
@@ -897,6 +923,98 @@
 			this.$checkBtn.prop( 'disabled', false ).html(
 				'<span class="dashicons dashicons-yes-alt"></span> ' + label
 			);
+			this.syncDiscardButtons();
+		},
+
+		syncDiscardButtons: function () {
+			var scanPaused = parseInt( tsoliinData.scanResumable, 10 ) === 1
+				&& ! parseInt( tsoliinData.scanRunning, 10 );
+			var checkPaused = parseInt( tsoliinData.checkPaused, 10 ) === 1
+				&& ! parseInt( tsoliinData.bgRunning, 10 );
+			if ( this.$discardScanBtn && this.$discardScanBtn.length ) {
+				this.$discardScanBtn.toggle( scanPaused );
+			}
+			if ( this.$discardCheckBtn && this.$discardCheckBtn.length ) {
+				this.$discardCheckBtn.toggle( checkPaused );
+			}
+			if ( this.$discardAllBtn && this.$discardAllBtn.length ) {
+				this.$discardAllBtn.toggle( scanPaused && checkPaused );
+			}
+		},
+
+		discardBgJobs: function ( scope ) {
+			var self = this;
+			var confirmMsg = tsoliinData.i18n.confirmDiscardAll;
+			if ( 'scan' === scope ) {
+				confirmMsg = tsoliinData.i18n.confirmDiscardScan;
+			} else if ( 'check' === scope ) {
+				confirmMsg = tsoliinData.i18n.confirmDiscardCheck;
+			}
+			if ( confirmMsg && ! window.confirm( confirmMsg ) ) {
+				return;
+			}
+			$.ajax( {
+				url    : tsoliinData.ajaxUrl,
+				method : 'POST',
+				data   : {
+					action  : 'tsoliin_discard_bg_jobs',
+					nonce   : tsoliinData.nonce,
+					scope   : scope || 'all',
+					post_id : parseInt( tsoliinData.viewPostId, 10 ) || 0
+				},
+				success: function ( r ) {
+					if ( ! r || ! r.success || ! r.data ) {
+						self.showNotice( tsoliinData.i18n.error, 'error' );
+						return;
+					}
+					if ( 'scan' === scope || 'all' === scope ) {
+						tsoliinData.scanResumable = 0;
+						tsoliinData.scanRunning = 0;
+						self.scanning = false;
+						self.scanSessionActive = false;
+						self.$stopScanBtn.hide();
+						self.$progress.fadeOut( 400 );
+						if ( self.$restartScanBtn && self.$restartScanBtn.length ) {
+							self.$restartScanBtn.hide();
+						}
+						self.resetScanButton();
+					}
+					if ( 'check' === scope || 'all' === scope ) {
+						tsoliinData.checkPaused = 0;
+						tsoliinData.bgRunning = 0;
+						self.checkSessionActive = false;
+						tsoliinData.bgPct = 0;
+						self.$stopBtn.hide();
+						self.$checkProg.fadeOut( 400 );
+						if ( self.$restartBtn && self.$restartBtn.length ) {
+							self.$restartBtn.hide();
+						}
+						if ( typeof r.data.pending !== 'undefined' ) {
+							tsoliinData.pendingCheck = r.data.pending;
+						}
+						self.resetCheckButton();
+					}
+					if ( r.data.scan ) {
+						self.applyScanProgress( r.data.scan );
+					}
+					if ( r.data.check_btn_label && self.$checkBtn && self.$checkBtn.length ) {
+						var $icon = self.$checkBtn.find( '.dashicons' ).first();
+						if ( $icon.length ) {
+							self.$checkBtn.empty().append( $icon ).append( document.createTextNode( ' ' + r.data.check_btn_label ) );
+						}
+					}
+					if ( ! parseInt( tsoliinData.scanRunning, 10 ) && ! parseInt( tsoliinData.bgRunning, 10 ) ) {
+						self.stopPolling();
+					}
+					self.syncDiscardButtons();
+					if ( ! self.isScanBlockingCheck() ) {
+						self.$checkBtn.prop( 'disabled', false );
+					}
+				},
+				error: function () {
+					self.showNotice( tsoliinData.i18n.error, 'error' );
+				}
+			} );
 		},
 
 		startScan: function ( skipConfirm, resume, isRetry ) {
@@ -1012,6 +1130,7 @@
 							self.$restartScanBtn.show();
 							self.resetScanButton();
 						}
+						self.syncDiscardButtons();
 					} else {
 						self.updateProgress( 0, tsoliinData.i18n.scanStopped );
 					}
@@ -1236,6 +1355,7 @@
 					if ( r.success ) {
 						self.checkStartPending = false;
 						tsoliinData.bgRunning = 1;
+						tsoliinData.checkPaused = 0;
 						tsoliinData.scanRunning = 0;
 						self.scanning = false;
 						self.scanSessionActive = false;
@@ -1299,6 +1419,7 @@
 					self.checkSessionActive = false;
 					self.stopPolling();
 					tsoliinData.bgRunning = 0;
+					tsoliinData.checkPaused = 1;
 					if ( self.$restartBtn && self.$restartBtn.length ) {
 						self.$restartBtn.hide();
 					}
@@ -1311,10 +1432,8 @@
 						tsoliinData.bgPct = r.data.pct;
 					}
 					self.resetCheckButton();
-					self.updateCheckProgress( parseInt( tsoliinData.bgPct, 10 ) || 0, tsoliinData.i18n.stopped );
-					setTimeout( function () {
-						self.$checkProg.fadeOut( 400 );
-					}, 2500 );
+					self.updateCheckProgress( parseInt( tsoliinData.bgPct, 10 ) || 0, tsoliinData.i18n.checkPaused || tsoliinData.i18n.stopped );
+					self.syncDiscardButtons();
 				},
 				error: function () {
 					self.$stopBtn.prop( 'disabled', false );
@@ -1434,6 +1553,7 @@
 					if ( d.running && ! scanBlocking ) {
 						self.checkStartPending = false;
 						tsoliinData.bgRunning = 1;
+						tsoliinData.checkPaused = 0;
 						self.checkSessionActive = true;
 						self.completed = false;
 						self.updateCheckProgress( d.pct, d.message );
@@ -1473,15 +1593,24 @@
 							self.checkDone();
 						} else if ( runPending > 0 ) {
 							tsoliinData.bgRunning = d.running ? 1 : 0;
+							if ( typeof d.check_paused !== 'undefined' ) {
+								tsoliinData.checkPaused = d.check_paused ? 1 : 0;
+							} else if ( ! d.running && d.pct > 0 && d.pct < 100 ) {
+								tsoliinData.checkPaused = 1;
+							}
 							if ( d.running ) {
 								self.nudgePending = false;
 								self.$stopBtn.show();
 								self.$checkBtn.prop( 'disabled', true );
 							}
+							self.resetCheckButton();
 							self.updateCheckProgress(
 								d.pct,
 								d.running ? d.message : ( tsoliinData.i18n.checkPaused || tsoliinData.i18n.stopped )
 							);
+							if ( ! d.running && parseInt( tsoliinData.checkPaused, 10 ) === 1 ) {
+								self.$checkProg.show();
+							}
 						} else {
 							tsoliinData.bgRunning = 0;
 							self.checkSessionActive = false;

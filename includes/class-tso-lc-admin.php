@@ -65,6 +65,7 @@ class TSOLIIN_Admin {
 		add_action( 'wp_ajax_tsoliin_bg_scan_tick',    array( $this, 'ajax_bg_scan_tick' ) );
 		add_action( 'wp_ajax_tsoliin_bg_keep_alive',   array( $this, 'ajax_bg_keep_alive' ) );
 		add_action( 'wp_ajax_tsoliin_stop_bg_scan',    array( $this, 'ajax_stop_bg_scan' ) );
+		add_action( 'wp_ajax_tsoliin_discard_bg_jobs', array( $this, 'ajax_discard_bg_jobs' ) );
 		add_action( 'wp_ajax_tsoliin_check_progress',  array( $this, 'ajax_check_progress' ) );
 		add_action( 'wp_ajax_tsoliin_get_stats',       array( $this, 'ajax_get_stats' ) );
 		add_action( 'wp_ajax_tsoliin_smart_suggest',   array( $this, 'ajax_smart_suggest' ) );
@@ -420,6 +421,10 @@ JS;
 			'scanError'   => isset( $bg_scan['error'] ) ? (string) $bg_scan['error'] : '',
 			// Request-cached COUNT; same key as get_bg_progress() when not filtering by post.
 			'pendingCheck' => (int) $this->db->get_pending_check_count( absint( $view_post_id ) ),
+			'checkPaused'  => (
+				$this->cron->is_bg_check_paused()
+				&& (int) $this->db->get_pending_check_count( absint( $view_post_id ) ) > 0
+			) ? 1 : 0,
 			'checkAutoResume' => (
 				! $this->cron->is_bg_scan_blocking_check()
 				&& ! get_option( 'tsoliin_bg_check_user_stopped' )
@@ -442,8 +447,14 @@ JS;
 				'scanNow'       => __( 'Scan now', 'tso-link-inspector' ),
 				'continueScan'  => __( 'Continue scan', 'tso-link-inspector' ),
 				'restartScan'   => __( 'Restart scan', 'tso-link-inspector' ),
+				'discardScan'   => __( 'Discard scan', 'tso-link-inspector' ),
+				'discardCheck'  => __( 'Discard check', 'tso-link-inspector' ),
+				'discardAll'    => __( 'Discard all paused', 'tso-link-inspector' ),
 				'scanStarted'   => __( 'Scan started. You can continue browsing.', 'tso-link-inspector' ),
 				'scanResumed'   => __( 'Resuming scan from where it left off. You can continue browsing.', 'tso-link-inspector' ),
+				'confirmDiscardScan' => __( 'Discard this paused scan? Links already found stay in the list; only scan progress is cleared. You can run Scan now again later.', 'tso-link-inspector' ),
+				'confirmDiscardCheck' => __( 'Discard this paused check? HTTP results already saved are kept; the progress bar is cleared. Unchecked links remain for a future Check now.', 'tso-link-inspector' ),
+				'confirmDiscardAll' => __( 'Discard all paused scan and check tasks? Found links and saved HTTP results are kept; progress bars are cleared.', 'tso-link-inspector' ),
 				'confirmRestartScan' => __( 'Restart scan from the beginning? Already-found links stay in the list; posts will be read again from the first item.', 'tso-link-inspector' ),
 				'checkNow'      => __( 'Check now', 'tso-link-inspector' ),
 				'checkThisPost' => __( 'Check this post', 'tso-link-inspector' ),
@@ -684,9 +695,13 @@ JS;
 
 		// Toolbar.
 		$pending_check      = (int) $this->db->get_pending_check_count( absint( $view_post_id ) );
+		$check_paused       = $this->cron->is_bg_check_paused() && $pending_check > 0;
 		$btn_check_disabled = ( $bg_scan['running'] && ! $bg['running'] ) ? ' disabled' : '';
-		$show_restart       = ( ! $bg['running'] && $pending_check > 0 );
+		$show_restart       = ( ! $bg['running'] && $check_paused );
 		$show_scan_restart  = ( ! $bg_scan['running'] && ! empty( $bg_scan['resumable'] ) );
+		$show_discard_scan  = ( ! $bg_scan['running'] && ! empty( $bg_scan['resumable'] ) );
+		$show_discard_check = ( ! $bg['running'] && $check_paused );
+		$show_discard_all   = $show_discard_scan && $show_discard_check;
 		if ( $bg_scan['running'] ) {
 			$btn_scan_label = __( 'Scan now', 'tso-link-inspector' );
 		} elseif ( ! empty( $bg_scan['resumable'] ) ) {
@@ -696,7 +711,7 @@ JS;
 		}
 		if ( $bg['running'] ) {
 			$btn_check_label = __( 'Check now', 'tso-link-inspector' );
-		} elseif ( $pending_check > 0 ) {
+		} elseif ( $check_paused ) {
 			$btn_check_label = $view_post_id
 				? __( 'Continue this post', 'tso-link-inspector' )
 				: __( 'Continue check', 'tso-link-inspector' );
@@ -706,7 +721,7 @@ JS;
 			$btn_check_label = __( 'Check now', 'tso-link-inspector' );
 		}
 		$check_prog_pct     = $bg['pct'];
-		$check_prog_display = ( $bg['running'] || ( ! $bg['running'] && $pending_check > 0 && $check_prog_pct > 0 && $check_prog_pct < 100 ) ) ? 'block' : 'none';
+		$check_prog_display = ( $bg['running'] || ( $check_paused && $check_prog_pct > 0 && $check_prog_pct < 100 ) ) ? 'block' : 'none';
 		$scan_prog_display  = ( $bg_scan['running'] || '' !== $bg_scan['error'] || ! empty( $bg_scan['resumable'] ) ) ? 'block' : 'none';
 		$scan_prog_pct      = $bg_scan['pct'];
 		$stop_check_style   = $bg['running'] ? '' : ' style="display:none;"';
@@ -715,6 +730,9 @@ JS;
 		$start_check_style  = $bg['running'] ? ' style="display:none;"' : '';
 		$restart_style      = $show_restart ? '' : ' style="display:none;"';
 		$restart_scan_style = $show_scan_restart ? '' : ' style="display:none;"';
+		$discard_scan_style = $show_discard_scan ? '' : ' style="display:none;"';
+		$discard_check_style = $show_discard_check ? '' : ' style="display:none;"';
+		$discard_all_style  = $show_discard_all ? '' : ' style="display:none;"';
 		$scan_bar_style     = '';
 		if ( '' !== $bg_scan['error'] && ! $bg_scan['running'] ) {
 			$scan_bar_style = 'background:#cc1818';
@@ -739,6 +757,9 @@ JS;
 		echo '<span class="dashicons dashicons-update"></span> ';
 		echo esc_html__( 'Restart scan', 'tso-link-inspector' );
 		echo '</button>';
+		echo '<button type="button" id="tsoliin-discard-scan" class="button button-link tsoliin-discard-btn"' . $discard_scan_style . '>';
+		echo esc_html__( 'Discard scan', 'tso-link-inspector' );
+		echo '</button>';
 		echo '<button type="button" id="tsoliin-start-check" class="button tsoliin-btn-check" title="' . esc_attr( $check_btn_title ) . '"' . $btn_check_disabled . $start_check_style . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		echo '<span class="dashicons dashicons-yes-alt"></span> ';
 		echo esc_html( $btn_check_label );
@@ -746,6 +767,12 @@ JS;
 		echo '<button type="button" id="tsoliin-restart-check" class="button button-secondary"' . $restart_style . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		echo '<span class="dashicons dashicons-update"></span> ';
 		echo esc_html__( 'Restart from zero', 'tso-link-inspector' );
+		echo '</button>';
+		echo '<button type="button" id="tsoliin-discard-check" class="button button-link tsoliin-discard-btn"' . $discard_check_style . '>';
+		echo esc_html__( 'Discard check', 'tso-link-inspector' );
+		echo '</button>';
+		echo '<button type="button" id="tsoliin-discard-all" class="button button-link tsoliin-discard-btn tsoliin-discard-btn--all"' . $discard_all_style . '>';
+		echo esc_html__( 'Discard all paused', 'tso-link-inspector' );
 		echo '</button>';
 		echo '<button type="button" id="tsoliin-stop-check" class="button button-secondary"' . $stop_check_style . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		echo '<span class="dashicons dashicons-no-alt"></span> ';
@@ -2307,11 +2334,12 @@ JS;
 		$view_post_id  = absint( $view_post_id );
 		$bg            = $this->get_cached_bg_progress();
 		$pending_check = (int) $this->db->get_pending_check_count( $view_post_id );
+		$check_paused  = $this->cron->is_bg_check_paused() && $pending_check > 0;
 
 		if ( $bg['running'] ) {
 			return __( 'Check now', 'tso-link-inspector' );
 		}
-		if ( $pending_check > 0 ) {
+		if ( $check_paused ) {
 			return $view_post_id
 				? __( 'Continue this post', 'tso-link-inspector' )
 				: __( 'Continue check', 'tso-link-inspector' );
@@ -3873,6 +3901,38 @@ JS;
 		);
 	}
 
+	/**
+	 * Discard paused scan/check sessions without deleting links or HTTP results.
+	 *
+	 * @return void
+	 */
+	public function ajax_discard_bg_jobs() {
+		$this->check_nonce_and_cap();
+		$scope = isset( $_POST['scope'] ) ? sanitize_key( wp_unslash( $_POST['scope'] ) ) : 'all'; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		if ( ! in_array( $scope, array( 'scan', 'check', 'all' ), true ) ) {
+			$scope = 'all';
+		}
+		if ( 'scan' === $scope || 'all' === $scope ) {
+			$this->cron->discard_bg_scan();
+		}
+		if ( 'check' === $scope || 'all' === $scope ) {
+			$this->cron->discard_bg_check();
+		}
+		$view_post_id = isset( $_POST['post_id'] ) ? absint( $_POST['post_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		$scan         = $this->format_scan_progress_payload( $this->cron->get_bg_scan_progress() );
+		$bg           = $this->cron->get_bg_progress();
+		wp_send_json_success(
+			array(
+				'scope'           => $scope,
+				'scan'            => $scan,
+				'running'         => false,
+				'pending'         => $this->db->get_pending_check_count( $view_post_id ),
+				'pct'             => isset( $bg['pct'] ) ? (int) $bg['pct'] : 0,
+				'check_btn_label' => $this->get_check_button_label_for_scope( $view_post_id ),
+			)
+		);
+	}
+
 	public function ajax_check_progress() {
 		$this->check_nonce_and_cap();
 		$view_post_id = isset( $_POST['post_id'] ) ? absint( $_POST['post_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
@@ -3936,6 +3996,10 @@ JS;
 				'pending' => $pending_view,
 				'bg_pending' => isset( $bg['pending'] ) ? absint( $bg['pending'] ) : 0,
 				'complete'=> ! empty( $bg['complete'] ),
+				'check_paused' => (
+					$this->cron->is_bg_check_paused()
+					&& $pending_view > 0
+				) ? 1 : 0,
 				'broken'  => $stats['broken'],
 				'done'    => $done,
 				'message' => $message,
