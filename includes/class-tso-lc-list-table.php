@@ -315,10 +315,19 @@ class TSOLIIN_List_Table extends WP_List_Table {
 				}
 			}
 			if ( $post_ids ) {
-				// Prime both post objects and postmeta in one batched pair of queries;
-				// otherwise each row's own get_post_meta() call falls back to its own
-				// single-post update_meta_cache() query.
-				_prime_post_caches( array_unique( $post_ids ), false, true );
+				$unique_post_ids = array_unique( $post_ids );
+
+				// _prime_post_caches() only warms meta for posts it fetches fresh in
+				// this same call — if the post object is already cached (e.g. the
+				// per-article view already loaded it for the page heading), it skips
+				// meta priming entirely even though the meta cache itself is empty.
+				// update_meta_cache() checks the meta cache group directly, so call
+				// it explicitly instead of relying on _prime_post_caches()'s implicit
+				// (and here, incorrect) skip.
+				_prime_post_caches( $unique_post_ids, false, false );
+				if ( function_exists( 'update_meta_cache' ) ) {
+					update_meta_cache( 'post', $unique_post_ids );
+				}
 			}
 		}
 		$this->set_pagination_args( array(
