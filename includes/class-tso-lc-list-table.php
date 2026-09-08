@@ -244,7 +244,7 @@ class TSOLIIN_List_Table extends WP_List_Table {
 		$actions = array(
 			'recheck'       => __( 'Recheck selected', 'tso-link-inspector' ),
 			'upgrade_https' => __( 'Upgrade selected to HTTPS', 'tso-link-inspector' ),
-			'unlink'        => __( 'Unlink all', 'tso-link-inspector' ),
+			'unlink'        => __( 'Unlink selected', 'tso-link-inspector' ),
 			'not_broken'    => __( 'Mark as OK', 'tso-link-inspector' ),
 			'delete'        => __( 'Delete from list', 'tso-link-inspector' ),
 		);
@@ -328,7 +328,7 @@ class TSOLIIN_List_Table extends WP_List_Table {
 					'menu'     => array( 'dashicons-menu',           __( 'Menu', 'tso-link-inspector' ) ),
 					'widget'   => array( 'dashicons-welcome-widgets-menus', __( 'Widget', 'tso-link-inspector' ) ),
 					'term'     => array( 'dashicons-tag',            __( 'Term', 'tso-link-inspector' ) ),
-					'template' => array( 'dashicons-layout',         __( 'Template', 'tso-link-inspector' ) ),
+					'template' => array( 'dashicons-layout',         __( 'Template / Navigation', 'tso-link-inspector' ) ),
 					'wp_block' => array( 'dashicons-block-default',  __( 'Reusable block', 'tso-link-inspector' ) ),
 					'acf'      => array( 'dashicons-index-card',     __( 'ACF Options', 'tso-link-inspector' ) ),
 				);
@@ -444,7 +444,7 @@ class TSOLIIN_List_Table extends WP_List_Table {
 				esc_attr__( 'Change the URL in the stored source without leaving this screen.', 'tso-link-inspector' ),
 				esc_html__( 'Edit link', 'tso-link-inspector' )
 			);
-			if ( TSOLIIN_Support::is_relative_url_tool_enabled() && TSOLIIN_HTTP::can_convert_to_relative_url( $url ) ) {
+			if ( TSOLIIN_Support::can_offer_convert_to_relative( $item ) ) {
 				$actions['make_relative'] = sprintf(
 					'<a href="#" class="tsoliin-make-relative" data-id="%d" data-nonce="%s" title="%s">%s</a>',
 					absint( $item->id ),

@@ -429,6 +429,10 @@
 		/**
 		 * Update the page heading after AJAX scope navigation.
 		 *
+		 * Server HTML is escaped markup (text + spans). Never pass it to $() —
+		 * strings that do not start with "<" are treated as CSS selectors and
+		 * wipe the title (and can throw in Sizzle).
+		 *
 		 * @param {string} html Title HTML returned by the server.
 		 */
 		updatePageTitle: function ( html ) {
@@ -439,12 +443,16 @@
 			if ( ! $h1.length ) {
 				return;
 			}
-			var $icon = $h1.find( '.tsoliin-title-icon' ).first();
-			if ( $icon.length ) {
-				$h1.empty().append( $icon ).append( document.createTextNode( ' ' ) ).append( $( html ) );
-			} else {
-				$h1.html( '<span class="dashicons dashicons-admin-links tsoliin-title-icon"></span> ' + html );
-			}
+			$h1.html( '<span class="dashicons dashicons-admin-links tsoliin-title-icon"></span> ' + html );
+		},
+
+		/**
+		 * Clear AJAX list-loading chrome on live DOM nodes (not a detached $target).
+		 */
+		clearListNavLoading: function () {
+			$( '#tsoliin-scope-region, #tsoliin-list-form, #tsoliin-list-table-region' )
+				.removeClass( 'tsoliin-list-table-region--loading' )
+				.attr( 'aria-busy', 'false' );
 		},
 
 		/**
@@ -534,25 +542,34 @@
 				},
 				success: function ( r ) {
 					if ( r.success && r.data && r.data.html ) {
-						var responseRegion = r.data.region || ( useScope ? 'scope' : 'list' );
-						if ( 'scope' === responseRegion && $scope.length ) {
-							$scope.html( r.data.html );
-						} else if ( $form.length ) {
-							$form.replaceWith( r.data.html );
-						} else if ( $scope.length ) {
-							$scope.html( r.data.html );
-						} else {
-							$target.html( r.data.html );
-						}
-						self.refreshDomRefs();
-						if ( opts.updateUrl && params.href ) {
-							self.updateListNavState( params, params.href );
-						}
-						if ( opts.updateScopeMeta ) {
-							self.applyScopeNavMeta( r.data );
-						}
-						if ( typeof opts.onSuccess === 'function' ) {
-							opts.onSuccess( r.data );
+						try {
+							var responseRegion = r.data.region || ( useScope ? 'scope' : 'list' );
+							if ( 'scope' === responseRegion && $scope.length ) {
+								$scope.html( r.data.html );
+							} else if ( $form.length ) {
+								$form.replaceWith( r.data.html );
+							} else if ( $scope.length ) {
+								$scope.html( r.data.html );
+							} else {
+								$target.html( r.data.html );
+							}
+							self.refreshDomRefs();
+							if ( opts.updateUrl && params.href ) {
+								self.updateListNavState( params, params.href );
+							}
+							if ( opts.updateScopeMeta ) {
+								self.applyScopeNavMeta( r.data );
+							}
+							if ( typeof opts.onSuccess === 'function' ) {
+								opts.onSuccess( r.data );
+							}
+						} catch ( err ) {
+							if ( window.console && console.error ) {
+								console.error( 'tsoliin list nav', err );
+							}
+							if ( opts.fallbackNavigate && params.href ) {
+								window.location.href = params.href;
+							}
 						}
 					} else if ( opts.fallbackNavigate && params.href ) {
 						window.location.href = params.href;
@@ -572,8 +589,7 @@
 					if ( requestId !== self.listNavRequestId ) {
 						return;
 					}
-					$target.removeClass( 'tsoliin-list-table-region--loading' );
-					$target.attr( 'aria-busy', 'false' );
+					self.clearListNavLoading();
 					if ( self.listNavXhr === xhr ) {
 						self.listNavXhr = null;
 					}
@@ -894,7 +910,10 @@
 
 			this.$modalSave.on( 'click', function () { self.saveLink(); } );
 			this.$modalCancel.on( 'click', function () { self.closeModal(); } );
-			this.$newUrlInput.on( 'input', function () { self.scheduleLinkPreview(); } );
+			this.$newUrlInput.on( 'input', function () {
+				self.syncIgnoreDomainOption();
+				self.scheduleLinkPreview();
+			} );
 			$( document ).on( 'click', '.tsoliin-modal__overlay', function () { self.closeModal(); } );
 			$( document ).on( 'keydown', function ( e ) {
 				if ( 27 === e.which && self.$modal.is( ':visible' ) ) { self.closeModal(); }
@@ -1425,6 +1444,7 @@
 						if ( typeof r.data.pending !== 'undefined' ) {
 							tsoliinData.pendingCheck = r.data.pending;
 						}
+						self.refreshStats();
 						var noticeMsg = r.data.message || tsoliinData.i18n.checkStarted;
 						if ( r.data.resumed && tsoliinData.i18n.checkResumed ) {
 							noticeMsg = r.data.message || tsoliinData.i18n.checkResumed;
@@ -1535,6 +1555,7 @@
 					action        : 'tsoliin_check_progress',
 					nonce         : tsoliinData.nonce,
 					post_id       : parseInt( tsoliinData.viewPostId, 10 ) || 0,
+					scope         : tsoliinData.listScope || 'all',
 					nudge         : sendNudge ? '1' : '0',
 					check_session_active: self.checkSessionActive ? '1' : '0',
 					scan_session_active : self.scanSessionActive ? '1' : '0'
@@ -1555,6 +1576,9 @@
 					tsoliinData.bgPostId = parseInt( d.post_id, 10 ) || 0;
 					if ( typeof d.bg_pending !== 'undefined' ) {
 						tsoliinData.bgPending = d.bg_pending;
+					}
+					if ( d.stats ) {
+						self.applyStatsToUI( d.stats, d.display );
 					}
 					var runPending = ( typeof d.bg_pending !== 'undefined' )
 						? ( parseInt( d.bg_pending, 10 ) || 0 )
@@ -1892,7 +1916,7 @@
 			updateTabLabels( '.tsoliin-quality-tabs', tsoliinData.qualityFilterTabs, 'quality' );
 
 			var cardMap = {
-				total          : '.tsoliin-stats > .tsoliin-stat:first .tsoliin-stat__number',
+				total          : '.tsoliin-stat--total .tsoliin-stat__number',
 				broken         : '.tsoliin-stat--broken .tsoliin-stat__number',
 				redirect       : '.tsoliin-stat--redirect .tsoliin-stat__number',
 				ok             : '.tsoliin-stat--ok .tsoliin-stat__number',
@@ -1915,14 +1939,19 @@
 				return;
 			}
 			var self = this;
+			var checkRunning = parseInt( tsoliinData.bgRunning, 10 ) === 1 || this.checkSessionActive;
+			var postId = checkRunning
+				? ( parseInt( tsoliinData.bgPostId, 10 ) || 0 )
+				: ( parseInt( tsoliinData.viewPostId, 10 ) || 0 );
+			var scope = checkRunning ? 'all' : ( tsoliinData.listScope || 'all' );
 			$.ajax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
 				data  : {
 					action  : 'tsoliin_get_stats',
 					nonce   : tsoliinData.nonce,
-					post_id : parseInt( tsoliinData.viewPostId, 10 ) || 0,
-					scope   : tsoliinData.listScope || 'all'
+					post_id : postId,
+					scope   : scope
 				},
 				success: function ( r ) {
 					if ( ! r.success || ! r.data ) {
@@ -2030,7 +2059,10 @@
 			if ( ! $row || ! $row.length || ! data || false !== data.matches_filter ) {
 				return false;
 			}
-			if ( 'all' === ( tsoliinData.listFilter || 'all' ) && ! tsoliinData.listQualityFilter ) {
+			var hasStatusFilter = 'all' !== ( tsoliinData.listFilter || 'all' );
+			var hasQuality      = !! tsoliinData.listQualityFilter;
+			var hasScope        = !!( tsoliinData.listScope && 'all' !== tsoliinData.listScope );
+			if ( ! hasStatusFilter && ! hasQuality && ! hasScope ) {
 				return false;
 			}
 			var self = this;
@@ -2146,6 +2178,7 @@
 			if ( this.$ignoreDomain.length ) {
 				this.$ignoreDomain.prop( 'checked', false );
 			}
+			this.syncIgnoreDomainOption();
 			if ( this.canPreviewLinkEdit() ) {
 				this.$previewPanel.show();
 				this.scheduleLinkPreview();
@@ -2168,6 +2201,10 @@
 				window.clearTimeout( this.previewTimer );
 				this.previewTimer = null;
 			}
+			if ( this.previewXhr && this.previewXhr.abort ) {
+				this.previewXhr.abort();
+			}
+			this.previewReqId = ( this.previewReqId || 0 ) + 1;
 			this.$modal.hide();
 			this.editLinkId = 0;
 		},
@@ -2176,6 +2213,29 @@
 			return this.$previewPanel.length
 				&& this.editPostId > 0
 				&& -1 !== [ 'link', 'image', 'iframe' ].indexOf( this.editLinkType );
+		},
+
+		/**
+		 * Relative /path URLs have no external host — disable ignore-domain.
+		 */
+		syncIgnoreDomainOption: function () {
+			if ( ! this.$ignoreDomain.length ) {
+				return;
+			}
+			var url = ( this.$newUrlInput.val() || '' ).trim();
+			var hasHost = /^https?:\/\//i.test( url ) || /^\/\//.test( url );
+			var $wrap = this.$ignoreDomain.closest( '.tsoliin-ignore-domain-wrap' );
+			if ( hasHost ) {
+				this.$ignoreDomain.prop( 'disabled', false );
+				if ( $wrap.length ) {
+					$wrap.show();
+				}
+			} else {
+				this.$ignoreDomain.prop( { checked: false, disabled: true } );
+				if ( $wrap.length ) {
+					$wrap.show();
+				}
+			}
 		},
 
 		scheduleLinkPreview: function () {
@@ -2196,10 +2256,18 @@
 		fetchLinkPreview: function () {
 			var self   = this;
 			var newUrl = this.$newUrlInput.val().trim();
+			var oldUrl = ( this.editOldUrl || '' ).toString();
 			if ( ! newUrl ) {
+				this.$previewBefore.text( '' );
+				this.$previewAfter.text( '' );
 				return;
 			}
-			$.ajax( {
+			this.previewReqId = ( this.previewReqId || 0 ) + 1;
+			var reqId = this.previewReqId;
+			if ( this.previewXhr && this.previewXhr.abort ) {
+				this.previewXhr.abort();
+			}
+			this.previewXhr = $.ajax( {
 				url   : tsoliinData.ajaxUrl,
 				method: 'POST',
 				data  : {
@@ -2209,6 +2277,9 @@
 					new_url : newUrl
 				},
 				success: function ( r ) {
+					if ( reqId !== self.previewReqId ) {
+						return;
+					}
 					if ( ! r.success || ! r.data ) {
 						self.$previewBefore.text( r.data && r.data.message ? r.data.message : tsoliinData.i18n.error );
 						self.$previewAfter.text( '' );
@@ -2219,16 +2290,28 @@
 						self.$previewAfter.text( '' );
 						return;
 					}
-					self.$previewBefore.text( r.data.before || '' );
-					if ( r.data.after ) {
-						self.$previewAfter.text( r.data.after );
-					} else if ( r.data.before ) {
-						self.$previewAfter.text( newUrl );
+					var before = r.data.before || '';
+					var after  = r.data.after || '';
+					self.$previewBefore.text( before );
+					if ( after && after !== before ) {
+						self.$previewAfter.text( after );
+					} else if ( before && newUrl && newUrl !== oldUrl ) {
+						// Server replace failed or returned a no-op — still show the intended href.
+						var forced = before;
+						if ( oldUrl && -1 !== before.indexOf( oldUrl ) ) {
+							forced = before.split( oldUrl ).join( newUrl );
+						}
+						self.$previewAfter.text( forced !== before ? forced : newUrl );
+					} else if ( after ) {
+						self.$previewAfter.text( after );
 					} else {
-						self.$previewAfter.text( '' );
+						self.$previewAfter.text( newUrl );
 					}
 				},
-				error: function () {
+				error: function ( xhr, status ) {
+					if ( reqId !== self.previewReqId || 'abort' === status ) {
+						return;
+					}
 					self.$previewBefore.text( tsoliinData.i18n.error );
 					self.$previewAfter.text( '' );
 				}
@@ -2314,7 +2397,7 @@
 						return;
 					}
 					var msg  = d.filter_promotion_message || ( d.warning ? d.warning : ( '✓ ' + tsoliinData.i18n.urlSaved ) );
-					if ( ! d.warning && tsoliinData.createRevision && self.editPostId > 0 && -1 !== [ 'link', 'image', 'iframe' ].indexOf( self.editLinkType ) ) {
+					if ( ! d.warning && d.revision_created ) {
 						msg += ' ' + ( tsoliinData.i18n.revisionSaved || '' );
 					}
 					if ( $row.length ) {
@@ -2593,14 +2676,24 @@
 		// ---------------------------------------------------------------
 		doBulkAction: function ( action ) {
 			var self    = this;
+			if ( self._bulkInProgress ) {
+				self.showNotice( tsoliinData.i18n.bulkBusy || tsoliinData.i18n.error, 'warning' );
+				return;
+			}
 			var linkIds = [];
 			this.$form.find( 'input[name="link_ids[]"]:checked' ).each( function () {
 				linkIds.push( parseInt( $( this ).val(), 10 ) );
 			} );
-			if ( ! linkIds.length ) { return; }
-
-			if ( 'unlink' === action && ! window.confirm( tsoliinData.i18n.confirmUnlink ) ) {
+			if ( ! linkIds.length ) {
+				self.showNotice( tsoliinData.i18n.noItemsSelected || tsoliinData.i18n.error, 'warning' );
 				return;
+			}
+
+			if ( 'unlink' === action ) {
+				var unlinkMsg = tsoliinData.i18n.confirmUnlinkBulk || tsoliinData.i18n.confirmUnlink;
+				if ( ! window.confirm( unlinkMsg ) ) {
+					return;
+				}
 			}
 			if ( 'delete' === action && ! window.confirm( tsoliinData.i18n.confirmDeleteBulk || tsoliinData.i18n.confirmDelete ) ) {
 				return;
@@ -2618,23 +2711,7 @@
 				}
 				self.bulkRecheckStep( linkIds, 0, action );
 			} else {
-				self._bulkInProgress = true;
-				self.trackedAjax( {
-					url   : tsoliinData.ajaxUrl,
-					method: 'POST',
-					data  : $.extend( { action: 'tsoliin_bulk_action', nonce: tsoliinData.nonce, bulk_action: action, link_ids: linkIds, index: 0 }, self.listFilterParam() ),
-					success: function ( r ) {
-						if ( r.success ) {
-							self.$form.find( 'input[name="link_ids[]"]:checked' ).closest( 'tr' ).fadeOut( 300, function () { $( this ).remove(); } );
-							self.showNotice( r.data.message, 'success' );
-							self.scheduleListReload( 1200 );
-						} else { alert( r.data ? r.data.message : tsoliinData.i18n.error ); }
-					},
-					error: function () { alert( tsoliinData.i18n.error ); },
-					complete: function () {
-						self._bulkInProgress = false;
-					}
-				} );
+				self.showNotice( tsoliinData.i18n.error, 'error' );
 			}
 		},
 
@@ -2725,16 +2802,27 @@
 					}
 					doneMsg = delParts.length ? delParts.join( ' ' ) : ( '✅ 0 ' + ( tsoliinData.i18n.itemsDeleted || 'records deleted.' ) );
 				} else {
-					doneMsg = '✅ ' + total + ' ' + tsoliinData.i18n.itemsChecked;
+					var recheckParts = [];
+					recheckParts.push( '✅ ' + total + ' ' + tsoliinData.i18n.itemsChecked );
+					if ( self._bulkStats.failed > 0 ) {
+						recheckParts.push( '❌ ' + self._bulkStats.failed + ' ' + tsoliinData.i18n.itemsFailed );
+					}
+					doneMsg = recheckParts.join( ' ' );
 				}
 				$( '#tsoliin-bulk-msg' ).text( doneMsg );
 				$( '#tsoliin-bulk-bar' ).val( 100 );
-				if ( 'unlink' === act || 'make_relative' === act || 'upgrade_https' === act || 'delete' === act ) {
-					self.scheduleListReload( 1500 );
-				} else if ( ( 'recheck' === act || 'not_broken' === act ) && 'all' !== ( tsoliinData.listFilter || 'all' ) && self._bulkFilterRemoved > 0 ) {
+				var needsReload = (
+					'unlink' === act
+					|| 'make_relative' === act
+					|| 'upgrade_https' === act
+					|| 'delete' === act
+					|| self._bulkFilterRemoved > 0
+				);
+				if ( needsReload ) {
 					self.scheduleListReload( 1500 );
 				} else {
 					self.refreshStats();
+					self.maybeReloadEmptyList();
 					setTimeout( function () {
 						if ( self.$bulkProgress ) {
 							self.$bulkProgress.fadeOut( 300, function () { $( this ).remove(); } );

@@ -927,14 +927,13 @@ class TSOLIIN_Cron {
 	 */
 	private function persist_bg_check_progress( $post_id ) {
 		$post_id = absint( $post_id );
-		$total   = (int) get_option( 'tsoliin_bg_check_total', 0 );
 		$pending = $this->db->get_pending_check_count( $post_id );
+		// Always follow the live row count so progress never drifts above/below the dashboard TOTAL.
 		if ( $post_id > 0 ) {
-			$live_total = (int) $this->db->get_stats_for_post( $post_id )['total'];
+			$total = (int) $this->db->get_stats_for_post( $post_id )['total'];
 		} else {
-			$live_total = (int) $this->db->get_stats()['total'];
+			$total = (int) $this->db->get_stats()['total'];
 		}
-		$total = max( $total, $live_total );
 		update_option( 'tsoliin_bg_check_total', $total, false );
 		update_option( 'tsoliin_bg_check_checked', max( 0, $total - $pending ), false );
 		update_option( 'tsoliin_bg_check_started', current_time( 'mysql', true ), false );
@@ -1221,17 +1220,26 @@ class TSOLIIN_Cron {
 			}
 		}
 
-		// Keep progress in sync with the real queue even when the run is stopped (resume UI).
+		// Keep progress in sync with the live table (allow shrink after scan cleanup / dedupe).
 		$pending = 0;
-		if ( $total > 0 ) {
+		if ( $total > 0 || $running || $complete ) {
 			$pending = $this->db->get_pending_check_count( $post_id );
 			if ( $post_id > 0 ) {
 				$live_total = (int) $this->db->get_stats_for_post( $post_id )['total'];
 			} else {
 				$live_total = (int) $this->db->get_stats()['total'];
 			}
-			$total   = max( $total, $live_total );
+			// Prefer live TOTAL; keep stored only when the table is empty but a paused run still has counters.
+			if ( $live_total > 0 || $running ) {
+				$total = $live_total;
+			}
 			$checked = max( 0, $total - $pending );
+			if ( (int) get_option( 'tsoliin_bg_check_total', 0 ) !== $total ) {
+				update_option( 'tsoliin_bg_check_total', $total, false );
+			}
+			if ( (int) get_option( 'tsoliin_bg_check_checked', 0 ) !== $checked ) {
+				update_option( 'tsoliin_bg_check_checked', $checked, false );
+			}
 		}
 
 		$pct = ( $total > 0 ) ? min( 100, (int) round( ( $checked / $total ) * 100 ) ) : 0;

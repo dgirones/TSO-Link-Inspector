@@ -79,21 +79,24 @@ class TSOLIIN_Schedule {
 	 * @return array{ label: string, title: string, warn: bool }
 	 */
 	public static function get_queue_chip( TSOLIIN_DB $db, array $queue, array $settings ) {
+		// Card "Unchecked" = never checked and not manually locked.
 		$never_checked = (int) $db->get_unchecked_count();
-		$immediate       = (int) $queue['unchecked'];
-		$stale_count     = (int) $queue['broken_stale'] + (int) $queue['ok_stale'];
-		$total           = (int) $queue['pending'];
+		// Queue immediate work = last_checked IS NULL (may include manual locks after a full recheck reset).
+		$immediate   = (int) $queue['unchecked'];
+		$stale_count = (int) $queue['broken_stale'] + (int) $queue['ok_stale'];
+		$total       = (int) $queue['pending'];
 
 		$title = sprintf(
-			/* translators: 1: never-checked count, 2: broken stale count, 3: OK stale count, 4: OK recheck days, 5: broken recheck days, 6: checks per day, 7: estimated days to clear queue */
-			__( 'Queue: %1$d never checked, %2$d broken (older than %5$d days), %3$d OK (older than %4$d days). Throughput: ~%6$d checks/day. Estimated time to clear queue: ~%7$d days.', 'tso-link-inspector' ),
-			(int) $queue['unchecked'],
+			/* translators: 1: never-checked count (matches Unchecked card), 2: broken stale count, 3: OK stale count, 4: OK recheck days, 5: broken recheck days, 6: checks per day, 7: estimated days to clear queue, 8: HTTP queue rows still unchecked including manual locks */
+			__( 'Queue: %1$d never checked, %8$d awaiting HTTP (includes manual locks), %2$d broken (older than %5$d days), %3$d OK (older than %4$d days). Throughput: ~%6$d checks/day. Estimated time to clear queue: ~%7$d days.', 'tso-link-inspector' ),
+			$never_checked,
 			(int) $queue['broken_stale'],
 			(int) $queue['ok_stale'],
 			(int) $settings['recheck_days'],
 			(int) $settings['broken_recheck_days'],
 			(int) $queue['checks_per_day'],
-			max( 1, (int) $queue['est_days'] )
+			max( 1, (int) $queue['est_days'] ),
+			$immediate
 		);
 
 		if ( $total <= 0 ) {
@@ -105,9 +108,9 @@ class TSOLIIN_Schedule {
 		}
 
 		if ( $stale_count > 0 && $immediate > 0 ) {
-			if ( $never_checked > 0 && $never_checked <= $immediate ) {
+			if ( $never_checked > 0 ) {
 				$label = sprintf(
-					/* translators: 1: unchecked count, 2: scheduled recheck count */
+					/* translators: 1: unchecked count (matches Unchecked card), 2: scheduled recheck count */
 					__( '%1$d unchecked · %2$d scheduled recheck', 'tso-link-inspector' ),
 					$never_checked,
 					$stale_count
@@ -126,11 +129,17 @@ class TSOLIIN_Schedule {
 				__( '%d scheduled recheck', 'tso-link-inspector' ),
 				$stale_count
 			);
+		} elseif ( $never_checked > 0 ) {
+			$label = sprintf(
+				/* translators: %d: count matching the Unchecked dashboard card */
+				__( '%d unchecked', 'tso-link-inspector' ),
+				$never_checked
+			);
 		} else {
 			$label = sprintf(
-				/* translators: %d: count */
-				__( '%d unchecked', 'tso-link-inspector' ),
-				max( $never_checked, $immediate )
+				/* translators: %d: rows awaiting HTTP including manual locks */
+				__( '%d pending', 'tso-link-inspector' ),
+				$immediate
 			);
 		}
 

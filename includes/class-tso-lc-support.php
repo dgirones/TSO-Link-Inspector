@@ -186,6 +186,41 @@ class TSOLIIN_Support {
 	}
 
 	/**
+	 * Whether it is currently daytime for the site coords (sunrise–sunset).
+	 *
+	 * Used for the initial HTML data-theme before JS runs.
+	 *
+	 * @return bool
+	 */
+	public static function theme_is_daytime_now() {
+		$coords = self::theme_coords();
+		$lat    = (float) $coords['lat'];
+		$lng    = (float) $coords['lng'];
+		$hour   = (int) current_time( 'G' );
+		if ( ! function_exists( 'date_sun_info' ) ) {
+			return ( $hour >= 7 && $hour < 20 );
+		}
+		$info = date_sun_info( time(), $lat, $lng );
+		if ( ! is_array( $info ) ) {
+			return ( $hour >= 7 && $hour < 20 );
+		}
+		$rise = isset( $info['sunrise'] ) ? $info['sunrise'] : false;
+		$set  = isset( $info['sunset'] ) ? $info['sunset'] : false;
+		// Polar day/night: sunrise/sunset may be true/false instead of timestamps.
+		if ( true === $rise ) {
+			return true;
+		}
+		if ( false === $rise && false === $set ) {
+			return false;
+		}
+		if ( ! is_int( $rise ) || ! is_int( $set ) ) {
+			return ( $hour >= 7 && $hour < 20 );
+		}
+		$now = time();
+		return ( $now >= $rise && $now < $set );
+	}
+
+	/**
 	 * Whether the optional “Convert to /path” row and bulk actions are enabled.
 	 *
 	 * @return bool
@@ -193,6 +228,30 @@ class TSOLIIN_Support {
 	public static function is_relative_url_tool_enabled() {
 		$s = get_option( 'tsoliin_settings', array() );
 		return ! empty( $s['relative_url_tool'] );
+	}
+
+	/**
+	 * Whether Convert to /path may run for this row (setting + URL + same sources as Edit link).
+	 *
+	 * Post content/meta, images, iframes, and custom menu URLs only — not comments, widgets, or terms.
+	 *
+	 * @param object|null $link DB link row.
+	 * @return bool
+	 */
+	public static function can_offer_convert_to_relative( $link ) {
+		if ( ! self::is_relative_url_tool_enabled() || ! $link || empty( $link->link_url ) ) {
+			return false;
+		}
+		if ( ! class_exists( 'TSOLIIN_HTTP', false ) || ! TSOLIIN_HTTP::can_convert_to_relative_url( (string) $link->link_url ) ) {
+			return false;
+		}
+		$type       = isset( $link->link_type ) ? (string) $link->link_type : 'link';
+		$can_inline = ( 'comment' === $type ) ? true : self::can_inline_edit_link( $link );
+		$can_edit   = $can_inline && (
+			! in_array( $type, array( 'comment', 'widget', 'menu', 'term', 'acf' ), true )
+			|| ( 'menu' === $type && self::is_custom_menu_url_row( $link ) )
+		);
+		return (bool) $can_edit;
 	}
 
 	/**
@@ -785,12 +844,14 @@ class TSOLIIN_Support {
 	/**
 	 * Attachment post ID for a media-library image URL (full size or -WxH variant).
 	 *
+	 * Prefer cheap lookups; avoid calling attachment_url_to_postid() twice per URL.
+	 *
 	 * @param string $url Image URL.
 	 * @return int
 	 */
 	public static function resolve_attachment_id_from_url( $url ) {
 		$url = trim( (string) $url );
-		if ( '' === $url || ! function_exists( 'attachment_url_to_postid' ) ) {
+		if ( '' === $url ) {
 			return 0;
 		}
 
@@ -799,16 +860,28 @@ class TSOLIIN_Support {
 			return (int) self::$attachment_id_by_url[ $cache_key ];
 		}
 
-		$id   = (int) attachment_url_to_postid( $url );
-		$full = preg_replace( '/-\d+x\d+(?=\.(?:jpe?g|png|gif|webp|avif|bmp|ico))/i', '', $url );
-		if ( $id <= 0 && is_string( $full ) && $full !== $url ) {
-			$full_key = self::attachment_url_cache_key( $full );
-			if ( array_key_exists( $full_key, self::$attachment_id_by_url ) ) {
-				$id = (int) self::$attachment_id_by_url[ $full_key ];
-			} else {
-				$id = (int) attachment_url_to_postid( $full );
-				self::$attachment_id_by_url[ $full_key ] = $id;
-			}
+		$id = TSOLIIN_HTTP::parse_attachment_id_from_url( $url );
+		if ( $id > 0 && 'attachment' === get_post_type( $id ) ) {
+			self::$attachment_id_by_url[ $cache_key ] = $id;
+			return $id;
+		}
+
+		// Strip -150x150 / -scaled before any DB lookup (one query, not two).
+		$normalized = preg_replace( '/-(?:\d+x\d+|scaled|rotated)(?=\.(?:jpe?g|png|gif|webp|avif|bmp|ico))/i', '', $url );
+		if ( ! is_string( $normalized ) || '' === $normalized ) {
+			$normalized = $url;
+		}
+		$norm_key = self::attachment_url_cache_key( $normalized );
+		if ( $normalized !== $url && array_key_exists( $norm_key, self::$attachment_id_by_url ) ) {
+			$id = (int) self::$attachment_id_by_url[ $norm_key ];
+			self::$attachment_id_by_url[ $cache_key ] = $id;
+			return $id;
+		}
+
+		$id = self::attachment_id_from_uploads_relative_path( $normalized );
+		if ( $id <= 0 && '' === self::uploads_relative_file_from_url( $normalized ) && function_exists( 'attachment_url_to_postid' ) ) {
+			// Only when the URL is not under uploads (filtered/CDN maps) — path lookup already covers local media.
+			$id = (int) attachment_url_to_postid( $normalized );
 		}
 		// Jetpack galleries often link to the attachment page (/slug/) instead of the file URL.
 		if ( $id <= 0 ) {
@@ -819,10 +892,66 @@ class TSOLIIN_Support {
 		}
 
 		self::$attachment_id_by_url[ $cache_key ] = $id;
-		if ( $id > 0 && is_string( $full ) && $full !== $url ) {
-			self::$attachment_id_by_url[ self::attachment_url_cache_key( $full ) ] = $id;
+		if ( $normalized !== $url ) {
+			self::$attachment_id_by_url[ $norm_key ] = $id;
 		}
 		return $id;
+	}
+
+	/**
+	 * Relative `_wp_attached_file` path for an uploads URL, or empty.
+	 *
+	 * @param string $url Media URL.
+	 * @return string
+	 */
+	private static function uploads_relative_file_from_url( $url ) {
+		$url = trim( (string) $url );
+		if ( '' === $url ) {
+			return '';
+		}
+		$uploads = wp_upload_dir( null, false );
+		if ( empty( $uploads['baseurl'] ) ) {
+			return '';
+		}
+		$baseurl = untrailingslashit( (string) $uploads['baseurl'] );
+		$path    = wp_parse_url( $url, PHP_URL_PATH );
+		if ( ! is_string( $path ) || '' === $path ) {
+			return '';
+		}
+		$base_path = wp_parse_url( $baseurl, PHP_URL_PATH );
+		$base_path = is_string( $base_path ) ? untrailingslashit( $base_path ) : '';
+		$rel       = '';
+		if ( '' !== $base_path && 0 === strpos( $path, $base_path . '/' ) ) {
+			$rel = ltrim( substr( $path, strlen( $base_path ) ), '/' );
+		} elseif ( preg_match( '#/(?:wp-content/)?uploads/(.+)$#i', $path, $m ) ) {
+			$rel = (string) $m[1];
+		}
+		return '' !== $rel ? rawurldecode( $rel ) : '';
+	}
+
+	/**
+	 * Resolve attachment ID via `_wp_attached_file` relative path (single indexed lookup).
+	 *
+	 * @param string $url Absolute or site-relative media URL.
+	 * @return int
+	 */
+	private static function attachment_id_from_uploads_relative_path( $url ) {
+		$rel = self::uploads_relative_file_from_url( $url );
+		if ( '' === $rel ) {
+			return 0;
+		}
+
+		global $wpdb;
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$post_id = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_wp_attached_file' AND meta_value = %s LIMIT 1",
+				$rel
+			)
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$post_id = absint( $post_id );
+		return ( $post_id > 0 && 'attachment' === get_post_type( $post_id ) ) ? $post_id : 0;
 	}
 
 	/**

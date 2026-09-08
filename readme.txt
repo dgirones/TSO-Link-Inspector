@@ -5,7 +5,7 @@ Tags: broken links, link checker, seo, maintenance, links
 Requires at least: 5.9
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 2.4.5
+Stable tag: 2.4.6
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -127,6 +127,25 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 
 == Changelog ==
 
+= 2.4.6 =
+* Improvement: Broader **Generic anchor** detection for English, Spanish, and Catalan (exact-match phrases such as “see more”, “pulsa aquí”, “fes clic aquí”); short ambiguous words like “web” / “entrar” / “visitar” are not added.
+* Fix: Bulk actions respect quality/scope filters when removing rows, reload the list when needed, report real delete failures, and block a second bulk run while one is in progress.
+* Fix: Check progress total follows the live link count (no inflated “X of Y”); queue chip “unchecked” matches the Unchecked card.
+* Improvement: Unlink bulk label/confirm clarified; Help documents Upgrade selected to HTTPS.
+* Fix: Edit link HTML preview updates Después when Nueva URL changes (request sequencing; failed replace fallback).
+* Fix: Edit link can save absolute↔relative spelling and #fragment-only changes (no longer “No changes to save”).
+* Fix: Ignore-domain option is disabled for relative /path URLs (never suggests ignoring the site host).
+* Fix: Post-revision setting: avoid duplicate revisions when enabled; toast only when a revision was really created; help text covers HTTPS and Unlink.
+* Fix: Convert to /path: row and bulk use the same eligibility (post/meta/custom menu only); settings copy matches behavior.
+* Fix: Preserve modified date no longer disables WordPress auto-revisions; nofollow matching tolerates spacing around href/rel.
+* Fix: Delete all plugin records also clears History, abandons paused scan/check jobs (no ghost Continue), and clears last-check timestamps / immediate email queue.
+* Fix: ACF/Meta scan: support Clone fields and Link fields returning a URL string; extract img/iframe/data-* URLs from HTML in meta; clarify SEO key exclusions.
+* Fix: Additional link sources: scan block-theme Navigation (wp_navigation); extract images/media in widgets/terms/templates; Media Image widgets; clearer Settings labels (drop “Phase 2”).
+* Fix: Stop calling attachment_url_to_postid() on every image during scan classification; prefer wp-image-ID / path lookup with request cache.
+* Fix: History enforces the 500-row cap after legacy table migration and when opening the History tab; prune only runs after a successful history insert.
+* Fix: Auto theme no longer flashes night→day on refresh near dusk (boot script now uses sunrise/sunset like the UI, not a fixed 07:00–20:00 window).
+* Improvement: “Save even if…” checkbox wording matches HTTPS verification gate.
+
 = 2.4.5 =
 * Fix: Scan deduplication treats Jetpack/WordPress `?ssl=1` image URLs as the same resource as the file without that query parameter (only one row is stored).
 * Fix: Sorting the link list or reloading the page during a scan no longer auto-starts an HTTP check or stops the scan at partial progress.
@@ -190,6 +209,9 @@ Before requesting a hostname, the plugin may resolve A/AAAA records on the serve
 See changelog.txt in the plugin folder for older versions
 
 == Upgrade Notice ==
+
+= 2.4.6 =
+Recommended. Richer generic-anchor phrases (EN/ES/CA), bulk-action refresh fixes, check counters aligned with the dashboard, and Edit link preview/save fixes for relative URLs and fragments.
 
 = 2.4.5 =
 Recommended. Automatic and manual scans/checks now finish instead of stopping at 99% or restarting from page 1.

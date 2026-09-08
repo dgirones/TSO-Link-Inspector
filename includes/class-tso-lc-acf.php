@@ -202,11 +202,15 @@ class TSOLIIN_Acf {
 			return;
 		}
 
-		if ( in_array( $type, array( 'repeater', 'group' ), true ) ) {
+		if ( in_array( $type, array( 'repeater', 'group', 'clone' ), true ) ) {
 			$subs = isset( $field['sub_fields'] ) && is_array( $field['sub_fields'] ) ? $field['sub_fields'] : array();
 			$rows = is_array( $value ) ? $value : array();
-			if ( 'group' === $type ) {
-				$rows = array( $rows );
+			if ( in_array( $type, array( 'group', 'clone' ), true ) ) {
+				// Clone/group store one associative row (or nested arrays), not a list of rows.
+				$is_list = $rows !== array() && array_keys( $rows ) === range( 0, count( $rows ) - 1 );
+				if ( ! $is_list ) {
+					$rows = array( $rows );
+				}
 			}
 			foreach ( $rows as $row ) {
 				if ( ! is_array( $row ) ) {
@@ -305,10 +309,16 @@ class TSOLIIN_Acf {
 			self::push_item( $out, $value, $label, 'link', $post_id, $scope, $name );
 			return;
 		}
-		if ( 'link' === $type && is_array( $value ) && ! empty( $value['url'] ) ) {
-			$anchor = ! empty( $value['title'] ) ? sanitize_text_field( (string) $value['title'] ) : $label;
-			self::push_item( $out, (string) $value['url'], $anchor, 'link', $post_id, $scope, $name );
-			return;
+		if ( 'link' === $type ) {
+			if ( is_array( $value ) && ! empty( $value['url'] ) ) {
+				$anchor = ! empty( $value['title'] ) ? sanitize_text_field( (string) $value['title'] ) : $label;
+				self::push_item( $out, (string) $value['url'], $anchor, 'link', $post_id, $scope, $name );
+				return;
+			}
+			if ( is_string( $value ) && '' !== trim( $value ) ) {
+				self::push_item( $out, $value, $label, 'link', $post_id, $scope, $name );
+				return;
+			}
 		}
 		if ( in_array( $type, array( 'wysiwyg', 'textarea', 'oembed' ), true ) && is_string( $value ) && '' !== $value ) {
 			foreach ( self::extract_http_urls_from_string( $value ) as $found_url ) {

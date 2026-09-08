@@ -108,58 +108,134 @@ class TSOLIIN_Admin {
 	/**
 	 * Inline boot script: apply saved theme before first paint (no jQuery).
 	 *
+	 * Auto mode uses the same sunrise/sunset logic as the admin UI (site coords),
+	 * not a fixed 07:00–20:00 window (that caused a night→day flash near dusk).
+	 *
 	 * @return string
 	 */
 	private function get_theme_boot_script() {
-		return <<<'JS'
-(function () {
-	var KEY = 'tsoliin_ui_theme';
+		$coords = TSOLIIN_Support::theme_coords();
+		$lat    = wp_json_encode( (float) $coords['lat'] );
+		$lng    = wp_json_encode( (float) $coords['lng'] );
+
+		return '(function () {
+	var KEY = "tsoliin_ui_theme";
+	var LAT = ' . $lat . ';
+	var LNG = ' . $lng . ';
+	var DAY_MS = 86400000;
+	var J1970 = 2440588;
+	var J2000 = 2451545;
+	var RAD = Math.PI / 180;
+	var E = RAD * 23.4397;
 	function readPref() {
-		var p = '';
-		try { p = localStorage.getItem(KEY) || ''; } catch (e) { p = ''; }
-		if (p === 'day' || p === 'night' || p === 'auto') {
+		var p = "";
+		try { p = localStorage.getItem(KEY) || ""; } catch (e) { p = ""; }
+		if (p === "day" || p === "night" || p === "auto") {
 			return p;
 		}
-		return 'auto';
+		return "auto";
+	}
+	function toJulian(date) { return date.valueOf() / DAY_MS - 0.5 + J1970; }
+	function fromJulian(j) { return new Date((j + 0.5 - J1970) * DAY_MS); }
+	function toDays(date) { return toJulian(date) - J2000; }
+	function rightAscension(l, b) {
+		return Math.atan2(Math.sin(l) * Math.cos(E) - Math.tan(b) * Math.sin(E), Math.cos(l));
+	}
+	function declination(l, b) {
+		return Math.asin(Math.sin(b) * Math.cos(E) + Math.cos(b) * Math.sin(E) * Math.sin(l));
+	}
+	function solarMeanAnomaly(d) { return RAD * (357.5291 + 0.98560028 * d); }
+	function eclipticLongitude(M) {
+		var C = RAD * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
+		return M + C + RAD * 102.9372 + Math.PI;
+	}
+	function sunCoords(d) {
+		var M = solarMeanAnomaly(d);
+		var L = eclipticLongitude(M);
+		return { dec: declination(L, 0), ra: rightAscension(L, 0) };
+	}
+	function julianCycle(d, lw) { return Math.round(d - 0.0009 - lw / (2 * Math.PI)); }
+	function approxTransit(Ht, lw, n) { return 0.0009 + (Ht + lw) / (2 * Math.PI) + n; }
+	function solarTransitJ(ds, M, L) {
+		return J2000 + ds + 0.0053 * Math.sin(M) - 0.0069 * Math.sin(2 * L);
+	}
+	function hourAngle(h, phi, d) {
+		return Math.acos((Math.sin(h) - Math.sin(phi) * Math.sin(d)) / (Math.cos(phi) * Math.cos(d)));
+	}
+	function getSetJ(h, lw, phi, dec, n, M, L) {
+		var w = hourAngle(h, phi, dec);
+		var a = approxTransit(w, lw, n);
+		return solarTransitJ(a, M, L);
+	}
+	function sunTimes(date, lat, lng) {
+		try {
+			var lw = RAD * -lng;
+			var phi = RAD * lat;
+			var d = toDays(date);
+			var n = julianCycle(d, lw);
+			var ds = approxTransit(0, lw, n);
+			var M = solarMeanAnomaly(ds);
+			var L = eclipticLongitude(M);
+			var dec = sunCoords(ds).dec;
+			var Jnoon = solarTransitJ(ds, M, L);
+			var Jset = getSetJ(-0.833 * RAD, lw, phi, dec, n, M, L);
+			var Jrise = Jnoon - (Jset - Jnoon);
+			var sunrise = fromJulian(Jrise);
+			var sunset = fromJulian(Jset);
+			if (isNaN(sunrise.getTime()) || isNaN(sunset.getTime())) {
+				return null;
+			}
+			return { sunrise: sunrise, sunset: sunset };
+		} catch (e) {
+			return null;
+		}
+	}
+	function fromSolar() {
+		var now = new Date();
+		var times = sunTimes(now, LAT, LNG);
+		if (!times) {
+			var h = now.getHours();
+			return (h >= 7 && h < 20) ? "day" : "night";
+		}
+		return (now >= times.sunrise && now < times.sunset) ? "day" : "night";
 	}
 	function resolve(pref) {
-		if (pref === 'day' || pref === 'night') {
+		if (pref === "day" || pref === "night") {
 			return pref;
 		}
-		var h = (new Date()).getHours();
-		return (h >= 7 && h < 20) ? 'day' : 'night';
+		return fromSolar();
 	}
 	function apply(root) {
 		var pref = readPref();
 		var theme = resolve(pref);
 		try {
-			document.documentElement.setAttribute('data-tsoliin-theme', theme);
-			document.documentElement.setAttribute('data-tsoliin-theme-pref', pref);
+			document.documentElement.setAttribute("data-tsoliin-theme", theme);
+			document.documentElement.setAttribute("data-tsoliin-theme-pref", pref);
 		} catch (e1) { /* ignore */ }
 		if (document.body) {
-			document.body.setAttribute('data-tsoliin-theme', theme);
+			document.body.setAttribute("data-tsoliin-theme", theme);
 		}
 		var wraps = [];
-		if (root && root.nodeType === 1 && root.classList && root.classList.contains('tsoliin-wrap')) {
+		if (root && root.nodeType === 1 && root.classList && root.classList.contains("tsoliin-wrap")) {
 			wraps.push(root);
 		}
 		var scope = root && root.querySelectorAll ? root : document;
 		if (scope && scope.querySelectorAll) {
-			var found = scope.querySelectorAll('.tsoliin-wrap');
+			var found = scope.querySelectorAll(".tsoliin-wrap");
 			for (var i = 0; i < found.length; i++) {
 				wraps.push(found[i]);
 			}
 		}
 		for (var j = 0; j < wraps.length; j++) {
-			wraps[j].setAttribute('data-theme', theme);
-			wraps[j].setAttribute('data-theme-pref', pref);
+			wraps[j].setAttribute("data-theme", theme);
+			wraps[j].setAttribute("data-theme-pref", pref);
 		}
 	}
 	apply(document);
-	if (document.readyState === 'loading') {
-		document.addEventListener('DOMContentLoaded', function () { apply(document); });
+	if (document.readyState === "loading") {
+		document.addEventListener("DOMContentLoaded", function () { apply(document); });
 	}
-	if (typeof MutationObserver !== 'undefined') {
+	if (typeof MutationObserver !== "undefined") {
 		var mo = new MutationObserver(function (mutations) {
 			for (var i = 0; i < mutations.length; i++) {
 				var nodes = mutations[i].addedNodes;
@@ -168,22 +244,21 @@ class TSOLIIN_Admin {
 					if (!n || n.nodeType !== 1) {
 						continue;
 					}
-					if (n.classList && n.classList.contains('tsoliin-wrap')) {
+					if (n.classList && n.classList.contains("tsoliin-wrap")) {
 						apply(n);
-					} else if (n.querySelector && n.querySelector('.tsoliin-wrap')) {
+					} else if (n.querySelector && n.querySelector(".tsoliin-wrap")) {
 						apply(n);
 					}
 				}
 			}
 		});
 		mo.observe(document.documentElement, { childList: true, subtree: true });
-		document.addEventListener('DOMContentLoaded', function () {
+		document.addEventListener("DOMContentLoaded", function () {
 			mo.disconnect();
 			apply(document);
 		});
 	}
-})();
-JS;
+})();';
 	}
 
 	// =========================================================================
@@ -503,7 +578,10 @@ JS;
 				'itemsFailed'   => __( 'requests failed.', 'tso-link-inspector' ),
 				'unlinking'     => __( 'Unlinking…', 'tso-link-inspector' ),
 				'confirmUnlink' => __( 'Are you sure? The text will remain but the link will be removed.', 'tso-link-inspector' ),
+				'confirmUnlinkBulk' => __( 'Unlink the selected items? Anchor text stays; the link markup is removed from the source when possible.', 'tso-link-inspector' ),
 				'confirmDelete' => __( 'Delete this record from the list. The post will not be changed. Continue?', 'tso-link-inspector' ),
+				'noItemsSelected' => __( 'Select at least one link first.', 'tso-link-inspector' ),
+				'bulkBusy'      => __( 'A bulk action is already running. Wait for it to finish.', 'tso-link-inspector' ),
 				'error'         => __( 'An error occurred.', 'tso-link-inspector' ),
 				'scanFailed'    => __( 'Scan failed.', 'tso-link-inspector' ),
 				'save'          => __( 'Save URL', 'tso-link-inspector' ),
@@ -622,7 +700,7 @@ JS;
 		$scanned_posts  = $scanned_stored > 0 ? $scanned_stored : $this->db->get_scanned_post_count();
 		$date_fmt = get_option( 'date_format' ) . ' ' . get_option( 'time_format' );
 
-		echo '<div class="wrap tsoliin-wrap" data-theme="day" data-theme-pref="auto">';
+		echo '<div class="wrap tsoliin-wrap" data-theme="' . esc_attr( TSOLIIN_Support::theme_is_daytime_now() ? 'day' : 'night' ) . '" data-theme-pref="auto">';
 
 		echo '<div class="tsoliin-page-head">';
 		echo '<h1 class="wp-heading-inline">';
@@ -653,7 +731,7 @@ JS;
 
 		// Stats cards.
 		echo '<div class="tsoliin-stats">';
-		$this->stat_card( TSOLIIN_Support::format_display_number( $stats['total'] ), __( 'Total', 'tso-link-inspector' ), '', '', 'all', $view_post_id );
+		$this->stat_card( TSOLIIN_Support::format_display_number( $stats['total'] ), __( 'Total', 'tso-link-inspector' ), 'total', '', 'all', $view_post_id );
 		$this->stat_card( TSOLIIN_Support::format_display_number( $stats['broken'] ), __( 'Broken', 'tso-link-inspector' ), 'broken', '', 'broken', $view_post_id );
 		$this->stat_card( TSOLIIN_Support::format_display_number( $stats['redirect'] ), __( 'Redirect', 'tso-link-inspector' ), 'redirect', '', 'redirect', $view_post_id );
 		$this->stat_card( TSOLIIN_Support::format_display_number( $stats['ok'] ), __( 'OK', 'tso-link-inspector' ), 'ok', '', 'ok', $view_post_id );
@@ -757,7 +835,7 @@ JS;
 		echo '<span class="dashicons dashicons-update"></span> ';
 		echo esc_html__( 'Restart scan', 'tso-link-inspector' );
 		echo '</button>';
-		echo '<button type="button" id="tsoliin-discard-scan" class="button button-link tsoliin-discard-btn"' . $discard_scan_style . '>';
+		echo '<button type="button" id="tsoliin-discard-scan" class="button button-link tsoliin-discard-btn"' . $discard_scan_style . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		echo esc_html__( 'Discard scan', 'tso-link-inspector' );
 		echo '</button>';
 		echo '<button type="button" id="tsoliin-start-check" class="button tsoliin-btn-check" title="' . esc_attr( $check_btn_title ) . '"' . $btn_check_disabled . $start_check_style . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
@@ -768,10 +846,10 @@ JS;
 		echo '<span class="dashicons dashicons-update"></span> ';
 		echo esc_html__( 'Restart from zero', 'tso-link-inspector' );
 		echo '</button>';
-		echo '<button type="button" id="tsoliin-discard-check" class="button button-link tsoliin-discard-btn"' . $discard_check_style . '>';
+		echo '<button type="button" id="tsoliin-discard-check" class="button button-link tsoliin-discard-btn"' . $discard_check_style . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		echo esc_html__( 'Discard check', 'tso-link-inspector' );
 		echo '</button>';
-		echo '<button type="button" id="tsoliin-discard-all" class="button button-link tsoliin-discard-btn tsoliin-discard-btn--all"' . $discard_all_style . '>';
+		echo '<button type="button" id="tsoliin-discard-all" class="button button-link tsoliin-discard-btn tsoliin-discard-btn--all"' . $discard_all_style . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		echo esc_html__( 'Discard all paused', 'tso-link-inspector' );
 		echo '</button>';
 		echo '<button type="button" id="tsoliin-stop-check" class="button button-secondary"' . $stop_check_style . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
@@ -869,10 +947,10 @@ JS;
 			$filter_val,
 			$scope_val,
 			$this->get_list_quality_filter_from_request(),
-			isset( $_REQUEST['paged'] ) ? max( 1, absint( $_REQUEST['paged'] ) ) : 1,
-			isset( $_REQUEST['orderby'] ) ? sanitize_key( wp_unslash( $_REQUEST['orderby'] ) ) : 'date_found',
-			isset( $_REQUEST['order'] ) ? sanitize_key( wp_unslash( $_REQUEST['order'] ) ) : 'DESC',
-			isset( $_REQUEST['s'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['s'] ) ) : ''
+			isset( $_REQUEST['paged'] ) ? max( 1, absint( $_REQUEST['paged'] ) ) : 1, // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			isset( $_REQUEST['orderby'] ) ? sanitize_key( wp_unslash( $_REQUEST['orderby'] ) ) : 'date_found', // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			isset( $_REQUEST['order'] ) ? sanitize_key( wp_unslash( $_REQUEST['order'] ) ) : 'DESC', // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			isset( $_REQUEST['s'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['s'] ) ) : '' // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		);
 		echo '<div id="tsoliin-scope-region">';
 		$this->render_scope_region( $table, $list_ctx );
@@ -898,11 +976,11 @@ JS;
 		echo '<span id="tsoliin-modal-anchor-note" class="description tsoliin-modal-anchor-note" style="display:none;"></span></p>';
 		echo '<p class="tsoliin-apply-anyway-wrap"><label for="tsoliin-apply-anyway">';
 		echo '<input type="checkbox" id="tsoliin-apply-anyway" value="1" /> ';
-		echo esc_html__( 'Save even if this server cannot confirm the URL (geo-block, bot wall, or timeout — often HTTPS).', 'tso-link-inspector' );
+		echo esc_html__( 'Save even if HTTPS cannot be verified from this server (geo-block, bot wall, or timeout).', 'tso-link-inspector' );
 		echo '</label></p>';
 		echo '<p class="tsoliin-ignore-domain-wrap"><label for="tsoliin-ignore-domain">';
 		echo '<input type="checkbox" id="tsoliin-ignore-domain" value="1" /> ';
-		echo esc_html__( 'Also add the domain of the URL you are saving to the ignore list (skip future scans and HTTP checks).', 'tso-link-inspector' );
+		echo esc_html__( 'Also add the domain of the URL you are saving to the ignore list (skip future scans and HTTP checks). Not available for relative /path URLs.', 'tso-link-inspector' );
 		echo '</label></p>';
 		echo '<div class="tsoliin-modal__actions">';
 		echo '<button type="button" id="tsoliin-modal-save" class="button button-primary">' . esc_html__( 'Save URL', 'tso-link-inspector' ) . '</button>';
@@ -1381,9 +1459,10 @@ JS;
 	 */
 	private function render_settings_history_tab() {
 		$max_rows = (int) TSOLIIN_DB::HISTORY_MAX_ROWS;
-		$count    = (int) $this->db->count_url_change_history();
-		$rows     = $this->db->get_url_change_history( $max_rows );
-		$labels   = $this->get_history_change_type_labels();
+		$this->db->prune_url_change_history( $max_rows );
+		$count  = (int) $this->db->count_url_change_history();
+		$rows   = $this->db->get_url_change_history( $max_rows );
+		$labels = $this->get_history_change_type_labels();
 		$date_fmt = get_option( 'date_format' ) . ' ' . get_option( 'time_format' );
 
 		echo '<div class="tsoliin-history-panel">';
@@ -1530,7 +1609,7 @@ JS;
 		echo '<dd>' . esc_html__( 'Go to edit opens the right WordPress screen for this source (post, product, menu, widget, comment, or term), and scrolls to the link when it is in the post content. Edit link changes the URL in the stored source when the plugin can write it. Unlink removes the link or image from the source when possible. Recheck re-reads the source and runs one HTTP test. Not broken locks the link as OK. Suggestion offers HTTPS upgrades when available, or explains when you must edit in WordPress instead. Delete only removes the row from this list.', 'tso-link-inspector' ) . '</dd>';
 
 		echo '<dt>' . esc_html__( 'Bulk actions', 'tso-link-inspector' ) . '</dt>';
-		echo '<dd>' . esc_html__( 'Select rows and apply Recheck selected, Unlink all, Mark as OK, Convert selected to /path (when enabled in Settings), or Delete from list. Delete only removes the database row, not the link in your content.', 'tso-link-inspector' ) . '</dd>';
+		echo '<dd>' . esc_html__( 'Select rows and apply Recheck selected, Upgrade selected to HTTPS, Unlink selected, Mark as OK, Convert selected to /path (when enabled in Settings), or Delete from list. Delete only removes the database row, not the link in your content.', 'tso-link-inspector' ) . '</dd>';
 
 		echo '<dt>' . esc_html__( 'View post at link', 'tso-link-inspector' ) . '</dt>';
 		echo '<dd>' . esc_html__( 'The external-link icon opens the front end and highlights the matching link in post content, or scrolls to a comment. Works for links stored in post content and approved comments.', 'tso-link-inspector' ) . '</dd>';
@@ -1545,7 +1624,7 @@ JS;
 
 		echo '<dt>' . esc_html__( 'Custom fields (ACF / Meta)', 'tso-link-inspector' ) . '</dt>';
 		echo '<dd>';
-		echo esc_html__( 'Enable ACF / Meta custom fields in Settings to find URLs in fields added by plugins like ACF, PODS, or CPT UI. When ACF is active, Image / File / Gallery (attachment IDs), Page Link, Post Object, Relationship, and Taxonomy fields are resolved to real URLs, and ACF Options pages are scanned too. Elementor dynamic tags and [acf] shortcodes inside builder JSON (including __dynamic__ URL fields) are resolved to the real destination. Plain-text URLs inside meta also require Extended sources (Phase 2). Internal SEO keys are excluded by default; add extra keys to exclude to speed up scans.', 'tso-link-inspector' );
+		echo esc_html__( 'Enable ACF / Meta custom fields in Settings to find URLs in fields added by plugins like ACF, PODS, or CPT UI. When ACF is active, Image / File / Gallery (attachment IDs), Page Link, Post Object, Relationship, and Taxonomy fields are resolved to real URLs (including repeater, group, flexible, and clone), and ACF Options pages are scanned too. Elementor dynamic tags and [acf] shortcodes inside builder JSON (including __dynamic__ URL fields) are resolved to the real destination. Plain-text URLs inside meta also require Additional link sources → Plain-text URLs inside custom fields. Common SEO/admin keys are excluded by default; private _ keys are skipped unless they look like they contain URLs. Add extra keys to exclude to speed up scans.', 'tso-link-inspector' );
 		echo ' <a href="' . esc_url( $settings_url ) . '#tsoliin-meta-exclude-row">' . esc_html__( 'Open meta settings', 'tso-link-inspector' ) . '</a>';
 		echo '</dd>';
 
@@ -1574,7 +1653,7 @@ JS;
 		echo '<dd>' . esc_html__( 'Export buttons on the main screen respect the active status filter, quality filter, scope, search, and post view. PDF reports are limited to a subset of rows; use CSV for the full filtered list.', 'tso-link-inspector' ) . '</dd>';
 
 		echo '<dt>' . esc_html__( 'Delete all plugin records', 'tso-link-inspector' ) . '</dt>';
-		echo '<dd>' . esc_html__( 'Maintenance in Settings empties the link database and scan/check progress but does not edit posts, comments, or other content. Plugin Settings are kept. Run Scan now, then Check now, to rebuild the list.', 'tso-link-inspector' ) . '</dd>';
+		echo '<dd>' . esc_html__( 'Maintenance in Settings empties the link database, History, and scan/check progress but does not edit posts, comments, or other content. Plugin Settings are kept. Run Scan now, then Check now, to rebuild the list.', 'tso-link-inspector' ) . '</dd>';
 
 		echo '</dl>';
 		echo '</div>';
@@ -1676,7 +1755,7 @@ JS;
 			$settings_tab = 'settings';
 		}
 
-		echo '<div class="wrap tsoliin-wrap" data-theme="day" data-theme-pref="auto">';
+		echo '<div class="wrap tsoliin-wrap" data-theme="' . esc_attr( TSOLIIN_Support::theme_is_daytime_now() ? 'day' : 'night' ) . '" data-theme-pref="auto">';
 		echo '<div class="tsoliin-page-head">';
 		echo '<h1>';
 		echo '<a href="' . esc_url( admin_url( 'tools.php?page=tso-link-inspector' ) ) . '" class="tsoliin-back-link">';
@@ -1757,21 +1836,22 @@ JS;
 		echo '<p class="description">' . esc_html__( 'These sources are enabled by default. Uncheck any you want to skip during scans.', 'tso-link-inspector' ) . '</p>';
 		echo '</td></tr>';
 
-		// Phase 2 extended sources.
+		// Additional link sources.
 		$scan_widgets    = array_key_exists( 'scan_widgets', $s ) ? ! empty( $s['scan_widgets'] ) : true;
 		$scan_terms      = array_key_exists( 'scan_terms', $s ) ? ! empty( $s['scan_terms'] ) : true;
 		$scan_fse        = array_key_exists( 'scan_fse', $s ) ? ! empty( $s['scan_fse'] ) : true;
 		$scan_meta_plain = array_key_exists( 'scan_meta_plain', $s ) ? ! empty( $s['scan_meta_plain'] ) : true;
-		echo '<tr><th scope="row">' . esc_html__( 'Extended sources (Phase 2)', 'tso-link-inspector' ) . '</th><td>';
+		echo '<tr><th scope="row">' . esc_html__( 'Additional link sources', 'tso-link-inspector' ) . '</th><td>';
 		echo '<label style="display:block;margin-bottom:5px;"><input type="checkbox" name="tsoliin_scan_widgets" value="1" ' . checked( $scan_widgets, true, false ) . ' /> ';
-		echo esc_html__( 'Widget sidebars (Text, Custom HTML, block widgets)', 'tso-link-inspector' ) . '</label>';
+		echo esc_html__( 'Widget areas (Text, Custom HTML, block widgets, Media Image, and other widgets that store URL strings)', 'tso-link-inspector' ) . '</label>';
 		echo '<label style="display:block;margin-bottom:5px;"><input type="checkbox" name="tsoliin_scan_terms" value="1" ' . checked( $scan_terms, true, false ) . ' /> ';
-		echo esc_html__( 'Taxonomy term descriptions (categories, tags, etc.)', 'tso-link-inspector' ) . '</label>';
+		echo esc_html__( 'Taxonomy term descriptions (categories, tags, and custom taxonomies)', 'tso-link-inspector' ) . '</label>';
 		echo '<label style="display:block;margin-bottom:5px;"><input type="checkbox" name="tsoliin_scan_fse" value="1" ' . checked( $scan_fse, true, false ) . ' /> ';
-		echo esc_html__( 'Site Editor templates, template parts, and reusable blocks', 'tso-link-inspector' ) . '</label>';
+		echo esc_html__( 'Site Editor: templates, template parts, reusable blocks, and Navigation (block themes)', 'tso-link-inspector' ) . '</label>';
 		echo '<label style="display:block;margin-bottom:5px;"><input type="checkbox" name="tsoliin_scan_meta_plain" value="1" ' . checked( $scan_meta_plain, true, false ) . ' /> ';
 		echo esc_html__( 'Plain-text URLs inside custom fields (requires ACF/Meta scan above)', 'tso-link-inspector' ) . '</label>';
-		echo '<p class="description">' . esc_html__( 'Third-party plugins can register extra sources with the tsoliin_register_link_source() API.', 'tso-link-inspector' ) . '</p>';
+		echo '<p class="description">' . esc_html__( 'Enabled by default. Uncheck any source you want to skip. Theme templates that exist only as theme files (never customized in the Site Editor) are not in the database and cannot be scanned. Classic Appearance → Menus items are controlled under Extended scanning above, not here.', 'tso-link-inspector' ) . '</p>';
+		echo '<p class="description">' . esc_html__( 'Developers can register more sources with tsoliin_register_link_source(); those run whenever a scan runs, independent of these checkboxes.', 'tso-link-inspector' ) . '</p>';
 		echo '</td></tr>';
 
 		// WooCommerce (opt-in).
@@ -1789,8 +1869,8 @@ JS;
 		echo '<label><input type="checkbox" id="tsoliin_scan_meta" name="tsoliin_scan_meta" value="1" ' . checked( $scan_meta, true, false ) . ' /> ';
 		echo esc_html__( 'Scan custom fields (ACF, PODS, CPT UI...)', 'tso-link-inspector' );
 		echo '</label>';
-		echo '<p class="description">' . esc_html__( 'Find links in fields added by plugins like ACF. When ACF is active, this also resolves image/file/gallery IDs and page/post relationship fields to URLs, and scans ACF Options pages. Elementor dynamic tags and ACF tags inside builder JSON are resolved to real URLs. It may slow down scanning.', 'tso-link-inspector' ) . '</p>';
-		echo '<p class="description">' . esc_html__( 'Internal WordPress keys (e.g. Yoast, Rank Math) are always excluded. Add extra keys below, one per line.', 'tso-link-inspector' ) . '</p>';
+		echo '<p class="description">' . esc_html__( 'Find links in fields added by plugins like ACF. When ACF is active, this also resolves image/file/gallery IDs and page/post relationship fields to URLs (including repeater, group, flexible, and clone fields), and scans ACF Options pages. Elementor dynamic tags and ACF tags inside builder JSON are resolved to real URLs. It may slow down scanning.', 'tso-link-inspector' ) . '</p>';
+		echo '<p class="description">' . esc_html__( 'Common SEO/admin keys (e.g. selected Yoast and Rank Math keys) are excluded by default. Private meta keys starting with _ are skipped unless they look like they contain URLs. Add extra keys below, one per line.', 'tso-link-inspector' ) . '</p>';
 		echo '</td></tr>';
 
 		// Meta exclude keys.
@@ -1855,7 +1935,7 @@ JS;
 		echo '<tr><th scope="row">' . esc_html__( 'Post modified date', 'tso-link-inspector' ) . '</th><td>';
 		echo '<label><input type="checkbox" name="tsoliin_preserve_dates" value="1" ' . checked( $preserve_dates, true, false ) . ' /> ';
 		echo esc_html__( 'Do not update modified date when editing a link', 'tso-link-inspector' ) . '</label>';
-		echo '<p class="description">' . esc_html__( 'If enabled, editing or unlinking a link will not change the post modified date.', 'tso-link-inspector' ) . '</p>';
+		echo '<p class="description">' . esc_html__( 'If enabled, editing or unlinking a link in post content will not change the post modified date. Meta-only and menu URL changes are unaffected either way.', 'tso-link-inspector' ) . '</p>';
 		echo '</td></tr>';
 
 		echo '<tr><th scope="row">' . esc_html__( 'Broken links and search engines', 'tso-link-inspector' ) . '</th><td>';
@@ -1867,13 +1947,13 @@ JS;
 		echo '<tr><th scope="row">' . esc_html__( 'Convert to /path', 'tso-link-inspector' ) . '</th><td>';
 		echo '<label><input type="checkbox" name="tsoliin_relative_url_tool" value="1" ' . checked( $relative_url_tool, true, false ) . ' /> ';
 		echo esc_html__( 'Show “Convert to /path” in the link list', 'tso-link-inspector' ) . '</label>';
-		echo '<p class="description">' . esc_html__( 'When enabled, adds a row and bulk action to replace same-site URLs like https://yoursite.com/contact/ with /contact/ in post content. Disabled by default.', 'tso-link-inspector' ) . '</p>';
+		echo '<p class="description">' . esc_html__( 'When enabled, adds a row and bulk action to replace same-site URLs like https://yoursite.com/contact/ with /contact/ in post content or scanned meta (and custom menu URLs). Comments, widgets, and terms are skipped. Disabled by default.', 'tso-link-inspector' ) . '</p>';
 		echo '</td></tr>';
 
 		echo '<tr><th scope="row">' . esc_html__( 'Post revisions', 'tso-link-inspector' ) . '</th><td>';
 		echo '<label><input type="checkbox" name="tsoliin_create_revision" value="1" ' . checked( $create_revision, true, false ) . ' /> ';
 		echo esc_html__( 'Create a revision before editing a link in post content', 'tso-link-inspector' ) . '</label>';
-		echo '<p class="description">' . esc_html__( 'When enabled, saves a WordPress revision before Edit link or Convert to /path changes post content. Disabled by default.', 'tso-link-inspector' ) . '</p>';
+		echo '<p class="description">' . esc_html__( 'When enabled, saves a WordPress revision before Edit link, Convert to /path, Upgrade to HTTPS, or Unlink changes post content (once per post per request). Requires revisions enabled for that post type. Disabled by default.', 'tso-link-inspector' ) . '</p>';
 		echo '</td></tr>';
 
 		// Language.
@@ -1906,7 +1986,8 @@ JS;
 		echo '<li>' . esc_html__( 'Every row in the link list (URLs found during scans, anchor text, link type).', 'tso-link-inspector' ) . '</li>';
 		echo '<li>' . esc_html__( 'HTTP results: status codes, broken/OK flags, redirect destinations, and last-checked dates.', 'tso-link-inspector' ) . '</li>';
 		echo '<li>' . esc_html__( 'Manual locks (links you marked Not broken).', 'tso-link-inspector' ) . '</li>';
-		echo '<li>' . esc_html__( 'Scan and check progress (last scan date, batch cursors, any running background check).', 'tso-link-inspector' ) . '</li>';
+		echo '<li>' . esc_html__( 'URL change History log (Edit / Suggest / Convert to /path / HTTPS).', 'tso-link-inspector' ) . '</li>';
+		echo '<li>' . esc_html__( 'Scan and check progress (last scan/check dates, batch cursors, any running or paused background job).', 'tso-link-inspector' ) . '</li>';
 		echo '</ul>';
 		echo '<p><strong>' . esc_html__( 'What is kept:', 'tso-link-inspector' ) . '</strong></p>';
 		echo '<ul class="tsoliin-maintenance-list">';
@@ -1918,11 +1999,11 @@ JS;
 		echo '</p>';
 		echo '</div>';
 		$reset_confirm = __( 'Delete all plugin records?', 'tso-link-inspector' ) . "\n\n"
-			. __( 'This empties the link database and resets scan/check progress. Posts and Settings are not changed. You will need to run Scan now and Check now again.', 'tso-link-inspector' );
-		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="tsoliin-reset-form">';
+			. __( 'This empties the link database, History, and scan/check progress. Posts and Settings are not changed. You will need to run Scan now and Check now again.', 'tso-link-inspector' );
+		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="tsoliin-reset-form" data-tsoliin-confirm="' . esc_attr( $reset_confirm ) . '">';
 		wp_nonce_field( 'tsoliin_reset_all' );
 		echo '<input type="hidden" name="action" value="tsoliin_reset_all" />';
-		echo '<p><button type="submit" class="button button-secondary" id="tsoliin-reset-all" data-tsoliin-confirm="' . esc_attr( $reset_confirm ) . '">' . esc_html__( 'Delete all plugin records', 'tso-link-inspector' ) . '</button></p>';
+		echo '<p><button type="submit" class="button button-secondary" id="tsoliin-reset-all">' . esc_html__( 'Delete all plugin records', 'tso-link-inspector' ) . '</button></p>';
 		echo '</form>';
 		echo '</div>';
 	}
@@ -2098,21 +2179,22 @@ JS;
 
 	private function clear_scan_progress_options() {
 		$this->cron->reset_bg_scan_cursors();
-		$this->cron->stop_bg_scan();
-		delete_option( 'tsoliin_bg_scan_page' );
+		// Fully abandon jobs (stop_* leaves resume state for a manual pause).
+		$this->cron->discard_bg_scan();
+		$this->cron->discard_bg_check();
 		delete_option( 'tsoliin_bg_scan_total' );
-		delete_option( 'tsoliin_bg_scan_scanned' );
-		delete_option( 'tsoliin_bg_scan_started' );
-		delete_option( 'tsoliin_bg_scan_error' );
-		delete_option( 'tsoliin_bg_scan_complete' );
-		delete_option( 'tsoliin_bg_scan_phase' );
-		delete_option( 'tsoliin_bg_scan_token' );
+		delete_option( 'tsoliin_bg_scan_running' );
 		delete_option( 'tsoliin_total_posts_scanned' );
 		delete_option( 'tsoliin_last_full_scan' );
-		$this->cron->stop_bg_check();
-		delete_option( 'tsoliin_bg_check_complete' );
-		delete_option( 'tsoliin_bg_check_token' );
-		delete_option( 'tsoliin_bg_check_last_error' );
+		delete_option( 'tsoliin_last_check_batch' );
+		delete_option( 'tsoliin_last_check_count' );
+		delete_option( 'tsoliin_immediate_broken_queue' );
+		delete_option( 'tsoliin_bg_check_empty_retries' );
+		delete_option( 'tsoliin_bg_check_user_stopped' );
+		delete_transient( 'tsoliin_bg_scan_step_lock' );
+		delete_transient( 'tsoliin_bg_check_step_lock' );
+		delete_transient( 'tsoliin_bg_lifecycle_start_lock' );
+		delete_transient( 'tsoliin_immediate_queue_lock' );
 	}
 
 	/**
@@ -2964,6 +3046,9 @@ JS;
 		if ( '' !== $warning ) {
 			$response['warning'] = $warning;
 		}
+		if ( $this->scanner->did_create_revision_for_post( (int) $link->post_id ) ) {
+			$response['revision_created'] = 1;
+		}
 
 		$updated = $this->db->get_link( $link_id );
 		if ( $url_changed ) {
@@ -3343,9 +3428,15 @@ JS;
 		}
 		$this->require_link_mutation_cap( $link );
 
-		$blocked = $this->get_non_editable_source_message( $link );
-		if ( '' !== $blocked ) {
-			wp_send_json_error( array( 'message' => $blocked ) );
+		if ( ! TSOLIIN_Support::can_offer_convert_to_relative( $link ) ) {
+			$blocked = $this->get_non_editable_source_message( $link );
+			wp_send_json_error(
+				array(
+					'message' => '' !== $blocked
+						? $blocked
+						: __( 'This link cannot be converted to /path.', 'tso-link-inspector' ),
+				)
+			);
 		}
 
 		$relative = TSOLIIN_HTTP::absolute_internal_to_relative( (string) $link->link_url );
@@ -3613,9 +3704,10 @@ JS;
 			$link      = $this->db->get_link( $link_id );
 			$converted = false;
 			$skipped   = false;
+			$failed    = false;
 			$row_data  = array( 'link_id' => $link_id );
 			if ( $link ) {
-				if ( ! TSOLIIN_Support::current_user_can_mutate_link( $link ) || $this->is_non_editable_source( $link ) ) {
+				if ( ! TSOLIIN_Support::current_user_can_mutate_link( $link ) || ! TSOLIIN_Support::can_offer_convert_to_relative( $link ) ) {
 					$skipped = true;
 				} else {
 					$relative = TSOLIIN_HTTP::absolute_internal_to_relative( (string) $link->link_url );
@@ -3632,8 +3724,12 @@ JS;
 						);
 						$row_data  = $this->append_filter_match( $row_data, $updated );
 						$converted = true;
+					} else {
+						$failed = true;
 					}
 				}
+			} else {
+				$failed = true;
 			}
 			wp_send_json_success(
 				array(
@@ -3645,6 +3741,7 @@ JS;
 					'link_id'    => $link_id,
 					'converted'  => $converted,
 					'skipped'    => $skipped,
+					'failed'     => $failed,
 					'row'        => $row_data,
 					/* translators: 1: current, 2: total */
 					'message'    => sprintf( __( 'Converting %1$d of %2$d...', 'tso-link-inspector' ), $index + 1, $total ),
@@ -3710,9 +3807,13 @@ JS;
 			if ( ! $link_id ) {
 				wp_send_json_success( array( 'done' => true, 'processed' => $total ) );
 			}
-			$deleted = $this->db->delete_link( $link_id );
-			if ( ! $deleted ) {
+			$exists  = (bool) $this->db->get_link( $link_id );
+			$deleted = false;
+			if ( ! $exists ) {
+				// Already removed by a concurrent scan/edit — treat as done.
 				$deleted = true;
+			} else {
+				$deleted = (bool) $this->db->delete_link( $link_id );
 			}
 			wp_send_json_success(
 				array(
@@ -3976,8 +4077,23 @@ JS;
 		$bg           = $this->cron->get_bg_progress();
 		$post_id      = isset( $bg['post_id'] ) ? absint( $bg['post_id'] ) : 0;
 		$pending_view = $this->db->get_pending_check_count( $view_post_id );
-		$stats        = $post_id ? $this->db->get_stats_for_post( $post_id ) : $this->db->get_stats();
-		$done         = ! $bg['running'] && ! empty( $bg['complete'] ) && (int) $bg['pending'] <= 0;
+		// While a check runs, hero TOTAL must match the progress denominator (check scope, all links).
+		// Otherwise list Internal/External or post filters make cards disagree with "X of Y".
+		if ( ! empty( $bg['running'] ) || ( ! empty( $bg['complete'] ) && (int) $bg['pending'] > 0 ) ) {
+			$stats_post_id = $post_id;
+			$stats_scope   = 'all';
+		} else {
+			$stats_post_id = $view_post_id;
+			$stats_scope   = isset( $_POST['scope'] ) ? $this->db->sanitize_scope_input( wp_unslash( $_POST['scope'] ) ) : 'all'; // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		}
+		$stats = $stats_post_id
+			? $this->db->get_stats_for_post( $stats_post_id, $stats_scope )
+			: $this->db->get_stats( $stats_scope );
+		$display = array();
+		foreach ( $stats as $key => $value ) {
+			$display[ $key ] = TSOLIIN_Support::format_display_number( (int) $value );
+		}
+		$done = ! $bg['running'] && ! empty( $bg['complete'] ) && (int) $bg['pending'] <= 0;
 		if ( $bg['running'] ) {
 			/* translators: 1: checked count, 2: total count */
 			$message = sprintf( __( 'Checking %1$d of %2$d...', 'tso-link-inspector' ), $bg['checked'], $bg['total'] );
@@ -4025,6 +4141,8 @@ JS;
 					&& $pending_view > 0
 				) ? 1 : 0,
 				'broken'  => $stats['broken'],
+				'stats'   => $stats,
+				'display' => $display,
 				'done'    => $done,
 				'message' => $message,
 				'queue'   => $queue_chip,
@@ -4419,13 +4537,13 @@ JS;
 	 */
 	private function truncate_plugin_records() {
 		global $wpdb;
-		$table          = $this->db->get_table();
-		$expected_table = $this->db->get_table();
-		if ( $table === $expected_table ) {
+		$table = $this->db->get_table();
+		if ( is_string( $table ) && '' !== $table && $table === $this->db->get_table() ) {
 			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 			$wpdb->query( 'TRUNCATE TABLE `' . esc_sql( $table ) . '`' ); // Table name validated against get_table() on line above.
 			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		}
+		$this->db->clear_url_change_history();
 		$this->clear_scan_progress_options();
 		TSOLIIN_DB::clear_stats_cache();
 	}

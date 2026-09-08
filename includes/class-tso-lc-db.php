@@ -309,6 +309,8 @@ class TSOLIIN_DB {
 
 		$main_gone    = $this->migrate_or_drop_legacy_table( $legacy_main, $this->table );
 		$history_gone = $this->migrate_or_drop_legacy_table( $legacy_history, $this->history_table );
+		// Legacy history may arrive oversized; enforce the 500-row cap immediately.
+		$this->prune_url_change_history();
 
 		if ( $main_gone && $history_gone ) {
 			update_option( 'tsoliin_legacy_pc_table_cleared', '1', true );
@@ -1178,7 +1180,7 @@ class TSOLIIN_DB {
 			$change_type = 'edit';
 		}
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		$wpdb->insert(
+		$inserted = $wpdb->insert(
 			$this->history_table,
 			array(
 				'link_id'     => absint( $link_id ),
@@ -1192,7 +1194,9 @@ class TSOLIIN_DB {
 			array( '%d', '%d', '%s', '%s', '%s', '%d', '%s' )
 		);
 		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		$this->prune_url_change_history();
+		if ( false !== $inserted ) {
+			$this->prune_url_change_history();
+		}
 	}
 
 	/**

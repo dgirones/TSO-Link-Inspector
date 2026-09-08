@@ -1309,7 +1309,8 @@ class TSOLIIN_HTTP {
 		}
 
 		if ( 0 === strpos( $url, '/' ) || 0 === strpos( $url, './' ) || 0 === strpos( $url, '../' ) ) {
-			return untrailingslashit( strtolower( home_url( $url ) ) );
+			// Relative paths have no external host — never suggest ignoring the site itself.
+			return '';
 		}
 
 		return '';

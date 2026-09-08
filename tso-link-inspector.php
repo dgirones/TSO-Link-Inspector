@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       TSO Link Inspector
  * Description:       Find and fix broken links across your entire WordPress site without opening each post.
- * Version:           2.4.5
+ * Version:           2.4.6
  * Requires at least: 5.9
  * Requires PHP:      7.4
  * Tested up to:       7.1
@@ -20,7 +20,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'TSOLIIN_VERSION',    '2.4.5' );
+define( 'TSOLIIN_VERSION',    '2.4.6' );
 define( 'TSOLIIN_PLUGIN_FILE', __FILE__ );
 define( 'TSOLIIN_PLUGIN_DIR',  plugin_dir_path( __FILE__ ) );
 define( 'TSOLIIN_PLUGIN_URL',  plugin_dir_url( __FILE__ ) );
@@ -772,17 +772,17 @@ final class TSOLIIN_Link_Inspector {
 				}
 				$matched[ $variant ] = true;
 				$escaped = preg_quote( $variant, '#' );
-				$content = preg_replace_callback(
-					'#<a(\s[^>]*href=["\']{1}' . $escaped . '["\']{1}[^>]*)>#i',
-					function ( $m ) {
+				$replaced = preg_replace_callback(
+					'#<a(\s[^>]*href\s*=\s*["\']' . $escaped . '["\'][^>]*)>#i',
+					static function ( $m ) {
 						$attrs = $m[1];
 						// Add nofollow to existing rel or create new one.
-						if ( preg_match( '/rel=["\'](.*?)["\']/i', $attrs, $rm ) ) {
+						if ( preg_match( '/\brel\s*=\s*["\'](.*?)["\']/i', $attrs, $rm ) ) {
 							$rels = array_filter( array_map( 'trim', explode( ' ', $rm[1] ) ) );
 							if ( ! in_array( 'nofollow', $rels, true ) ) {
 								$rels[] = 'nofollow';
 							}
-							$attrs = preg_replace( '/rel=["\'](.*?)["\']/i', 'rel="' . implode( ' ', $rels ) . '"', $attrs );
+							$attrs = preg_replace( '/\brel\s*=\s*["\'](.*?)["\']/i', 'rel="' . implode( ' ', $rels ) . '"', $attrs );
 						} else {
 							$attrs .= ' rel="nofollow"';
 						}
@@ -790,6 +790,9 @@ final class TSOLIIN_Link_Inspector {
 					},
 					$content
 				);
+				if ( is_string( $replaced ) ) {
+					$content = $replaced;
+				}
 			}
 		}
 		return $content;
