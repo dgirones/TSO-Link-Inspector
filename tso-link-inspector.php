@@ -152,6 +152,12 @@ final class TSOLIIN_Link_Inspector {
 		add_action( 'admin_init', array( $this, 'maybe_upgrade_db' ) );
 		add_action( 'admin_init', array( $this, 'late_cleanup_legacy_pc_tables' ), 999 );
 		add_action( 'deleted_comment', array( $this, 'on_deleted_comment' ), 10, 2 );
+		// Keep the cached _wp_attached_file => post_id map (TSOLIIN_Support::get_attached_file_map())
+		// in sync: invalidate whenever an attachment's file path changes, or the attachment is removed.
+		add_action( 'added_post_meta', array( $this, 'on_attachment_meta_changed' ), 10, 4 );
+		add_action( 'updated_post_meta', array( $this, 'on_attachment_meta_changed' ), 10, 4 );
+		add_action( 'deleted_post_meta', array( $this, 'on_attachment_meta_changed' ), 10, 4 );
+		add_action( 'delete_attachment', array( $this, 'on_attachment_deleted' ) );
 		// Re-scan post automatically when saved in editor (not during plugin AJAX calls).
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- only checking action name to guard hook registration, no data processed.
 		if ( ! ( defined( 'DOING_AJAX' ) && DOING_AJAX && isset( $_REQUEST['action'] ) && 0 === strpos( sanitize_key( wp_unslash( $_REQUEST['action'] ) ), 'tsoliin_' ) ) ) {
@@ -496,6 +502,30 @@ final class TSOLIIN_Link_Inspector {
 	 */
 	public function on_deleted_comment( $comment_id, $comment = null ) {
 		$this->db->delete_links_for_comment( (int) $comment_id );
+	}
+
+	/**
+	 * Invalidate the cached `_wp_attached_file` map when that meta key changes
+	 * (file replaced, regenerated, or moved by another plugin).
+	 *
+	 * @param int    $meta_id  Meta row ID (unused).
+	 * @param int    $post_id  Post ID (unused).
+	 * @param string $meta_key Meta key.
+	 * @return void
+	 */
+	public function on_attachment_meta_changed( $meta_id, $post_id, $meta_key ) {
+		if ( '_wp_attached_file' === $meta_key ) {
+			TSOLIIN_Support::invalidate_attached_file_map_cache();
+		}
+	}
+
+	/**
+	 * Invalidate the cached `_wp_attached_file` map when an attachment is deleted.
+	 *
+	 * @return void
+	 */
+	public function on_attachment_deleted() {
+		TSOLIIN_Support::invalidate_attached_file_map_cache();
 	}
 
 	/**

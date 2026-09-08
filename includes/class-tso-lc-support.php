@@ -967,12 +967,30 @@ class TSOLIIN_Support {
 	}
 
 	/**
-	 * Lazily build and cache the full `_wp_attached_file` => post_id map for this request.
+	 * Transient key for the persisted `_wp_attached_file` map (survives across
+	 * requests, since a scan runs as many separate AJAX batches — each its own
+	 * PHP process, so the static in-memory cache alone doesn't help there).
+	 */
+	const ATTACHED_FILE_MAP_TRANSIENT = 'tso_link_inspector_attached_file_map';
+
+	/**
+	 * Lazily build and cache the full `_wp_attached_file` => post_id map.
+	 *
+	 * Three layers: static (fastest, this request only), transient (survives
+	 * across the many AJAX requests a single scan makes), then the DB query
+	 * itself as the final fallback. Invalidated via {@see invalidate_attached_file_map_cache()}
+	 * whenever `_wp_attached_file` meta changes or an attachment is deleted.
 	 *
 	 * @return array<string,int>
 	 */
 	private static function get_attached_file_map() {
 		if ( null !== self::$attached_file_map ) {
+			return self::$attached_file_map;
+		}
+
+		$cached = get_transient( self::ATTACHED_FILE_MAP_TRANSIENT );
+		if ( is_array( $cached ) ) {
+			self::$attached_file_map = $cached;
 			return self::$attached_file_map;
 		}
 
@@ -994,7 +1012,22 @@ class TSOLIIN_Support {
 			}
 		}
 
+		// 12h safety-net expiry in case an invalidation hook is ever missed;
+		// normal invalidation is immediate via the hooks below.
+		set_transient( self::ATTACHED_FILE_MAP_TRANSIENT, self::$attached_file_map, 12 * HOUR_IN_SECONDS );
+
 		return self::$attached_file_map;
+	}
+
+	/**
+	 * Clear the `_wp_attached_file` map cache (static + transient).
+	 * Hooked to attachment meta/delete events so the map never goes stale.
+	 *
+	 * @return void
+	 */
+	public static function invalidate_attached_file_map_cache() {
+		self::$attached_file_map = null;
+		delete_transient( self::ATTACHED_FILE_MAP_TRANSIENT );
 	}
 
 	/**
