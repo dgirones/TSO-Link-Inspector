@@ -23,6 +23,15 @@ class TSOLIIN_Support {
 	private static $attachment_id_by_url = array();
 
 	/**
+	 * Request-scoped map of relative uploads path => attachment post ID.
+	 * Built once via a single query (filtered on the indexed meta_key column)
+	 * instead of one unindexed meta_value lookup per URL.
+	 *
+	 * @var array<string,int>|null
+	 */
+	private static $attached_file_map = null;
+
+	/**
 	 * Request-scoped cache for can_inline_edit_link() per link row.
 	 *
 	 * @var array<string,bool>
@@ -930,7 +939,14 @@ class TSOLIIN_Support {
 	}
 
 	/**
-	 * Resolve attachment ID via `_wp_attached_file` relative path (single indexed lookup).
+	 * Resolve attachment ID via `_wp_attached_file` relative path.
+	 *
+	 * `meta_value` has no index in core, so a per-URL `WHERE meta_value = %s`
+	 * lookup forces MySQL to scan every `_wp_attached_file` row on each call —
+	 * slow on sites with large media libraries, and the scanner calls this
+	 * once per unique image URL. Instead, load the whole key => post_id map
+	 * once per request (filtered on the indexed meta_key column, so this one
+	 * query stays fast even on large sites) and do plain array lookups after.
 	 *
 	 * @param string $url Absolute or site-relative media URL.
 	 * @return int
@@ -941,17 +957,44 @@ class TSOLIIN_Support {
 			return 0;
 		}
 
+		$map = self::get_attached_file_map();
+		if ( ! isset( $map[ $rel ] ) ) {
+			return 0;
+		}
+
+		$post_id = (int) $map[ $rel ];
+		return ( $post_id > 0 && 'attachment' === get_post_type( $post_id ) ) ? $post_id : 0;
+	}
+
+	/**
+	 * Lazily build and cache the full `_wp_attached_file` => post_id map for this request.
+	 *
+	 * @return array<string,int>
+	 */
+	private static function get_attached_file_map() {
+		if ( null !== self::$attached_file_map ) {
+			return self::$attached_file_map;
+		}
+
 		global $wpdb;
+		self::$attached_file_map = array();
+
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		$post_id = $wpdb->get_var(
-			$wpdb->prepare(
-				"SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_wp_attached_file' AND meta_value = %s LIMIT 1",
-				$rel
-			)
+		$rows = $wpdb->get_results(
+			"SELECT post_id, meta_value FROM {$wpdb->postmeta} WHERE meta_key = '_wp_attached_file'"
 		);
 		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		$post_id = absint( $post_id );
-		return ( $post_id > 0 && 'attachment' === get_post_type( $post_id ) ) ? $post_id : 0;
+
+		if ( $rows ) {
+			foreach ( $rows as $row ) {
+				$path = (string) $row->meta_value;
+				if ( '' !== $path ) {
+					self::$attached_file_map[ $path ] = (int) $row->post_id;
+				}
+			}
+		}
+
+		return self::$attached_file_map;
 	}
 
 	/**

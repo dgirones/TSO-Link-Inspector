@@ -303,6 +303,21 @@ class TSOLIIN_List_Table extends WP_List_Table {
 		) );
 
 		$this->items = $result['items'];
+
+		// Batch-prime the post cache so per-row rendering (edit links, permalinks,
+		// attachment lookups, etc.) hits the request cache instead of issuing one
+		// WP_Post::get_instance() query per row.
+		if ( ! empty( $this->items ) && function_exists( '_prime_post_caches' ) ) {
+			$post_ids = array();
+			foreach ( $this->items as $row_item ) {
+				if ( ! empty( $row_item->post_id ) ) {
+					$post_ids[] = (int) $row_item->post_id;
+				}
+			}
+			if ( $post_ids ) {
+				_prime_post_caches( array_unique( $post_ids ), false, false );
+			}
+		}
 		$this->set_pagination_args( array(
 			'total_items' => $result['total'],
 			'per_page'    => $per_page,
