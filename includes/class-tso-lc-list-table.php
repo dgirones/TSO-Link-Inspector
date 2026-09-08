@@ -315,7 +315,10 @@ class TSOLIIN_List_Table extends WP_List_Table {
 				}
 			}
 			if ( $post_ids ) {
-				_prime_post_caches( array_unique( $post_ids ), false, false );
+				// Prime both post objects and postmeta in one batched pair of queries;
+				// otherwise each row's own get_post_meta() call falls back to its own
+				// single-post update_meta_cache() query.
+				_prime_post_caches( array_unique( $post_ids ), false, true );
 			}
 		}
 		$this->set_pagination_args( array(
