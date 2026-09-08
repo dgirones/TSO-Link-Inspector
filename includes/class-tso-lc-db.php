@@ -1203,7 +1203,9 @@ class TSOLIIN_DB {
 	 * Delete oldest history rows when over the configured maximum.
 	 *
 	 * @param int $limit Max rows to keep.
-	 * @return int Number of rows deleted.
+	 * @return int Row count remaining after pruning (avoids a second COUNT(*)
+	 *             call from callers that need the up-to-date total, such as
+	 *             the settings History tab).
 	 */
 	public function prune_url_change_history( $limit = self::HISTORY_MAX_ROWS ) {
 		global $wpdb;
@@ -1222,7 +1224,7 @@ class TSOLIIN_DB {
 			);
 		}
 		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
-		return max( 0, $deleted );
+		return max( 0, $count - max( 0, $deleted ) );
 	}
 
 	/**

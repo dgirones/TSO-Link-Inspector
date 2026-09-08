@@ -1459,10 +1459,9 @@ class TSOLIIN_Admin {
 	 */
 	private function render_settings_history_tab() {
 		$max_rows = (int) TSOLIIN_DB::HISTORY_MAX_ROWS;
-		$this->db->prune_url_change_history( $max_rows );
-		$count  = (int) $this->db->count_url_change_history();
-		$rows   = $this->db->get_url_change_history( $max_rows );
-		$labels = $this->get_history_change_type_labels();
+		$count    = (int) $this->db->prune_url_change_history( $max_rows );
+		$rows     = $this->db->get_url_change_history( $max_rows );
+		$labels   = $this->get_history_change_type_labels();
 		$date_fmt = get_option( 'date_format' ) . ' ' . get_option( 'time_format' );
 
 		echo '<div class="tsoliin-history-panel">';
