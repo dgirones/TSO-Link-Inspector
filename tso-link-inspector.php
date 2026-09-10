@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       TSO Link Inspector
  * Description:       Find and fix broken links across your entire WordPress site without opening each post.
- * Version:           2.4.6
+ * Version:           2.4.7
  * Requires at least: 5.9
  * Requires PHP:      7.4
  * Tested up to:       7.1
@@ -20,7 +20,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'TSOLIIN_VERSION',    '2.4.6' );
+define( 'TSOLIIN_VERSION',    '2.4.7' );
 define( 'TSOLIIN_PLUGIN_FILE', __FILE__ );
 define( 'TSOLIIN_PLUGIN_DIR',  plugin_dir_path( __FILE__ ) );
 define( 'TSOLIIN_PLUGIN_URL',  plugin_dir_url( __FILE__ ) );
@@ -440,7 +440,8 @@ final class TSOLIIN_Link_Inspector {
 			$this->db->cleanup_misclassified_plain_image_rows();
 			$this->db->cleanup_attachment_permalink_rows();
 			$this->cron->schedule();
-			update_option( 'tsoliin_version', TSOLIIN_VERSION, false );
+			$this->ensure_frequent_options_autoloaded();
+			update_option( 'tsoliin_version', TSOLIIN_VERSION, true );
 			return;
 		}
 		if ( ! tsoliin_is_plugin_admin_request() ) {
@@ -452,12 +453,30 @@ final class TSOLIIN_Link_Inspector {
 	}
 
 	/**
+	 * Force autoload=yes on options read on (almost) every request (admin_init,
+	 * cron steps, AJAX) that were previously saved with autoload=no. Re-saving
+	 * with the current code (which now passes autoload=true) only fixes new
+	 * writes; sites upgrading from an older version still have the old
+	 * autoload=no row until this runs once.
+	 */
+	private function ensure_frequent_options_autoloaded() {
+		if ( function_exists( 'wp_set_option_autoload' ) ) {
+			wp_set_option_autoload( 'tsoliin_settings', true );
+			return;
+		}
+		$settings = get_option( 'tsoliin_settings', null );
+		if ( null !== $settings ) {
+			update_option( 'tsoliin_settings', $settings, true );
+		}
+	}
+
+	/**
 	 * Plugin activation.
 	 */
 	public function on_activate() {
 		$this->db->ensure_table_exists();
 		$this->cron->schedule();
-		update_option( 'tsoliin_version', TSOLIIN_VERSION, false );
+		update_option( 'tsoliin_version', TSOLIIN_VERSION, true );
 	}
 
 	/**

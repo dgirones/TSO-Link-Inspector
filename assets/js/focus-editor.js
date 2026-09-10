@@ -1,0 +1,2043 @@
+/**
+ * Scroll to and highlight a link in the post editor (block or classic).
+ */
+( function () {
+	'use strict';
+
+	var focused           = false;
+	var codeModeTried     = false;
+	var visualTried       = false;
+	var blockFocusPending = false;
+	var visualModeEnsured = false;
+	var visualAttempts    = 0;
+
+	function isClassicEditorDom() {
+		if ( document.body.classList.contains( 'block-editor-page' ) ) {
+			return false;
+		}
+		return !! (
+			document.getElementById( 'post' ) && (
+				document.getElementById( 'content' ) ||
+				document.getElementById( 'wp-content-editor-container' ) ||
+				document.getElementById( 'postdivrich' )
+			)
+		);
+	}
+
+	function isBlockEditorScreen( data ) {
+		if ( isClassicEditorDom() ) {
+			return false;
+		}
+		if ( data && typeof data.isBlockEditor !== 'undefined' ) {
+			return !! data.isBlockEditor;
+		}
+		return document.body.classList.contains( 'block-editor-page' )
+			|| !! document.querySelector( '.block-editor-writing-flow, .edit-post-layout' );
+	}
+
+	function getFocusData() {
+		if ( window.tsoliinFocusLink && window.tsoliinFocusLink.variants && window.tsoliinFocusLink.variants.length ) {
+			return window.tsoliinFocusLink;
+		}
+		try {
+			if ( window.wp && wp.data ) {
+				var blockSelect = wp.data.select( 'core/block-editor' );
+				if ( blockSelect && blockSelect.getSettings ) {
+					var settings = blockSelect.getSettings();
+					if ( settings && settings.tsoliinFocusLink && settings.tsoliinFocusLink.variants ) {
+						return settings.tsoliinFocusLink;
+					}
+				}
+			}
+		} catch ( err ) {}
+		return null;
+	}
+
+	function decodeEntities( text ) {
+		var el = document.createElement( 'textarea' );
+		el.innerHTML = String( text || '' );
+		return el.value;
+	}
+
+	function looksLikeUrlNeedle( value ) {
+		var v = String( value || '' ).trim();
+		if ( ! v || v.length < 8 ) {
+			return false;
+		}
+		// Path basename alone (e.g. "shortcodes") must not match body text.
+		if ( /^[a-z0-9._-]+$/i.test( v ) && v.indexOf( '.' ) === -1 ) {
+			return false;
+		}
+		return /^(?:https?:|\/\/|\/|\.\/|\.\.\/|#)/i.test( v )
+			|| /^\[gallery\b/i.test( v )
+			|| /\.(?:jpe?g|png|gif|webp|avif|svg|bmp|ico)(?:\?|$)/i.test( v )
+			|| /youtu\.be\//i.test( v )
+			|| /youtube(?:-nocookie)?\.com\//i.test( v )
+			|| v.indexOf( '/' ) !== -1;
+	}
+
+	function stripUrlQueryForMatch( value ) {
+		var v = String( value || '' );
+		var hash = v.indexOf( '#' );
+		if ( hash !== -1 ) {
+			v = v.substring( 0, hash );
+		}
+		var q = v.indexOf( '?' );
+		return q === -1 ? v : v.substring( 0, q );
+	}
+
+	function canonicalizeUrlForMatch( url ) {
+		var value = String( url || '' ).trim();
+		if ( ! value ) {
+			return '';
+		}
+		try {
+			var parsed = new URL( value, window.location.href );
+			[ 'si', 'feature', 'fbclid', 'gclid', 'igshid', 'pp', 'ref' ].forEach( function ( key ) {
+				parsed.searchParams.delete( key );
+			} );
+			var utm = [];
+			parsed.searchParams.forEach( function ( _val, key ) {
+				if ( 0 === key.indexOf( 'utm_' ) ) {
+					utm.push( key );
+				}
+			} );
+			utm.forEach( function ( key ) {
+				parsed.searchParams.delete( key );
+			} );
+			parsed.hash = '';
+			var out = parsed.protocol + '//' + parsed.host.toLowerCase() + parsed.pathname;
+			var query = parsed.searchParams.toString();
+			if ( query ) {
+				out += '?' + query;
+			}
+			return out.replace( /\/$/, '' );
+		} catch ( err ) {
+			return stripUrlQueryForMatch( value ).replace( /\/$/, '' );
+		}
+	}
+
+	function buildSearchVariants( data ) {
+		var out  = [];
+		var seen = {};
+		var list = ( data.contentNeedle ? [ data.contentNeedle ] : [] ).concat( data.variants || [] );
+		var i;
+		for ( i = 0; i < list.length; i++ ) {
+			var raw     = list[ i ];
+			var decoded = decodeEntities( raw );
+			[ raw, decoded ].forEach( function ( value ) {
+				if ( value && ! seen[ value ] ) {
+					seen[ value ] = true;
+					out.push( value );
+				}
+			} );
+		}
+		// File basename is only useful for media (src/srcset), never as a text/href needle
+		// for normal links — e.g. URL …/shortcodes/ must not highlight the word "shortcodes".
+		if ( data.fileName && ( data.linkType === 'image' || data.linkType === 'iframe' ) ) {
+			var fileNames = [ data.fileName ];
+			try {
+				fileNames.push( decodeURIComponent( data.fileName ) );
+			} catch ( e ) {
+				// Malformed % sequences — keep the raw file name only.
+			}
+			fileNames.forEach( function ( value ) {
+				if ( value && ! seen[ value ] ) {
+					seen[ value ] = true;
+					out.push( value );
+				}
+			} );
+		}
+		if ( data.youtubeVideoId ) {
+			var ytId = String( data.youtubeVideoId );
+			[
+				'youtu.be/' + ytId,
+				'youtube.com/embed/' + ytId,
+				'youtube-nocookie.com/embed/' + ytId,
+				'youtube.com/watch?v=' + ytId,
+			].forEach( function ( value ) {
+				if ( value && ! seen[ value ] ) {
+					seen[ value ] = true;
+					out.push( value );
+				}
+			} );
+		}
+		out.slice().forEach( function ( value ) {
+			var stripped = stripUrlQueryForMatch( value );
+			if ( stripped && stripped !== value && ! seen[ stripped ] ) {
+				seen[ stripped ] = true;
+				out.push( stripped );
+			}
+		} );
+		return out;
+	}
+
+	function buildPlainTextVariants( searchVariants ) {
+		return ( searchVariants || [] ).filter( looksLikeUrlNeedle );
+	}
+
+	function findIndexInsensitive( haystack, needles ) {
+		var text  = String( haystack || '' );
+		var lower = text.toLowerCase();
+		var i;
+		for ( i = 0; i < needles.length; i++ ) {
+			var needle = needles[ i ];
+			if ( ! needle ) {
+				continue;
+			}
+			var idx = lower.indexOf( String( needle ).toLowerCase() );
+			if ( idx !== -1 ) {
+				return {
+					index: idx,
+					match: text.substring( idx, idx + needle.length ),
+				};
+			}
+		}
+		return null;
+	}
+
+	function haystackContainsVariant( haystack, searchVariants ) {
+		return !! findIndexInsensitive( haystack, searchVariants );
+	}
+
+	function shouldAllowCodeMode( data ) {
+		if ( ! data ) {
+			return true;
+		}
+		return data.linkType !== 'image' && data.linkType !== 'iframe';
+	}
+
+	function ensureVisualEditorMode( data ) {
+		if ( visualModeEnsured || ! isBlockEditorScreen( data ) ) {
+			return;
+		}
+		if ( ! window.wp || ! wp.data ) {
+			return;
+		}
+		var prefSelect = wp.data.select( 'core/preferences' );
+		if ( prefSelect && prefSelect.get ) {
+			try {
+				var current = prefSelect.get( 'core', 'editorMode' );
+				if ( 'visual' === current ) {
+					visualModeEnsured = true;
+					return;
+				}
+			} catch ( err ) {}
+		}
+		var prefs = wp.data.dispatch( 'core/preferences' );
+		if ( ! prefs || ! prefs.set ) {
+			return;
+		}
+		try {
+			prefs.set( 'core', 'editorMode', 'visual' );
+		} catch ( err ) {}
+		try {
+			prefs.set( 'core/edit-post', 'editorMode', 'visual' );
+		} catch ( err ) {}
+		visualModeEnsured = true;
+	}
+
+	function ensureClassicVisualEditorMode() {
+		if ( ! isClassicHtmlMode() ) {
+			visualModeEnsured = true;
+			return;
+		}
+		if ( typeof window.switchEditors !== 'undefined' && window.switchEditors.go ) {
+			try {
+				window.switchEditors.go( 'content', 'tmce' );
+			} catch ( err ) {
+				try {
+					window.switchEditors.go( 'tmce' );
+				} catch ( err2 ) {}
+			}
+			visualModeEnsured = true;
+			return;
+		}
+		var visualTab = document.getElementById( 'content-tmce' );
+		if ( visualTab ) {
+			visualTab.click();
+			visualModeEnsured = true;
+		}
+	}
+
+	function isClassicGalleryFocus( data ) {
+		return !! ( data && (
+			data.classicGallery === 1
+			|| data.classicGallery === true
+			|| ( Array.isArray( data.galleryIds ) && data.galleryIds.length )
+			|| getClassicGalleryIndex( data ) >= 0
+		) );
+	}
+
+	function imageMatchesAttachmentId( img, attachmentId ) {
+		if ( ! img || attachmentId <= 0 ) {
+			return false;
+		}
+		if ( parseInt( img.getAttribute( 'data-id' ), 10 ) === attachmentId ) {
+			return true;
+		}
+		if ( parseInt( img.getAttribute( 'data-attachment-id' ), 10 ) === attachmentId ) {
+			return true;
+		}
+		if ( parseInt( img.getAttribute( 'data-wp-image' ), 10 ) === attachmentId ) {
+			return true;
+		}
+		var className = img.getAttribute( 'class' ) || '';
+		var pattern   = new RegExp( '(?:^|\\s)wp-image-' + attachmentId + '(?:\\s|$)' );
+		if ( pattern.test( className ) ) {
+			return true;
+		}
+		if ( img.closest ) {
+			var link = img.closest( 'a[href]' );
+			if ( link ) {
+				var href = link.getAttribute( 'href' ) || '';
+				if (
+					href.indexOf( 'attachment_id=' + attachmentId ) !== -1
+					|| href.indexOf( '/attachment/' + attachmentId ) !== -1
+				) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	function pickImageByAttachment( images, attachmentId, preferGallery ) {
+		var galleryMatch = null;
+		var anyMatch     = null;
+		var i;
+		for ( i = 0; i < images.length; i++ ) {
+			if ( ! imageMatchesAttachmentId( images[ i ], attachmentId ) ) {
+				continue;
+			}
+			if ( images[ i ].closest( '.gallery, .wp-block-gallery' ) ) {
+				if ( ! galleryMatch ) {
+					galleryMatch = images[ i ];
+				}
+				if ( preferGallery ) {
+					return galleryMatch;
+				}
+			} else if ( ! anyMatch ) {
+				anyMatch = images[ i ];
+			}
+		}
+		if ( galleryMatch ) {
+			return galleryMatch;
+		}
+		return preferGallery ? null : anyMatch;
+	}
+
+	function pickImageByUrl( images, searchVariants, preferGallery, fileName ) {
+		var galleryMatch = null;
+		var anyMatch     = null;
+		var i;
+		for ( i = 0; i < images.length; i++ ) {
+			var candidate = images[ i ];
+			if ( ! imageMatchesUrlVariants( candidate, searchVariants, fileName ) ) {
+				continue;
+			}
+			if ( candidate.closest( '.gallery, .wp-block-gallery' ) ) {
+				if ( ! galleryMatch ) {
+					galleryMatch = candidate;
+				}
+				if ( preferGallery ) {
+					return galleryMatch;
+				}
+			} else if ( ! anyMatch ) {
+				anyMatch = candidate;
+			}
+		}
+		if ( galleryMatch ) {
+			return galleryMatch;
+		}
+		return preferGallery ? null : anyMatch;
+	}
+
+	function imageMatchesUrlVariants( img, searchVariants, fileName ) {
+		if ( ! img ) {
+			return false;
+		}
+		var src      = img.getAttribute( 'src' ) || '';
+		var srcset   = img.getAttribute( 'srcset' ) || '';
+		var dataLink = img.getAttribute( 'data-link' ) || '';
+		var dataUrl  = img.getAttribute( 'data-url' ) || '';
+		if (
+			urlMatchesVariants( src, searchVariants )
+			|| urlMatchesVariants( srcset, searchVariants )
+			|| urlMatchesVariants( dataLink, searchVariants )
+			|| urlMatchesVariants( dataUrl, searchVariants )
+		) {
+			return true;
+		}
+		if ( fileName ) {
+			var lowerName = String( fileName ).toLowerCase();
+			var haystack  = ( src + ' ' + srcset + ' ' + dataLink + ' ' + dataUrl ).toLowerCase();
+			if ( lowerName.length >= 4 && haystack.indexOf( lowerName ) !== -1 ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	function parseGalleryIdsFromShortcodeText( text ) {
+		var raw = decodeEntities( String( text || '' ) );
+		raw     = raw.replace( /&quot;/gi, '"' ).replace( /&#0*39;/gi, "'" );
+		var match = raw.match( /\bids\s*=\s*["']([^"']+)["']/i );
+		if ( ! match || ! match[ 1 ] ) {
+			match = raw.match( /\binclude\s*=\s*["']([^"']+)["']/i );
+		}
+		if ( ! match || ! match[ 1 ] ) {
+			match = raw.match( /\bids\s*=\s*([^"\s\]]+)/i );
+		}
+		if ( ! match || ! match[ 1 ] ) {
+			return [];
+		}
+		return match[ 1 ].split( /\s*,\s*/ ).map( function ( part ) {
+			return parseInt( part, 10 ) || 0;
+		} ).filter( function ( id ) {
+			return id > 0;
+		} );
+	}
+
+	function getClassicGalleryIndex( data ) {
+		if ( ! data || typeof data.galleryIndex === 'undefined' || null === data.galleryIndex ) {
+			return -1;
+		}
+		var index = parseInt( data.galleryIndex, 10 );
+		return isNaN( index ) ? -1 : index;
+	}
+
+	function queryClassicGalleryBlocks( doc ) {
+		if ( ! doc || ! doc.body || ! doc.body.querySelectorAll ) {
+			return [];
+		}
+		var wpviews = doc.body.querySelectorAll( '[data-wpview-text*="gallery"], .wpview-wrap[data-wpview-text]' );
+		if ( wpviews.length ) {
+			return wpviews;
+		}
+		return doc.body.querySelectorAll( '.gallery' );
+	}
+
+	function findClassicGalleryBlockByIndex( doc, data ) {
+		var index = getClassicGalleryIndex( data );
+		if ( index < 0 ) {
+			return null;
+		}
+		var blocks = queryClassicGalleryBlocks( doc );
+		return blocks.length > index ? blocks[ index ] : null;
+	}
+
+	function sameGalleryIdList( left, right ) {
+		if ( ! Array.isArray( left ) || ! Array.isArray( right ) || ! left.length || ! right.length ) {
+			return false;
+		}
+		if ( left.length !== right.length ) {
+			return false;
+		}
+		var sortedLeft = left.map( function ( id ) {
+			return parseInt( id, 10 ) || 0;
+		} ).sort( function ( a, b ) {
+			return a - b;
+		} );
+		var sortedRight = right.map( function ( id ) {
+			return parseInt( id, 10 ) || 0;
+		} ).sort( function ( a, b ) {
+			return a - b;
+		} );
+		var i;
+		for ( i = 0; i < sortedLeft.length; i++ ) {
+			if ( sortedLeft[ i ] !== sortedRight[ i ] ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	function wpViewMatchesClassicGallery( viewEl, data, attachmentId ) {
+		if ( ! viewEl ) {
+			return false;
+		}
+		var viewText = viewEl.getAttribute( 'data-wpview-text' ) || '';
+		if ( ! viewText || viewText.toLowerCase().indexOf( 'gallery' ) === -1 ) {
+			return false;
+		}
+		var viewIds     = parseGalleryIdsFromShortcodeText( viewText );
+		var expectedIds = ( data && Array.isArray( data.galleryIds ) ) ? data.galleryIds : [];
+		var needle      = data && data.contentNeedle ? String( data.contentNeedle ) : '';
+
+		// Must match this exact gallery block — not merely “attachment appears somewhere in the post”.
+		if ( expectedIds.length && viewIds.length ) {
+			return sameGalleryIdList( expectedIds, viewIds );
+		}
+
+		if ( needle && needle.indexOf( '[gallery' ) === 0 && viewIds.length ) {
+			var needleIds = parseGalleryIdsFromShortcodeText( needle );
+			if ( needleIds.length && sameGalleryIdList( needleIds, viewIds ) ) {
+				return true;
+			}
+		}
+
+		if ( attachmentId > 0 && viewIds.length ) {
+			var vi;
+			for ( vi = 0; vi < viewIds.length; vi++ ) {
+				if ( parseInt( viewIds[ vi ], 10 ) === attachmentId ) {
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	function findImageInGalleryRoot( root, attachmentId, searchVariants, fileName ) {
+		if ( ! root || ! root.querySelectorAll ) {
+			return null;
+		}
+		var images = root.querySelectorAll( 'img' );
+		var target = null;
+		if ( attachmentId > 0 ) {
+			target = pickImageByAttachment( images, attachmentId, true );
+		}
+		if ( ! target ) {
+			target = pickImageByUrl( images, searchVariants, true, fileName );
+		}
+		return target;
+	}
+
+	function findClassicGalleryWpView( doc, data, attachmentId ) {
+		if ( ! doc || ! doc.body || ! doc.body.querySelectorAll ) {
+			return null;
+		}
+		var views = doc.body.querySelectorAll( '[data-wpview-text*="gallery"], .wpview-wrap[data-wpview-text]' );
+		var vi;
+		for ( vi = 0; vi < views.length; vi++ ) {
+			if ( ! wpViewMatchesClassicGallery( views[ vi ], data, attachmentId ) ) {
+				continue;
+			}
+			return views[ vi ];
+		}
+		return null;
+	}
+
+	/**
+	 * Find a specific image inside Classic Editor .gallery blocks (supports multiple galleries per post).
+	 *
+	 * @param {Document} doc             TinyMCE document.
+	 * @param {number}   attachmentId    Attachment post ID.
+	 * @param {string[]} searchVariants   URL needles.
+	 * @param {string}   fileName         Basename fallback.
+	 * @param {Object}   data             Focus payload (galleryIds, contentNeedle, …).
+	 * @return {Element|null}
+	 */
+	function findClassicGalleryImage( doc, attachmentId, searchVariants, fileName, data ) {
+		if ( ! doc || ! doc.body || ! doc.body.querySelectorAll ) {
+			return null;
+		}
+
+		var blockByIndex = findClassicGalleryBlockByIndex( doc, data );
+		if ( blockByIndex ) {
+			var indexedImg = findImageInGalleryRoot( blockByIndex, attachmentId, searchVariants, fileName );
+			if ( indexedImg ) {
+				return indexedImg;
+			}
+			var indexedGallery = blockByIndex.querySelector ? blockByIndex.querySelector( '.gallery' ) : null;
+			return indexedGallery || blockByIndex;
+		}
+
+		var wpView = findClassicGalleryWpView( doc, data, attachmentId );
+		if ( wpView ) {
+			var wpImg = findImageInGalleryRoot( wpView, attachmentId, searchVariants, fileName );
+			if ( wpImg ) {
+				return wpImg;
+			}
+			if ( wpViewMatchesClassicGallery( wpView, data, attachmentId ) ) {
+				var wpGallery = wpView.querySelector( '.gallery' );
+				if ( wpGallery ) {
+					return wpGallery;
+				}
+				return wpView;
+			}
+		}
+
+		var expectedIds = ( data && Array.isArray( data.galleryIds ) ) ? data.galleryIds : [];
+		var galleries   = doc.body.querySelectorAll( '.gallery' );
+		var gi;
+		for ( gi = 0; gi < galleries.length; gi++ ) {
+			var galleryEl  = galleries[ gi ];
+			var parentView = galleryEl.closest( '[data-wpview-text*="gallery"]' );
+			if ( parentView ) {
+				if ( ! wpViewMatchesClassicGallery( parentView, data, attachmentId ) ) {
+					continue;
+				}
+			} else if ( attachmentId > 0 ) {
+				var galleryImages = galleryEl.querySelectorAll( 'img' );
+				if ( ! pickImageByAttachment( galleryImages, attachmentId, true ) ) {
+					continue;
+				}
+			} else if ( expectedIds.length ) {
+				continue;
+			}
+			var target = findImageInGalleryRoot( galleryEl, attachmentId, searchVariants, fileName );
+			if ( target ) {
+				return target;
+			}
+		}
+		return null;
+	}
+
+	function selectImageInTinyMce( ed, img ) {
+		if ( ! ed || ! img ) {
+			return false;
+		}
+		var target = img;
+		if ( img.tagName && img.tagName.toLowerCase() !== 'img' ) {
+			target = img.querySelector ? img.querySelector( 'img' ) : null;
+			if ( ! target ) {
+				try {
+					ed.focus( { preventScroll: true } );
+				} catch ( err0 ) {
+					try {
+						ed.focus();
+					} catch ( err0b ) {}
+				}
+				try {
+					ed.selection.select( img );
+					if ( ed.selection.scrollIntoView ) {
+						ed.selection.scrollIntoView( img );
+					}
+				} catch ( err0c ) {}
+				var wrap = img.closest ? img.closest( '.gallery, .wpview-wrap, .gallery-item' ) : img;
+				return highlightElement( wrap || img );
+			}
+		}
+		try {
+			ed.focus( { preventScroll: true } );
+		} catch ( err ) {
+			try {
+				ed.focus();
+			} catch ( err2 ) {}
+		}
+		if ( ed.selection && ed.selection.select ) {
+			try {
+				ed.selection.select( target );
+				if ( ed.selection.scrollIntoView ) {
+					ed.selection.scrollIntoView( target );
+				}
+			} catch ( err3 ) {}
+		}
+		var tile = target.closest( '.gallery-item, .gallery-icon, .blocks-gallery-item, figure, .wpview-wrap' );
+		return highlightElement( tile || target );
+	}
+
+	function getDocumentFromRoot( root ) {
+		if ( ! root ) {
+			return null;
+		}
+		if ( root.nodeType === 9 ) {
+			return root;
+		}
+		return root.ownerDocument || document;
+	}
+
+	function getEditorDocuments() {
+		var docs = [ document ];
+		document.querySelectorAll( 'iframe' ).forEach( function ( iframe ) {
+			try {
+				if ( iframe.contentDocument ) {
+					docs.push( iframe.contentDocument );
+				}
+			} catch ( err ) {}
+		} );
+		return docs;
+	}
+
+	/**
+	 * Scroll so `el` is visible in the admin window.
+	 * TinyMCE Visual mode puts content in an iframe: element.scrollIntoView only
+	 * moves the iframe document (often with no scrollbar) and leaves the WP page at the top.
+	 * Gutenberg scrolls `.interface-interface-skeleton__content`, not the window.
+	 *
+	 * @param {Element} el Target node (may live inside TinyMCE iframe).
+	 */
+	function scrollElementIntoAdminView( el ) {
+		if ( ! el || ! el.getBoundingClientRect ) {
+			return;
+		}
+
+		try {
+			el.scrollIntoView( { behavior: 'auto', block: 'center', inline: 'nearest' } );
+		} catch ( err ) {
+			try {
+				el.scrollIntoView( true );
+			} catch ( err2 ) {}
+		}
+
+		var rect = el.getBoundingClientRect();
+		var topInParent = rect.top;
+		var doc = el.ownerDocument;
+		var win = doc && ( doc.defaultView || doc.parentWindow );
+
+		if ( win && win !== window ) {
+			var frameEl = null;
+			try {
+				frameEl = win.frameElement;
+			} catch ( err3 ) {
+				frameEl = null;
+			}
+			if ( ! frameEl ) {
+				frameEl = document.getElementById( 'content_ifr' );
+			}
+			if ( frameEl && frameEl.getBoundingClientRect ) {
+				var frameRect = frameEl.getBoundingClientRect();
+				topInParent = frameRect.top + rect.top;
+			}
+		}
+
+		scrollViewportToY( topInParent + window.pageYOffset, el );
+	}
+
+	/**
+	 * Scroll window and overflow ancestors (Gutenberg canvas) so `pageY` is near the top.
+	 *
+	 * @param {number}  pageY      Document Y of the caret/element.
+	 * @param {Element} nearEl     Optional node whose scroll parents should move.
+	 * @param {number}  offsetInEl Optional Y inside nearEl (textarea caret).
+	 */
+	function scrollViewportToY( pageY, nearEl, offsetInEl ) {
+		var pad = Math.max( 96, Math.floor( window.innerHeight / 4 ) );
+		var inner = offsetInEl || 0;
+		var target = Math.max( 0, pageY - pad );
+
+		window.scrollTo( 0, target );
+		if ( document.documentElement ) {
+			document.documentElement.scrollTop = target;
+		}
+		if ( document.body ) {
+			document.body.scrollTop = target;
+		}
+
+		var node = nearEl && nearEl.parentElement ? nearEl.parentElement : null;
+		var known = document.querySelector(
+			'.interface-interface-skeleton__content, .edit-post-layout__content, .block-editor-editor-skeleton__content'
+		);
+		var seen = [];
+		var caretViewportY = function () {
+			if ( nearEl && nearEl.getBoundingClientRect ) {
+				return nearEl.getBoundingClientRect().top + inner;
+			}
+			return pageY - window.pageYOffset;
+		};
+		var adjust = function ( parent ) {
+			if ( ! parent || seen.indexOf( parent ) !== -1 ) {
+				return;
+			}
+			seen.push( parent );
+			var style;
+			try {
+				style = window.getComputedStyle( parent );
+			} catch ( errStyle ) {
+				return;
+			}
+			if ( ! style || ! /(auto|scroll|overlay)/.test( style.overflowY ) ) {
+				return;
+			}
+			if ( parent.scrollHeight <= parent.clientHeight + 4 ) {
+				return;
+			}
+			var pRect = parent.getBoundingClientRect();
+			parent.scrollTop += ( caretViewportY() - pRect.top - pad );
+		};
+		if ( known ) {
+			adjust( known );
+		}
+		while ( node && node !== document.documentElement ) {
+			adjust( node );
+			node = node.parentElement;
+		}
+	}
+
+	function highlightElement( el ) {
+		if ( ! el ) {
+			return false;
+		}
+		el.classList.add( 'tsoliin-link-focus' );
+		scrollElementIntoAdminView( el );
+		// TinyMCE / admin layout settle — re-scroll a few times.
+		[ 50, 200, 500, 1000 ].forEach( function ( delay ) {
+			window.setTimeout( function () {
+				scrollElementIntoAdminView( el );
+			}, delay );
+		} );
+		focused = true;
+		blockFocusPending = false;
+		return true;
+	}
+
+	/**
+	 * Pixel height of textarea content from start through character `index`.
+	 *
+	 * @param {HTMLTextAreaElement} textarea Source (styles/width).
+	 * @param {number}              index    Character offset.
+	 * @return {number}
+	 */
+	function measureTextareaPrefixHeight( textarea, index ) {
+		var value = textarea.value || '';
+		index = Math.max( 0, Math.min( index, value.length ) );
+		if ( textarea.clientWidth < 40 ) {
+			return 0;
+		}
+
+		var clone = document.createElement( 'textarea' );
+		var style = window.getComputedStyle( textarea );
+		var props = [
+			'boxSizing', 'fontFamily', 'fontSize', 'fontWeight', 'fontStyle',
+			'letterSpacing', 'lineHeight', 'textTransform', 'wordSpacing', 'textIndent',
+			'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+			'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
+			'borderTopStyle', 'borderRightStyle', 'borderBottomStyle', 'borderLeftStyle',
+			'whiteSpace', 'wordWrap', 'overflowWrap', 'tabSize', 'MozTabSize',
+		];
+		var i;
+		for ( i = 0; i < props.length; i++ ) {
+			try {
+				clone.style[ props[ i ] ] = style[ props[ i ] ];
+			} catch ( err ) {}
+		}
+		clone.setAttribute( 'rows', '1' );
+		clone.style.position = 'absolute';
+		clone.style.left = '-99999px';
+		clone.style.top = '0';
+		clone.style.height = '1px';
+		clone.style.minHeight = '0';
+		clone.style.maxHeight = 'none';
+		clone.style.overflow = 'hidden';
+		clone.style.visibility = 'hidden';
+		clone.style.whiteSpace = style.whiteSpace || 'pre-wrap';
+		clone.style.width = textarea.clientWidth + 'px';
+		clone.value = value.substring( 0, index );
+		document.body.appendChild( clone );
+		var h = clone.scrollHeight;
+		document.body.removeChild( clone );
+		return h;
+	}
+
+	/**
+	 * Reveal character `index` in a textarea: scroll the textarea when it has an
+	 * internal scrollbar, otherwise scroll the admin page (Classic Text mode often
+	 * expands #content so scrollTop does nothing).
+	 *
+	 * @param {HTMLTextAreaElement} textarea Target textarea.
+	 * @param {number}              index    Character offset to reveal.
+	 * @return {boolean}
+	 */
+	function scrollTextareaToIndex( textarea, index ) {
+		if ( ! textarea ) {
+			return false;
+		}
+		var value = textarea.value || '';
+		index = Math.max( 0, Math.min( index, value.length ) );
+
+		if ( textarea.clientWidth < 40 || textarea.clientHeight < 20 ) {
+			return false;
+		}
+
+		var contentHeight = measureTextareaPrefixHeight( textarea, index );
+		if ( contentHeight <= 0 && index > 0 ) {
+			return false;
+		}
+
+		var pad = Math.max( 48, Math.floor( Math.min( textarea.clientHeight, window.innerHeight ) / 4 ) );
+		var canScrollInner = textarea.scrollHeight > textarea.clientHeight + 4;
+
+		if ( canScrollInner ) {
+			textarea.scrollTop = Math.max( 0, contentHeight - pad );
+		}
+
+		var rect = textarea.getBoundingClientRect();
+		var caretFromTextareaTop = canScrollInner
+			? ( contentHeight - textarea.scrollTop )
+			: contentHeight;
+		if ( canScrollInner ) {
+			caretFromTextareaTop = Math.min( Math.max( caretFromTextareaTop, 0 ), textarea.clientHeight );
+		}
+		var caretPageY = rect.top + window.pageYOffset + caretFromTextareaTop;
+		scrollViewportToY( caretPageY, textarea, caretFromTextareaTop );
+
+		return true;
+	}
+
+	/**
+	 * Select URL in textarea and keep retrying scroll until layout is ready (Text tab switch).
+	 *
+	 * @param {HTMLTextAreaElement} textarea Target.
+	 * @param {number}              start    Selection start.
+	 * @param {number}              end      Selection end.
+	 */
+	function selectAndScrollTextarea( textarea, start, end ) {
+		if ( ! textarea ) {
+			return;
+		}
+		var apply = function () {
+			if ( typeof textarea.focus === 'function' ) {
+				try {
+					textarea.focus( { preventScroll: true } );
+				} catch ( err ) {
+					textarea.focus();
+				}
+			}
+			if ( typeof textarea.setSelectionRange === 'function' ) {
+				textarea.setSelectionRange( start, end );
+			}
+			scrollTextareaToIndex( textarea, start );
+			if ( typeof textarea.setSelectionRange === 'function' ) {
+				textarea.setSelectionRange( start, end );
+			}
+		};
+		apply();
+		[ 50, 150, 350, 700, 1200, 2000, 3000 ].forEach( function ( delay ) {
+			window.setTimeout( apply, delay );
+		} );
+	}
+
+	function selectInTextarea( textarea, searchVariants ) {
+		if ( ! textarea ) {
+			return false;
+		}
+		var needles = buildPlainTextVariants( searchVariants );
+		var hit     = findIndexInsensitive( textarea.value || '', needles.length ? needles : searchVariants );
+		if ( ! hit && needles.length ) {
+			hit = findIndexInsensitive( textarea.value || '', searchVariants );
+		}
+		if ( ! hit ) {
+			return false;
+		}
+		selectAndScrollTextarea( textarea, hit.index, hit.index + hit.match.length );
+		textarea.classList.add( 'tsoliin-link-focus' );
+		focused = true;
+		return true;
+	}
+
+	/**
+	 * Select in Classic #content only when the Text tab is active (otherwise the user stays on Visual at the top).
+	 */
+	function focusInClassicHtmlTextarea( searchVariants ) {
+		if ( ! isClassicHtmlMode() ) {
+			return false;
+		}
+		return selectInTextarea( getClassicContentTextarea(), searchVariants );
+	}
+
+	function findCodeTextarea() {
+		var selectors = [
+			'textarea.editor-post-text-editor',
+			'.edit-post-text-editor textarea',
+			'.block-editor-plain-text',
+			'textarea.block-editor-plain-text',
+			'.edit-post-text-editor__body textarea',
+			'#post-content-0',
+			'textarea[name="content"]',
+			'#content',
+		];
+		var i;
+		for ( i = 0; i < selectors.length; i++ ) {
+			var el = document.querySelector( selectors[ i ] );
+			if ( el ) {
+				return el;
+			}
+		}
+		return null;
+	}
+
+	function switchToCodeEditorMode( callback ) {
+		if ( ! window.wp || ! wp.data ) {
+			callback();
+			return;
+		}
+		var prefs = wp.data.dispatch( 'core/preferences' );
+		if ( prefs && prefs.set ) {
+			try {
+				prefs.set( 'core', 'editorMode', 'text' );
+			} catch ( err ) {}
+			try {
+				prefs.set( 'core/edit-post', 'editorMode', 'text' );
+			} catch ( err ) {}
+		}
+		window.setTimeout( callback, 900 );
+	}
+
+	function focusInCodeEditor( data, searchVariants ) {
+		if ( ! shouldAllowCodeMode( data ) ) {
+			return false;
+		}
+		var textarea = findCodeTextarea();
+		if ( textarea && selectInTextarea( textarea, searchVariants ) ) {
+			return true;
+		}
+		var content = '';
+		if ( window.wp && wp.data ) {
+			var editorSelect = wp.data.select( 'core/editor' );
+			if ( editorSelect && editorSelect.getEditedPostContent ) {
+				content = editorSelect.getEditedPostContent() || '';
+			}
+		}
+		if ( ! haystackContainsVariant( content, searchVariants ) ) {
+			return false;
+		}
+		if ( ! codeModeTried ) {
+			codeModeTried = true;
+			switchToCodeEditorMode( function () {
+				var ta = findCodeTextarea();
+				selectInTextarea( ta, searchVariants );
+			} );
+		}
+		return focused;
+	}
+
+	function blockAttributes( block ) {
+		if ( ! block ) {
+			return null;
+		}
+		if ( block.attributes && typeof block.attributes === 'object' ) {
+			return block.attributes;
+		}
+		if ( block.attrs && typeof block.attrs === 'object' ) {
+			return block.attrs;
+		}
+		return null;
+	}
+
+	function blockName( block ) {
+		if ( ! block ) {
+			return '';
+		}
+		return String( block.name || block.blockName || '' );
+	}
+
+	function isGalleryContainerBlock( block ) {
+		var name = blockName( block );
+		if ( isJetpackGalleryBlockName( name ) ) {
+			return false;
+		}
+		return 'core/gallery' === name || ( name.indexOf( 'gallery' ) !== -1 && block.innerBlocks && block.innerBlocks.length );
+	}
+
+	function isJetpackGalleryBlockName( name ) {
+		name = String( name || '' );
+		return name.indexOf( 'jetpack/' ) === 0 && ( name.indexOf( 'gallery' ) !== -1 || name.indexOf( 'slideshow' ) !== -1 );
+	}
+
+	function isJetpackGalleryBlock( block ) {
+		return isJetpackGalleryBlockName( blockName( block ) );
+	}
+
+	function blockElementIsJetpackGallery( blockEl ) {
+		if ( ! blockEl || ! blockEl.querySelector ) {
+			return false;
+		}
+		if ( blockEl.classList && blockEl.classList.contains( 'wp-block-jetpack-tiled-gallery' ) ) {
+			return true;
+		}
+		return !! blockEl.querySelector( '.wp-block-jetpack-tiled-gallery, .tiled-gallery__gallery, .tiled-gallery__item' );
+	}
+
+	function jetpackGalleryImageMatchesVariants( block, searchVariants ) {
+		if ( ! isJetpackGalleryBlock( block ) ) {
+			return false;
+		}
+		var attrs = blockAttributes( block );
+		if ( ! attrs || ! Array.isArray( attrs.images ) ) {
+			return false;
+		}
+		var i;
+		var j;
+		for ( i = 0; i < attrs.images.length; i++ ) {
+			var img = attrs.images[ i ];
+			if ( ! img ) {
+				continue;
+			}
+			var candidates = [ img.url, img.link, img.src ];
+			for ( j = 0; j < candidates.length; j++ ) {
+				if ( urlMatchesVariants( candidates[ j ], searchVariants ) ) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	function clickGalleryTileIfNeeded( target ) {
+		if ( ! target ) {
+			return;
+		}
+		var tile = target.classList && target.classList.contains( 'tiled-gallery__item' )
+			? target
+			: target.closest( '.tiled-gallery__item' );
+		if ( ! tile ) {
+			return;
+		}
+		try {
+			tile.click();
+		} catch ( err ) {}
+	}
+
+	/**
+	 * True when this block represents one image (core/image), not a gallery listing the ID in attrs.ids.
+	 *
+	 * @param {object} block         Block object.
+	 * @param {number} attachmentId  Attachment post ID.
+	 * @return {boolean}
+	 */
+	function blockDirectlyOwnsAttachmentId( block, attachmentId ) {
+		if ( ! attachmentId || ! block ) {
+			return false;
+		}
+		var attrs = blockAttributes( block );
+		if ( ! attrs ) {
+			return false;
+		}
+		if ( parseInt( attrs.id, 10 ) === attachmentId ) {
+			return true;
+		}
+		if ( Array.isArray( attrs.images ) ) {
+			var i;
+			for ( i = 0; i < attrs.images.length; i++ ) {
+				var img = attrs.images[ i ];
+				if ( img && parseInt( img.id, 10 ) === attachmentId ) {
+					return true;
+				}
+			}
+		}
+		if ( Array.isArray( attrs.ids ) && attrs.ids.indexOf( attachmentId ) !== -1 ) {
+			// Modern core/gallery stores ids on the parent but each image is an inner core/image block.
+			if ( block.innerBlocks && block.innerBlocks.length ) {
+				return false;
+			}
+			return true;
+		}
+		return false;
+	}
+
+	function blockContainsAttachmentId( block, attachmentId ) {
+		if ( blockDirectlyOwnsAttachmentId( block, attachmentId ) ) {
+			return true;
+		}
+		if ( ! attachmentId || ! block || ! block.innerBlocks || ! block.innerBlocks.length ) {
+			return false;
+		}
+		var i;
+		for ( i = 0; i < block.innerBlocks.length; i++ ) {
+			if ( blockContainsAttachmentId( block.innerBlocks[ i ], attachmentId ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	function blockHaystack( block ) {
+		var parts = [];
+		if ( window.wp && wp.blocks ) {
+			if ( wp.blocks.serialize ) {
+				try {
+					parts.push( wp.blocks.serialize( [ block ] ) );
+				} catch ( err ) {}
+			}
+			if ( wp.blocks.getBlockContent ) {
+				try {
+					parts.push( wp.blocks.getBlockContent( block ) );
+				} catch ( err ) {}
+			}
+		}
+		var attrs = blockAttributes( block );
+		if ( attrs ) {
+			try {
+				parts.push( JSON.stringify( attrs ) );
+			} catch ( err ) {}
+		}
+		if ( block.innerContent && block.innerContent.length ) {
+			parts.push( block.innerContent.filter( Boolean ).join( '' ) );
+		}
+		if ( block.innerHTML ) {
+			parts.push( block.innerHTML );
+		}
+		if ( block.originalContent ) {
+			parts.push( block.originalContent );
+		}
+		return parts.join( '\n' );
+	}
+
+	function findBlockClientIdByAttachment( blocks, attachmentId ) {
+		var i;
+		for ( i = 0; i < blocks.length; i++ ) {
+			var block = blocks[ i ];
+			if ( block.innerBlocks && block.innerBlocks.length ) {
+				var inner = findBlockClientIdByAttachment( block.innerBlocks, attachmentId );
+				if ( inner ) {
+					return inner;
+				}
+			}
+			if ( blockDirectlyOwnsAttachmentId( block, attachmentId ) ) {
+				return block.clientId;
+			}
+		}
+		return null;
+	}
+
+	function findBlockClientId( blocks, searchVariants, attachmentId ) {
+		if ( attachmentId ) {
+			var byId = findBlockClientIdByAttachment( blocks, attachmentId );
+			if ( byId ) {
+				return byId;
+			}
+		}
+		var i;
+		for ( i = 0; i < blocks.length; i++ ) {
+			var block = blocks[ i ];
+			if ( block.innerBlocks && block.innerBlocks.length ) {
+				var inner = findBlockClientId( block.innerBlocks, searchVariants, attachmentId );
+				if ( inner ) {
+					return inner;
+				}
+			}
+			var haystack = blockHaystack( block );
+			var urlMatch = ( haystack && haystackContainsVariant( haystack, searchVariants ) )
+				|| jetpackGalleryImageMatchesVariants( block, searchVariants );
+			if ( urlMatch ) {
+				if ( block.innerBlocks && block.innerBlocks.length && isGalleryContainerBlock( block ) ) {
+					continue;
+				}
+				return block.clientId;
+			}
+		}
+		return null;
+	}
+
+	function findBlockClientIdFromContent( searchVariants, attachmentId ) {
+		if ( ! window.wp || ! wp.data || ! wp.blocks || ! wp.blocks.parse ) {
+			return null;
+		}
+		var editorSelect = wp.data.select( 'core/editor' );
+		var blockSelect  = wp.data.select( 'core/block-editor' );
+		if ( ! editorSelect || ! blockSelect ) {
+			return null;
+		}
+		var content = editorSelect.getEditedPostContent ? editorSelect.getEditedPostContent() : '';
+		if ( ! content ) {
+			return null;
+		}
+		if ( ! haystackContainsVariant( content, searchVariants ) && ! attachmentId ) {
+			return null;
+		}
+		var parsed = wp.blocks.parse( content );
+		var live   = blockSelect.getBlocks();
+		return matchParsedToLive( parsed, live, searchVariants, attachmentId );
+	}
+
+	function matchParsedToLive( parsedBlocks, liveBlocks, searchVariants, attachmentId ) {
+		var i;
+		for ( i = 0; i < parsedBlocks.length; i++ ) {
+			var parsed = parsedBlocks[ i ];
+			var live   = liveBlocks[ i ];
+			if ( ! live ) {
+				continue;
+			}
+			if ( parsed.innerBlocks && live.innerBlocks ) {
+				var inner = matchParsedToLive( parsed.innerBlocks, live.innerBlocks, searchVariants, attachmentId );
+				if ( inner ) {
+					return inner;
+				}
+			}
+			var parsedMatch = blockDirectlyOwnsAttachmentId( parsed, attachmentId )
+				|| jetpackGalleryImageMatchesVariants( parsed, searchVariants )
+				|| ( ! attachmentId && haystackContainsVariant( blockHaystack( parsed ), searchVariants ) );
+			if ( parsedMatch ) {
+				if ( parsed.innerBlocks && parsed.innerBlocks.length && isGalleryContainerBlock( parsed ) && ! blockDirectlyOwnsAttachmentId( parsed, attachmentId ) ) {
+					continue;
+				}
+				return live.clientId;
+			}
+		}
+		return null;
+	}
+
+	function findBlockElement( clientId ) {
+		var docs = getEditorDocuments();
+		var i;
+		for ( i = 0; i < docs.length; i++ ) {
+			var el = docs[ i ].querySelector( '[data-block="' + clientId + '"]' );
+			if ( el ) {
+				return el;
+			}
+		}
+		return null;
+	}
+
+	function normalizeUrlForMatch( url ) {
+		var value = String( url || '' ).trim();
+		if ( ! value ) {
+			return '';
+		}
+		try {
+			var parsed = new URL( value, window.location.href );
+			return parsed.href.replace( /\/$/, '' );
+		} catch ( e ) {
+			return value.replace( /\/$/, '' );
+		}
+	}
+
+	function urlValuesEqual( attrValue, variant ) {
+		if ( ! attrValue || ! variant ) {
+			return false;
+		}
+		if ( attrValue === variant ) {
+			return true;
+		}
+		if ( normalizeUrlForMatch( attrValue ) === normalizeUrlForMatch( variant ) ) {
+			return true;
+		}
+		var left  = canonicalizeUrlForMatch( attrValue );
+		var right = canonicalizeUrlForMatch( variant );
+		if ( left && right && left.toLowerCase() === right.toLowerCase() ) {
+			return true;
+		}
+		try {
+			return decodeURIComponent( attrValue ) === decodeURIComponent( variant );
+		} catch ( e ) {
+			return false;
+		}
+	}
+
+	/**
+	 * Match an attribute value to URL variants (exact / normalized), not raw substring.
+	 * Avoids treating path basenames like "shortcodes" as a hit inside any href.
+	 */
+	function urlMatchesVariants( value, searchVariants ) {
+		if ( ! value ) {
+			return false;
+		}
+		var val = String( value );
+		var i;
+		for ( i = 0; i < searchVariants.length; i++ ) {
+			var variant = searchVariants[ i ];
+			if ( ! variant || ! looksLikeUrlNeedle( variant ) ) {
+				continue;
+			}
+			if ( urlValuesEqual( val, variant ) ) {
+				return true;
+			}
+			// Allow filename / size variants inside src or srcset only via longer needles.
+			if ( variant.length >= 12 && val.toLowerCase().indexOf( String( variant ).toLowerCase() ) !== -1 ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	function findElementByUrlAttrs( root, data, searchVariants ) {
+		if ( ! root || ! root.querySelectorAll ) {
+			return null;
+		}
+		var attrs = ( data && Array.isArray( data.attrs ) && data.attrs.length )
+			? data.attrs
+			: [ 'href', 'src' ];
+		var a;
+		var j;
+		for ( a = 0; a < attrs.length; a++ ) {
+			var attr  = attrs[ a ];
+			var nodes = root.querySelectorAll( '[' + attr + ']' );
+			for ( j = 0; j < nodes.length; j++ ) {
+				var node = nodes[ j ];
+				var val  = node.getAttribute( attr );
+				if ( urlMatchesVariants( val, searchVariants ) ) {
+					return node;
+				}
+			}
+		}
+		return null;
+	}
+
+	function iframeSrcMatchesYouTubeId( src, videoId ) {
+		if ( ! src || ! videoId ) {
+			return false;
+		}
+		return String( src ).toLowerCase().indexOf( String( videoId ).toLowerCase() ) !== -1;
+	}
+
+	/**
+	 * Classic Visual / block editor: oEmbed renders YouTube as iframe, not youtu.be href.
+	 *
+	 * @param {Element} root    Search root (often TinyMCE body).
+	 * @param {string}  videoId Eleven-character YouTube ID.
+	 * @return {Element|null}
+	 */
+	function findYouTubeEmbedElement( root, videoId ) {
+		if ( ! root || ! videoId || ! root.querySelectorAll ) {
+			return null;
+		}
+		var iframes = root.querySelectorAll(
+			'iframe[src*="youtube"], iframe[src*="youtu.be"], iframe[src*="youtube-nocookie"]'
+		);
+		var i;
+		for ( i = 0; i < iframes.length; i++ ) {
+			var iframe = iframes[ i ];
+			var src    = iframe.getAttribute( 'src' ) || '';
+			if ( ! iframeSrcMatchesYouTubeId( src, videoId ) ) {
+				continue;
+			}
+			var wrapper = iframe.closest(
+				'.wp-block-embed, .wp-embedded-content, .embed-youtube, .youtube-player, .mce-object-iframe, figure, p, div.mceTemp'
+			);
+			return wrapper || iframe;
+		}
+		return null;
+	}
+
+	/**
+	 * Classic Visual: bare youtu.be text or TinyMCE autolink (not an iframe embed).
+	 *
+	 * @param {Element} root    TinyMCE body or block root.
+	 * @param {string}  videoId Eleven-character YouTube ID.
+	 * @return {Element|null}
+	 */
+	function findYouTubePlainOrLinkInRoot( root, videoId ) {
+		if ( ! root || ! videoId || ! root.querySelectorAll ) {
+			return null;
+		}
+		var id = String( videoId );
+		var idLower = id.toLowerCase();
+		var links = root.querySelectorAll( 'a[href]' );
+		var i;
+		for ( i = 0; i < links.length; i++ ) {
+			var href = String( links[ i ].getAttribute( 'href' ) || '' );
+			if ( href.toLowerCase().indexOf( idLower ) === -1 ) {
+				continue;
+			}
+			if ( /youtu\.be\//i.test( href ) || /youtube(?:-nocookie)?\.com\//i.test( href ) ) {
+				return links[ i ];
+			}
+		}
+		var needles = [
+			'youtu.be/' + id,
+			'youtube.com/watch?v=' + id,
+			'youtube.com/embed/' + id,
+			'youtube-nocookie.com/embed/' + id,
+		];
+		return highlightPlainTextInRoot( root, needles );
+	}
+
+	function findImageInBlockElement( blockEl, data, searchVariants ) {
+		if ( ! blockEl ) {
+			return null;
+		}
+		var attachmentId = parseInt( data.attachmentId, 10 ) || 0;
+		var images       = blockEl.querySelectorAll( 'img' );
+		var i;
+
+		if ( attachmentId > 0 ) {
+			for ( i = 0; i < images.length; i++ ) {
+				var img = images[ i ];
+				if ( imageMatchesAttachmentId( img, attachmentId ) ) {
+					return img;
+				}
+			}
+		}
+
+		for ( i = 0; i < images.length; i++ ) {
+			var candidate = images[ i ];
+			var src       = candidate.getAttribute( 'src' ) || '';
+			var srcset    = candidate.getAttribute( 'srcset' ) || '';
+			var dataLink  = candidate.getAttribute( 'data-link' ) || '';
+			var dataUrl   = candidate.getAttribute( 'data-url' ) || '';
+			if (
+				urlMatchesVariants( src, searchVariants )
+				|| urlMatchesVariants( srcset, searchVariants )
+				|| urlMatchesVariants( dataLink, searchVariants )
+				|| urlMatchesVariants( dataUrl, searchVariants )
+			) {
+				return candidate;
+			}
+		}
+
+		var links = blockEl.querySelectorAll( 'a[href]' );
+		for ( i = 0; i < links.length; i++ ) {
+			if ( urlMatchesVariants( links[ i ].getAttribute( 'href' ), searchVariants ) ) {
+				var linkedImg = links[ i ].querySelector( 'img' );
+				return linkedImg || links[ i ];
+			}
+		}
+
+		return null;
+	}
+
+	function highlightPlainTextInRoot( root, searchVariants ) {
+		var textVariants = buildPlainTextVariants( searchVariants );
+		if ( ! textVariants.length ) {
+			return null;
+		}
+		var doc      = getDocumentFromRoot( root );
+		var treeRoot = root && root.nodeType === 9 ? root.body : root;
+		if ( ! doc || ! doc.createTreeWalker || ! treeRoot ) {
+			return null;
+		}
+		var walker = doc.createTreeWalker(
+			treeRoot,
+			NodeFilter.SHOW_TEXT,
+			{
+				acceptNode: function ( node ) {
+					var parent = node.parentElement;
+					if ( ! parent || parent.closest( 'script,style,noscript,.tsoliin-link-focus' ) ) {
+						return NodeFilter.FILTER_REJECT;
+					}
+					// Prefer attribute matching for real links; do not mark text inside <a href>.
+					if ( parent.closest( 'a[href]' ) ) {
+						return NodeFilter.FILTER_REJECT;
+					}
+					return NodeFilter.FILTER_ACCEPT;
+				},
+			}
+		);
+		var node;
+		while ( ( node = walker.nextNode() ) ) {
+			var hit = findIndexInsensitive( node.textContent || '', textVariants );
+			if ( ! hit ) {
+				continue;
+			}
+			var range = doc.createRange();
+			range.setStart( node, hit.index );
+			range.setEnd( node, hit.index + hit.match.length );
+			var mark = doc.createElement( 'mark' );
+			mark.className = 'tsoliin-link-focus';
+			try {
+				range.surroundContents( mark );
+				return mark;
+			} catch ( err ) {
+				return node.parentElement;
+			}
+		}
+		return null;
+	}
+
+	function highlightGalleryMedia( blockEl, data, searchVariants ) {
+		var mediaEl = findImageInBlockElement( blockEl, data, searchVariants );
+		if ( ! mediaEl ) {
+			return null;
+		}
+		var tile   = mediaEl.closest( '.tiled-gallery__item, .blocks-gallery-item, .wp-block-image, figure' );
+		var target = tile || mediaEl;
+		clickGalleryTileIfNeeded( target );
+		return highlightElement( target );
+	}
+
+	function highlightInsideBlock( blockEl, data, searchVariants ) {
+		var inJetpackGallery = blockElementIsJetpackGallery( blockEl );
+		if ( data.linkType === 'image' || data.linkType === 'iframe' || inJetpackGallery ) {
+			var highlighted = highlightGalleryMedia( blockEl, data, searchVariants );
+			if ( highlighted ) {
+				return highlighted;
+			}
+		}
+		if ( data.youtubeVideoId ) {
+			var ytBlock = findYouTubeEmbedElement( blockEl, data.youtubeVideoId );
+			if ( ytBlock ) {
+				return highlightElement( ytBlock );
+			}
+			var ytPlain = findYouTubePlainOrLinkInRoot( blockEl, data.youtubeVideoId );
+			if ( ytPlain ) {
+				return highlightElement( ytPlain );
+			}
+		}
+		var byAttr = findElementByUrlAttrs( blockEl, data, searchVariants );
+		if ( byAttr ) {
+			return highlightElement( byAttr );
+		}
+		var editable = blockEl.querySelector( '[contenteditable="true"], .block-editor-rich-text__editable' );
+		var mark     = highlightPlainTextInRoot( editable || blockEl, searchVariants );
+		if ( mark ) {
+			return highlightElement( mark );
+		}
+		return highlightElement( blockEl );
+	}
+
+	function focusInBlockEditor( data, searchVariants ) {
+		if ( ! window.wp || ! wp.data ) {
+			return false;
+		}
+		var select   = wp.data.select( 'core/block-editor' );
+		var dispatch = wp.data.dispatch( 'core/block-editor' );
+		if ( ! select || ! dispatch || ! select.getBlocks ) {
+			return false;
+		}
+		var blocks = select.getBlocks();
+		if ( ! blocks || ! blocks.length ) {
+			return false;
+		}
+		var attachmentId = parseInt( data.attachmentId, 10 ) || 0;
+		var clientId     = findBlockClientIdFromContent( searchVariants, attachmentId );
+		if ( ! clientId ) {
+			clientId = findBlockClientId( blocks, searchVariants, attachmentId );
+		}
+		if ( ! clientId ) {
+			return false;
+		}
+		blockFocusPending = true;
+		ensureVisualEditorMode( data );
+		dispatch.selectBlock( clientId );
+		if ( dispatch.flashBlock ) {
+			dispatch.flashBlock( clientId );
+		}
+		var selectedBlock = select.getBlock ? select.getBlock( clientId ) : null;
+		var focusDelay    = ( data.linkType === 'image' || data.linkType === 'iframe' || isJetpackGalleryBlock( selectedBlock ) ) ? 600 : 350;
+		window.setTimeout( function () {
+			var blockEl = findBlockElement( clientId );
+			if ( blockEl ) {
+				highlightInsideBlock( blockEl, data, searchVariants );
+			} else {
+				blockFocusPending = false;
+			}
+		}, focusDelay );
+		return true;
+	}
+
+	function focusMetaField( data, searchVariants ) {
+		if ( ! data.metaKeyHint ) {
+			return false;
+		}
+		var hint = String( data.metaKeyHint );
+		var selectors = [
+			'[name="' + hint + '"]',
+			'[name="' + hint + '[]"]',
+			'#' + hint,
+			'#_' + hint,
+			'[data-name="' + hint + '"]',
+			'.acf-field[data-name="' + hint + '"] textarea',
+			'.acf-field[data-name="' + hint + '"] input',
+		];
+		var i;
+		for ( i = 0; i < selectors.length; i++ ) {
+			var field = document.querySelector( selectors[ i ] );
+			if ( ! field ) {
+				continue;
+			}
+			if ( field.tagName === 'TEXTAREA' || field.tagName === 'INPUT' ) {
+				selectInTextarea( field, searchVariants );
+			} else {
+				field.focus();
+			}
+			return highlightElement( field.closest( '.acf-field, .postbox, tr' ) || field );
+		}
+		return false;
+	}
+
+	function focusInTinyMce( searchVariants, data ) {
+		if ( typeof window.tinymce === 'undefined' ) {
+			return false;
+		}
+		var ed = window.tinymce.get( 'content' );
+		if ( ! ed || ! ed.getDoc ) {
+			return false;
+		}
+		var doc = ed.getDoc();
+		if ( ! doc || ! doc.body ) {
+			return false;
+		}
+		var linkType       = data && data.linkType ? data.linkType : '';
+		var preferGallery  = isClassicGalleryFocus( data );
+		var focusTiny      = function ( node ) {
+			if ( node && node.tagName ) {
+				var tag = node.tagName.toLowerCase();
+				if ( tag === 'img' || node.querySelector && node.querySelector( 'img' ) ) {
+					return selectImageInTinyMce( ed, node );
+				}
+			}
+			try {
+				ed.focus( { preventScroll: true } );
+			} catch ( errF ) {
+				try {
+					ed.focus();
+				} catch ( errF2 ) {}
+			}
+			try {
+				ed.selection.select( node );
+				if ( ed.selection.scrollIntoView ) {
+					ed.selection.scrollIntoView( node );
+				}
+			} catch ( errSel ) {}
+			return highlightElement( node );
+		};
+		if ( linkType === 'image' || linkType === 'iframe' ) {
+			var attachmentId = parseInt( data.attachmentId, 10 ) || 0;
+			var fileName     = data && data.fileName ? String( data.fileName ) : '';
+			var images       = doc.body.querySelectorAll( 'img' );
+			var target       = null;
+
+			if ( linkType === 'image' ) {
+				target = findClassicGalleryImage( doc, attachmentId, searchVariants, fileName, data );
+			} else if ( preferGallery ) {
+				target = findClassicGalleryImage( doc, attachmentId, searchVariants, fileName, data );
+			}
+			if ( ! target && ! isClassicGalleryFocus( data ) && attachmentId > 0 ) {
+				target = pickImageByAttachment( images, attachmentId, false );
+			}
+			if ( ! target && ! isClassicGalleryFocus( data ) ) {
+				target = pickImageByUrl( images, searchVariants, false, fileName );
+			}
+			if ( target ) {
+				return focusTiny( target );
+			}
+			if ( 'image' === linkType ) {
+				return false;
+			}
+			if ( 'iframe' === linkType ) {
+				var iframes = doc.body.querySelectorAll( 'iframe[src]' );
+				var fi;
+				for ( fi = 0; fi < iframes.length; fi++ ) {
+					var iframeNode = iframes[ fi ];
+					if ( urlMatchesVariants( iframeNode.getAttribute( 'src' ) || '', searchVariants ) ) {
+						return focusTiny( iframeNode );
+					}
+				}
+			}
+		}
+
+		var youtubeVideoId = data && data.youtubeVideoId ? String( data.youtubeVideoId ) : '';
+		if ( youtubeVideoId ) {
+			var ytEmbed = findYouTubeEmbedElement( doc.body, youtubeVideoId );
+			if ( ytEmbed ) {
+				return focusTiny( ytEmbed );
+			}
+			var ytPlain = findYouTubePlainOrLinkInRoot( doc.body, youtubeVideoId );
+			if ( ytPlain ) {
+				return focusTiny( ytPlain );
+			}
+		}
+
+		// Prefer the real <a href> / src node — never the first body word matching a path segment.
+		var byAttr = findElementByUrlAttrs( doc.body, data, searchVariants );
+		if ( byAttr ) {
+			try {
+				ed.focus( { preventScroll: true } );
+			} catch ( errFocus ) {
+				try {
+					ed.focus();
+				} catch ( errFocus2 ) {}
+			}
+			try {
+				ed.selection.select( byAttr );
+				if ( ed.selection.scrollIntoView ) {
+					ed.selection.scrollIntoView( byAttr );
+				}
+			} catch ( err ) {}
+			return highlightElement( byAttr );
+		}
+
+		if ( linkType === 'plain' || youtubeVideoId || ( data && data.attrs && ! data.attrs.length ) ) {
+			var el = highlightPlainTextInRoot( doc.body, searchVariants );
+			if ( el ) {
+				try {
+					ed.focus( { preventScroll: true } );
+				} catch ( errFocus3 ) {
+					try {
+						ed.focus();
+					} catch ( errFocus4 ) {}
+				}
+				return highlightElement( el );
+			}
+		}
+		return false;
+	}
+
+	function getClassicContentTextarea() {
+		return document.getElementById( 'content' );
+	}
+
+	function isClassicHtmlMode() {
+		var wrap = document.getElementById( 'wp-content-wrap' );
+		return !!( wrap && wrap.classList.contains( 'html-active' ) );
+	}
+
+	/**
+	 * Switch Classic Editor to the Text tab so shortcode/plain URLs are visible and selectable.
+	 *
+	 * @param {Function} callback Runs after the tab switch (or immediately if already on Text).
+	 */
+	function switchClassicToHtmlMode( callback ) {
+		if ( typeof callback !== 'function' ) {
+			return;
+		}
+		if ( isClassicHtmlMode() ) {
+			callback();
+			return;
+		}
+		// Prefer WP's switchEditors so TinyMCE syncs content into #content first.
+		if ( typeof window.switchEditors !== 'undefined' && typeof window.switchEditors.go === 'function' ) {
+			try {
+				window.switchEditors.go( 'content', 'html' );
+			} catch ( err ) {
+				var tab = document.getElementById( 'content-html' );
+				if ( tab ) {
+					tab.click();
+				}
+			}
+		} else {
+			var htmlTab = document.getElementById( 'content-html' );
+			if ( htmlTab ) {
+				htmlTab.click();
+			}
+		}
+		window.setTimeout( callback, 500 );
+	}
+
+	/**
+	 * Whether #content or TinyMCE currently holds any search needle (URL may only exist as shortcode text).
+	 */
+	function classicContentHasNeedle( searchVariants ) {
+		var ta = getClassicContentTextarea();
+		if ( ta && haystackContainsVariant( ta.value || '', searchVariants ) ) {
+			return true;
+		}
+		if ( typeof window.tinymce !== 'undefined' ) {
+			var ed = window.tinymce.get( 'content' );
+			if ( ed && ed.getContent ) {
+				try {
+					if ( haystackContainsVariant( ed.getContent( { format: 'raw' } ) || '', searchVariants ) ) {
+						return true;
+					}
+					if ( haystackContainsVariant( ed.getContent() || '', searchVariants ) ) {
+						return true;
+					}
+				} catch ( err ) {}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Classic Editor: switch to Text tab and select the URL (shortcodes / plain text).
+	 * Returns true when focused, or when a tab switch was scheduled (retries finish the job).
+	 */
+	function focusClassicViaHtmlTab( searchVariants ) {
+		if ( isClassicHtmlMode() ) {
+			return focusInClassicHtmlTextarea( searchVariants );
+		}
+		if ( ! classicContentHasNeedle( searchVariants ) && codeModeTried ) {
+			return false;
+		}
+		if ( codeModeTried ) {
+			// Switch already requested — keep trying select once Text is active.
+			return focusInClassicHtmlTextarea( searchVariants );
+		}
+		codeModeTried = true;
+		var attemptSelect = function () {
+			if ( focused ) {
+				return;
+			}
+			if ( ! isClassicHtmlMode() ) {
+				switchClassicToHtmlMode( attemptSelect );
+				return;
+			}
+			if ( focusInClassicHtmlTextarea( searchVariants ) ) {
+				return;
+			}
+			// Content may sync a moment after the tab switch.
+			window.setTimeout( function () {
+				focusInClassicHtmlTextarea( searchVariants );
+			}, 400 );
+			window.setTimeout( function () {
+				focusInClassicHtmlTextarea( searchVariants );
+			}, 900 );
+		};
+		switchClassicToHtmlMode( attemptSelect );
+		return true;
+	}
+
+	function tryClassicEditorFocus( data, searchVariants ) {
+		if ( focusMetaField( data, searchVariants ) ) {
+			return true;
+		}
+
+		var preferText = data && ( data.preferTextMode === 1 || data.preferTextMode === true );
+		var isMedia    = data.linkType === 'image' || data.linkType === 'iframe';
+		var isPlain    = data.linkType === 'plain';
+		var hasYoutube = !!( data && data.youtubeVideoId );
+
+		// Shortcode-attribute / non-visible URLs: Text tab (Visual cannot select the source).
+		if ( preferText ) {
+			if ( focusClassicViaHtmlTab( searchVariants ) ) {
+				return true;
+			}
+			return false;
+		}
+
+		if ( isMedia || isPlain || hasYoutube ) {
+			ensureClassicVisualEditorMode();
+		}
+
+		if ( focusInTinyMce( searchVariants, data ) ) {
+			return true;
+		}
+
+		if ( isMedia ) {
+			// Images/iframes live in Visual (rendered img/iframe). Retries in start() keep trying TinyMCE.
+			return false;
+		}
+
+		// Hyperlink or plain URL not found visually (e.g. only inside a shortcode url="…") — Text tab.
+		if ( focusClassicViaHtmlTab( searchVariants ) ) {
+			return true;
+		}
+
+		return false;
+	}
+
+	function tryFocus() {
+		if ( focused ) {
+			return true;
+		}
+		var data = getFocusData();
+		if ( ! data ) {
+			return false;
+		}
+		var searchVariants = buildSearchVariants( data );
+		var blockEditor    = isBlockEditorScreen( data );
+		var preferText     = data.preferTextMode === 1 || data.preferTextMode === true;
+
+		if ( ! blockEditor ) {
+			return tryClassicEditorFocus( data, searchVariants );
+		}
+
+		if ( data.inPostContent === 0 && focusMetaField( data, searchVariants ) ) {
+			return true;
+		}
+
+		if ( data.linkType === 'plain' ) {
+			if ( ! visualTried ) {
+				visualTried = true;
+				focusInBlockEditor( data, searchVariants );
+			}
+			if ( blockFocusPending ) {
+				return false;
+			}
+			if ( focused ) {
+				return true;
+			}
+			visualAttempts++;
+			if ( visualAttempts < 4 && ! preferText ) {
+				return false;
+			}
+			if ( shouldAllowCodeMode( data ) && focusInCodeEditor( data, searchVariants ) ) {
+				return true;
+			}
+			if ( focusInTinyMce( searchVariants, data ) ) {
+				return true;
+			}
+			return shouldAllowCodeMode( data ) && selectInTextarea( findCodeTextarea(), searchVariants );
+		}
+
+		visualAttempts++;
+		if ( focusInBlockEditor( data, searchVariants ) ) {
+			if ( focused ) {
+				return true;
+			}
+			if ( blockFocusPending || ! shouldAllowCodeMode( data ) ) {
+				return false;
+			}
+		}
+
+		if ( ! preferText && visualAttempts < 4 ) {
+			return false;
+		}
+
+		if ( shouldAllowCodeMode( data ) && focusInCodeEditor( data, searchVariants ) ) {
+			return true;
+		}
+		if ( focusMetaField( data, searchVariants ) ) {
+			return true;
+		}
+		if ( focusInTinyMce( searchVariants, data ) ) {
+			return true;
+		}
+		if ( shouldAllowCodeMode( data ) ) {
+			return selectInTextarea( document.getElementById( 'content' ), searchVariants );
+		}
+		return false;
+	}
+
+	function whenTinyMceReady( callback ) {
+		if ( typeof callback !== 'function' ) {
+			return;
+		}
+		if ( typeof window.tinymce === 'undefined' ) {
+			callback();
+			return;
+		}
+		var ed = window.tinymce.get( 'content' );
+		if ( ed ) {
+			if ( ed.initialized ) {
+				callback();
+			} else {
+				ed.on( 'init', callback );
+			}
+			return;
+		}
+		window.tinymce.on( 'AddEditor', function ( event ) {
+			if ( event.editor && event.editor.id === 'content' ) {
+				event.editor.on( 'init', callback );
+			}
+		} );
+	}
+
+	function scheduleClassicFallback( data ) {
+		window.setTimeout( function () {
+			if ( focused || ! data ) {
+				return;
+			}
+			tryClassicEditorFocus( data, buildSearchVariants( data ) );
+		}, 2500 );
+	}
+
+	function start() {
+		var data = getFocusData();
+		if ( ! data ) {
+			return;
+		}
+		var blockEditor = isBlockEditorScreen( data );
+		if ( blockEditor ) {
+			ensureVisualEditorMode( data );
+		}
+		var preferText = data.preferTextMode === 1 || data.preferTextMode === true;
+		var runFocus = function () {
+			if ( tryFocus() ) {
+				return;
+			}
+			var delays = preferText ? [ 200, 500, 900, 1500, 2500, 4000, 6000 ] : [ 400, 900, 1500, 2500, 4000, 6000 ];
+			var i;
+			for ( i = 0; i < delays.length; i++ ) {
+				window.setTimeout( tryFocus, delays[ i ] );
+			}
+			if ( blockEditor ) {
+				scheduleClassicFallback( data );
+			}
+		};
+		if ( ! blockEditor ) {
+			if ( data.linkType === 'image' || data.linkType === 'iframe' ) {
+				ensureClassicVisualEditorMode();
+			} else if ( data.linkType === 'plain' && ! preferText ) {
+				ensureClassicVisualEditorMode();
+			} else if ( data.youtubeVideoId && ! preferText ) {
+				ensureClassicVisualEditorMode();
+			} else if ( preferText ) {
+				runFocus();
+			}
+			whenTinyMceReady( runFocus );
+		} else {
+			runFocus();
+		}
+	}
+
+	if ( window.wp && wp.domReady ) {
+		wp.domReady( start );
+	} else if ( document.readyState === 'loading' ) {
+		document.addEventListener( 'DOMContentLoaded', start );
+	} else {
+		start();
+	}
+}() );

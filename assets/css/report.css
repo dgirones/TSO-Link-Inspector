@@ -1,0 +1,135 @@
+/* TSO Link Inspector – printable HTML report
+   Loaded via wp_enqueue_style / wp_print_styles (no inline <style>).
+   ============================================================ */
+
+.tsoliin-report *,
+.tsoliin-report *::before,
+.tsoliin-report *::after {
+	box-sizing: border-box;
+}
+
+body.tsoliin-report {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+	color: #1d2327;
+	margin: 0;
+	padding: 24px 32px 48px;
+	line-height: 1.5;
+}
+
+.tsoliin-report-header {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	margin-bottom: 24px;
+	padding-bottom: 16px;
+	border-bottom: 2px solid #2271b1;
+}
+
+.tsoliin-report-header img {
+	max-height: 56px;
+	max-width: 160px;
+	object-fit: contain;
+}
+
+.tsoliin-report-header h1 {
+	margin: 0;
+	font-size: 22px;
+}
+
+.tsoliin-report-header p {
+	margin: 4px 0 0;
+	color: #646970;
+	font-size: 13px;
+}
+
+.tsoliin-report-actions {
+	margin-bottom: 20px;
+}
+
+.tsoliin-report-print {
+	background: #2271b1;
+	color: #fff;
+	border: none;
+	padding: 8px 16px;
+	border-radius: 4px;
+	cursor: pointer;
+	font-size: 14px;
+}
+
+.tsoliin-stats-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+	gap: 12px;
+	margin-bottom: 28px;
+}
+
+.tsoliin-stat-card {
+	background: #f6f7f7;
+	border: 1px solid #dcdcde;
+	border-radius: 6px;
+	padding: 12px;
+	text-align: center;
+}
+
+.tsoliin-stat-card strong {
+	display: block;
+	font-size: 22px;
+	color: #2271b1;
+}
+
+.tsoliin-stat-card span {
+	font-size: 12px;
+	color: #646970;
+}
+
+.tsoliin-stat-card--broken strong {
+	color: #d63638;
+}
+
+.tsoliin-report h2 {
+	font-size: 16px;
+	margin: 0 0 12px;
+}
+
+.tsoliin-report table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 12px;
+	margin-bottom: 24px;
+}
+
+.tsoliin-report th,
+.tsoliin-report td {
+	border: 1px solid #dcdcde;
+	padding: 8px 10px;
+	text-align: left;
+	vertical-align: top;
+}
+
+.tsoliin-report th {
+	background: #f0f0f1;
+	font-weight: 600;
+}
+
+.tsoliin-report td a {
+	color: #2271b1;
+	word-break: break-all;
+}
+
+.tsoliin-report-footer {
+	margin-top: 32px;
+	padding-top: 16px;
+	border-top: 1px solid #dcdcde;
+	font-size: 11px;
+	color: #646970;
+}
+
+@media print {
+	.tsoliin-report-actions {
+		display: none;
+	}
+
+	body.tsoliin-report {
+		padding: 12px;
+	}
+}
