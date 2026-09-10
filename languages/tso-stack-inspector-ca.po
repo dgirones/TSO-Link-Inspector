@@ -1,0 +1,44 @@
+# Copyright (C) 2026 Tu Soporte Online
+msgid ""
+msgstr ""
+"Project-Id-Version: TSO Stack Inspector 1.0.0\n"
+"Language: ca\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "TSO Stack Inspector"
+msgstr "TSO Stack Inspector"
+
+msgid "Stack Inspector"
+msgstr "Stack Inspector"
+
+msgid "No scan in progress."
+msgstr "No hi ha cap escaneig en curs."
+
+msgid "Forbidden."
+msgstr "Accés denegat."
+
+msgid "Select a plugin."
+msgstr "Selecciona un plugin."
+
+msgid "Enter a shortcode tag."
+msgstr "Introdueix una etiqueta shortcode."
+
+msgid "Enter a block name."
+msgstr "Introdueix un nom de bloc."
+
+msgid "Invalid scan mode."
+msgstr "Mode d'escaneig no vàlid."
+
+msgid "Find where plugin shortcodes, blocks, and metadata are used before you deactivate or uninstall."
+msgstr "Troba on s'utilitzen shortcodes, blocs i metadades de plugins abans de desactivar o desinstal·lar."
+
+msgid "Open inspector"
+msgstr "Obrir inspector"
+
+msgid "Blog"
+msgstr "Blog"
+
+msgid "Donate"
+msgstr "Donar"

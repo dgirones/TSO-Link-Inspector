@@ -1,106 +1,114 @@
 <?php
 /**
- * Uninstall TSO Link Inspector.
+ * Uninstall cleanup for TSO Stack Inspector.
  *
- * Called automatically by WordPress when the user deletes the plugin.
- * Removes ALL plugin data: database table, options, and scheduled cron events.
- *
- * @package TSOLIIN_Link_Inspector
+ * @package TSO_Stack_Inspector
  */
 
-// Exit if not called by WordPress uninstaller.
 if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 	exit;
 }
 
-global $wpdb;
+/**
+ * Remove all TSO Stack Inspector data for the current site.
+ *
+ * @return void
+ */
+function tsosi_uninstall_cleanup_site() {
+	wp_clear_scheduled_hook( 'tsosi_background_scan_tick' );
 
-// ── Drop custom database tables (canonical + legacy name) ────────────────
-$tsoliin_tables = array(
-	$wpdb->prefix . 'tso_link_inspector',
-	$wpdb->prefix . 'tso_link_inspector_history',
-	$wpdb->prefix . 'pc_tso_link_inspector', // leftover 2.3.x table name
-	$wpdb->prefix . 'pc_tso_link_inspector_history', // leftover 2.3.x history name
-);
-foreach ( $tsoliin_tables as $tsoliin_table ) {
-	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
-	$wpdb->query( 'DROP TABLE IF EXISTS `' . esc_sql( $tsoliin_table ) . '`' );
+	delete_option( 'tso_stack_inspector_db_schema' );
+	delete_option( 'tso_stack_inspector_scan_settings' );
+	delete_option( 'tso_stack_inspector_scan_history' );
+	delete_option( 'tso_stack_inspector_replace_backups' );
+	delete_option( 'tso_stack_inspector_background_jobs' );
+	delete_transient( 'tso_stack_inspector_scan_job' );
+	delete_transient( 'tso_stack_inspector_plugin_profile' );
+
+	global $wpdb;
+
+	$tsosi_scan_job_like = '_transient_' . $wpdb->esc_like( 'tso_stack_inspector_scan_job_' ) . '%';
+	$tsosi_timeout_like  = '_transient_timeout_' . $wpdb->esc_like( 'tso_stack_inspector_scan_job_' ) . '%';
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- uninstall: remove per-user scan job transients.
+	$wpdb->query(
+		$wpdb->prepare(
+			"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s",
+			$tsosi_scan_job_like,
+			$tsosi_timeout_like
+		)
+	);
+
+	$tsosi_index_job_like         = '_transient_' . $wpdb->esc_like( 'tso_stack_inspector_index_job_' ) . '%';
+	$tsosi_index_job_timeout_like = '_transient_timeout_' . $wpdb->esc_like( 'tso_stack_inspector_index_job_' ) . '%';
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- uninstall: remove per-user index job transients.
+	$wpdb->query(
+		$wpdb->prepare(
+			"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s",
+			$tsosi_index_job_like,
+			$tsosi_index_job_timeout_like
+		)
+	);
+
+	$tsosi_cache_like         = '_transient_' . $wpdb->esc_like( 'tso_stack_inspector_content_cache_' ) . '%';
+	$tsosi_cache_timeout_like = '_transient_timeout_' . $wpdb->esc_like( 'tso_stack_inspector_content_cache_' ) . '%';
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- uninstall: remove per-user content cache transients.
+	$wpdb->query(
+		$wpdb->prepare(
+			"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s",
+			$tsosi_cache_like,
+			$tsosi_cache_timeout_like
+		)
+	);
+
+	// Remove UI language preference from all users in one call.
+	delete_metadata( 'user', 0, 'tso_stack_inspector_ui_lang', '', true );
+
+	$tsosi_uploads = wp_upload_dir();
+	if ( empty( $tsosi_uploads['error'] ) && ! empty( $tsosi_uploads['basedir'] ) ) {
+		$tsosi_cache_dir = trailingslashit( $tsosi_uploads['basedir'] ) . 'tso-stack-inspector';
+		if ( is_dir( $tsosi_cache_dir ) ) {
+			$tsosi_glob_sets = array(
+				glob( $tsosi_cache_dir . '/cache-*.json' ),
+				glob( $tsosi_cache_dir . '/history-*.json' ),
+				glob( $tsosi_cache_dir . '/replace-backup-*.json' ),
+			glob( $tsosi_cache_dir . '/job-lock-*.lock' ),
+				glob( $tsosi_cache_dir . '/index.html' ),
+				glob( $tsosi_cache_dir . '/index.php' ),
+				glob( $tsosi_cache_dir . '/.htaccess' ),
+				glob( $tsosi_cache_dir . '/web.config' ),
+			);
+			foreach ( $tsosi_glob_sets as $tsosi_cache_files ) {
+				if ( ! is_array( $tsosi_cache_files ) ) {
+					continue;
+				}
+				foreach ( $tsosi_cache_files as $tsosi_cache_file ) {
+					if ( is_string( $tsosi_cache_file ) && is_file( $tsosi_cache_file ) ) {
+						wp_delete_file( $tsosi_cache_file );
+					}
+				}
+			}
+			// Remove empty plugin uploads folder when possible.
+			if ( is_dir( $tsosi_cache_dir ) ) {
+				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir, WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort cleanup of an empty uploads slug dir; failure here is not critical.
+				@rmdir( $tsosi_cache_dir );
+			}
+		}
+	}
 }
 
-// ── Delete all plugin options ────────────────────────────────────────────
-$tsoliin_options = array(
-	'tsoliin_version',
-	'tsoliin_legacy_pc_table_cleared',
-	'tsoliin_settings',
-	'tsoliin_last_full_scan',
-	'tsoliin_last_check_batch',
-	'tsoliin_last_check_count',
-	'tsoliin_bg_check_running',
-	'tsoliin_bg_check_complete',
-	'tsoliin_bg_check_token',
-	'tsoliin_bg_check_last_error',
-	'tsoliin_bg_check_checked',
-	'tsoliin_bg_check_total',
-	'tsoliin_bg_check_started',
-	'tsoliin_bg_check_post_id',
-	'tsoliin_bg_scan_running',
-	'tsoliin_bg_scan_token',
-	'tsoliin_bg_scan_phase',
-	'tsoliin_bg_scan_page',
-	'tsoliin_bg_scan_total',
-	'tsoliin_bg_scan_scanned',
-	'tsoliin_bg_scan_started',
-	'tsoliin_bg_scan_error',
-	'tsoliin_bg_scan_complete',
-	'tsoliin_total_posts_scanned',
-	'tsoliin_comment_scan_after_id',
-	'tsoliin_menu_scan_after_id',
-	'tsoliin_widget_scan_after_index',
-	'tsoliin_term_scan_after_id',
-	'tsoliin_fse_scan_after_id',
-	'tsoliin_broken_digest_last_sent',
-	'tsoliin_immediate_broken_queue',
-	'tsoliin_bg_check_empty_retries',
-	'tsoliin_bg_check_user_stopped',
-	'tsoliin_site_gate_state',
-);
-foreach ( $tsoliin_options as $tsoliin_option_name ) {
-	delete_option( $tsoliin_option_name );
-}
+tsosi_uninstall_cleanup_site();
 
-$tsoliin_transients = array(
-	'tsoliin_unpub_cnt_all',
-	'tsoliin_unpub_cnt_v2_all',
-	'tsoliin_unpub_cnt_v3_all',
-	'tsoliin_transparent_rd_cleanup',
-	'tsoliin_scan_lock_comments',
-	'tsoliin_scan_lock_menus',
-	'tsoliin_scan_lock_terms',
-	'tsoliin_scan_lock_fse',
-	'tsoliin_scan_lock_widgets',
-	'tsoliin_scan_lock_acfopt',
-	'tsoliin_immediate_queue_lock',
-	'tsoliin_bg_scan_step_lock',
-	'tsoliin_bg_check_step_lock',
-	'tsoliin_bg_lifecycle_start_lock',
-	'tsoliin_site_gate',
-);
-foreach ( $tsoliin_transients as $tsoliin_transient_name ) {
-	delete_transient( $tsoliin_transient_name );
-}
-
-// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->usermeta} WHERE meta_key = %s", 'tsoliin_onboarding_dismissed' ) );
-// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->usermeta} WHERE meta_key = %s", 'tsoliin_per_page' ) );
-
-// ── Clear all scheduled cron events ─────────────────────────────────────
-$tsoliin_hooks = array(
-	'tsoliin_cron_scan',
-	'tsoliin_cron_check',
-	'tsoliin_bg_check_step',
-	'tsoliin_bg_scan_step',
-);
-foreach ( $tsoliin_hooks as $tsoliin_hook_name ) {
-	wp_clear_scheduled_hook( $tsoliin_hook_name );
+if ( is_multisite() ) {
+	$tsosi_sites = get_sites( array( 'fields' => 'ids' ) );
+	if ( is_array( $tsosi_sites ) ) {
+		$tsosi_main_site_id = get_main_site_id();
+		foreach ( $tsosi_sites as $tsosi_site_id ) {
+			if ( (int) $tsosi_site_id === (int) $tsosi_main_site_id ) {
+				continue;
+			}
+			switch_to_blog( (int) $tsosi_site_id );
+			tsosi_uninstall_cleanup_site();
+			restore_current_blog();
+		}
+	}
 }
